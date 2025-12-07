@@ -864,11 +864,11 @@ end
 @doc raw"""
     Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N::Int, K::Int)
 
-Compute the amplitude of the inhomogeneous Teukolsky solution _at infinity_ due to a point particle on a generic timelike bound orbit around a Kerr black hole,
+Compute the amplitude of the inhomogeneous Teukolsky solution _at infinity_ (for s = - 2) and _at horizon_ (for s = + 2) due to a point particle on a generic timelike bound orbit around a Kerr black hole,
 with a spin parameter of `a`, for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `n` the radial index and `k` the polar index).
 The orbit is specified by `p` the semi-latus rectum, `e` the eccentricity and `x` the inclination parameter ($x \equiv \cos \theta_{\mathrm{inc}}$).
 
-In addition, we compute also the energy, angular momentum and Carter constant flux at infinity. Note that these values are formalism-independent.
+In addition, we compute also the energy, angular momentum and Carter constant flux at infinity (for s = - 2) and the horizon (for s = + 2). Note that these values are formalism-independent.
 
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`), which can either be `trapezoidal` or `levin`.
 We sample the trajectory over a grid of size N x K, where N and K are the number of Chebyshev nodes in the radial and the polar direction, respectively.
@@ -929,11 +929,11 @@ end
 @doc raw"""
     GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N::Int, K::Int)
 
-Compute the amplitude of the inhomogeneous GSN solution _at infinity_ due to a point particle on a generic timelike bound orbit around a Kerr black hole,
+Compute the amplitude of the inhomogeneous GSN solution _at infinity_ (for s = - 2) and _at horizon_ (for s = + 2) due to a point particle on a generic timelike bound orbit around a Kerr black hole,
 with a spin parameter of `a`, for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `n` the radial index and `k` the polar index).
 The orbit is specified by `p` the semi-latus rectum, `e` the eccentricity and `x` the inclination parameter ($x \equiv \cos \theta_{\mathrm{inc}}$).
 
-In addition, we compute also the energy, angular momentum and Carter constant flux at infinity. Note that these values are formalism-independent.
+In addition, we compute also the energy, angular momentum and Carter constant flux at infinity (for s = - 2) and the horizon (for s = + 2). Note that these values are formalism-independent.
 
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`), which can either be `trapezoidal` or `levin`.
 We sample the trajectory over a grid of size N x K, where N and K are the number of Chebyshev nodes in the radial and the polar direction, respectively.
