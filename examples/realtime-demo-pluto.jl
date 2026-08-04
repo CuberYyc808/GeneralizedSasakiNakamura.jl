@@ -17,10 +17,7 @@ macro bind(def, element)
 end
 
 # ╔═╡ 1f0d7d7a-55a1-4a32-9a9f-2a4e0a30b101
-begin
-    import Pkg
-    Pkg.activate(joinpath(@__DIR__, ".."))
-end
+nothing
 
 # ╔═╡ 5c4e0dc0-34b9-4e52-9c0f-d5f1f640a3b2
 begin
@@ -110,8 +107,11 @@ md"""
 # ╔═╡ 93a65f2e-19b4-4a15-8210-70df148c519e
 function radial_demo_data(; s, l, m, a, omega, boundary, ngrid)
     solve_time = @elapsed begin
-        R = Teukolsky_radial(s, l, m, a, omega, boundary)
-        X = GSN_radial(s, l, m, a, omega, boundary)
+        R = Teukolsky_radial(
+            s, l, m, a, omega, boundary;
+            method = "direct_ISEM",
+        )
+        X = R.GSN_solution
     end
 
     rsgrid = collect(range(-20, 100; length = ngrid))
@@ -226,7 +226,7 @@ function demo_card(demo; s, l, m, a, omega, boundary)
         xlabel = "r* / M",
         ylabel = "X(r*)",
     )
-    mode_text = @sprintf("s = %d, l = %d, m = %d, a = %.2f, omega = %.2f, boundary = %s", s, l, m, a, omega, string(boundary))
+    mode_text = @sprintf("Direct ISEM | s = %d, l = %d, m = %d, a = %.2f, omega = %.2f, boundary = %s", s, l, m, a, omega, string(boundary))
     solve_time_text = @sprintf("Solve equation on-the-fly: %.3f ms", 1000 * demo.solve_time)
     eval_time_text = @sprintf("Evaluation on %d grid points: %.3f ms", length(demo.rgrid), 1000 * demo.eval_time)
     return HTML("""

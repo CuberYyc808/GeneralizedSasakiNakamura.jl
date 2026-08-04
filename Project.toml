@@ -23,6 +23,9 @@ SpinWeightedSpheroidalHarmonics = "680e17a6-2a17-48fd-ae01-e2b5a643bef0"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TaylorSeries = "6aa5eb33-94cf-58f4-a9d0-e4b2c4fc25ea"
 
+[sources]
+SpinWeightedSpheroidalHarmonics = {url = "https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git", rev = "Fast-eigenvalue"}
+
 [compat]
 AdaptiveLevin = "0.1.1"
 DifferentialEquations = "7"

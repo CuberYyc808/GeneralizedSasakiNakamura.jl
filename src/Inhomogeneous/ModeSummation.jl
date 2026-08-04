@@ -1,6 +1,7 @@
 module ModeSummation
 
 using KerrGeodesics
+import KerrGeodesics.KerrGeoOrbit: kerr_geo_orbit
 using LsqFit
 using HDF5
 using Printf
@@ -43,6 +44,39 @@ function _median_sorted(vals::Vector{Float64})
 end
 
 _use_levin_tail(index::Int; nmin::Int = 50) = index >= nmin
+
+function _tail_policy(value)
+    value === true && return true
+    value === false && return false
+    value === :auto && return :auto
+    throw(ArgumentError("tail_levin must be true, false, or :auto"))
+end
+
+@inline _tail_enabled(policy) = policy !== false
+
+@inline function _uniform_radial_n(N0::Int, Nmax::Int, n::Int)
+    base = min(max(4N0, 256), Nmax)
+    return ConvolutionIntegrals._eccentric_fourier_min_sample(base, Nmax, n)
+end
+
+@inline function _ecc_levin_auto(n::Int, N0::Int, Nmax::Int,
+        local_n::Int, max_depth::Int, nmin::Int)
+    abs(n) >= nmin || return false
+    uniform_n = _uniform_radial_n(N0, Nmax, n)
+    adaptive_n = local_n * 2^min(max_depth, 5)
+    return uniform_n >= max(4096, 8adaptive_n)
+end
+
+@inline function _gen_levin_auto(n::Int, N0::Int, K0::Int, Nmax::Int,
+        Kmax::Int, local_n::Int, max_depth::Int, nmin::Int)
+    abs(n) >= nmin || return false
+    uniform_n = _uniform_radial_n(N0, Nmax, n)
+    uniform_k = min(max(4K0, 64), Kmax)
+    adaptive_n = local_n * 2^min(max_depth, 5)
+    adaptive_k = local_n + 1
+    return uniform_n >= 4096 &&
+        uniform_n * uniform_k >= 16adaptive_n * adaptive_k
+end
 
 @inline _mode_cutoff_threshold(base::Float64, mode_abs_floor::Float64) = max(base, mode_abs_floor)
 @inline function _adaptive_branch_mode_floor(total_branch_energy::Float64, tol::Real, base_floor::Real)
@@ -276,13 +310,14 @@ end
 
 _record_tag(x) = replace(replace(@sprintf("%.16g", x), "." => "p"), "-" => "m")
 
-function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = true, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_max_depth::Int = 8)
+function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8)
     if e == 0.0
         return circular_mode_summation(a, p; tol = tol, lmax = lmax, min_consecutive = minimum_consecutive)
     end
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
+    levin_local_n < 1 && throw(ArgumentError("levin_local_n must be positive"))
     levin_max_depth < 0 && throw(ArgumentError("levin_max_depth must be nonnegative"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
     ispow2(N0) || throw(ArgumentError("N0 must be a power of 2"))
@@ -323,12 +358,10 @@ function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e
     mode_index = Ref(0)
     record_h5 = record ? h5open(record_path, "w") : nothing
     mode_cache = fast ? ConvolutionIntegrals.EccentricFluxCache() : nothing
-    adaptive_local_n = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N
-    use_tail_levin_infinity = tail_levin_infinity === nothing ? tail_levin : tail_levin_infinity
-    use_tail_levin_horizon = tail_levin_horizon === nothing ? tail_levin : tail_levin_horizon
-    if (use_tail_levin_infinity || use_tail_levin_horizon) && fast && nmax >= levin_nmin
-        ConvolutionIntegrals.prewarm_eccentric_adaptive_levin_segments!(mode_cache, KG_sample; local_n = adaptive_local_n, max_depth = levin_max_depth)
-    end
+    adaptive_local_n = levin_local_n
+    tail_policy = _tail_policy(tail_levin)
+    tail_policy_inf = _tail_policy(tail_levin_infinity === nothing ? tail_policy : tail_levin_infinity)
+    tail_policy_hor = _tail_policy(tail_levin_horizon === nothing ? tail_policy : tail_levin_horizon)
     branch_mode_floor_inf = Ref(Float64(mode_abs_floor))
     branch_mode_floor_hor = Ref(Float64(mode_abs_floor))
     levin_floor_tracks_mode_floor = levin_mode_abs_floor == mode_abs_floor
@@ -340,13 +373,16 @@ function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e
     tail_levin_infinity_start_n = Ref{Union{Nothing, Int}}(nothing)
     tail_levin_horizon_start_n = Ref{Union{Nothing, Int}}(nothing)
     use_eccentric_tail_levin = (s, n) -> begin
-        branch_tail_levin = s == -2 ? use_tail_levin_infinity : use_tail_levin_horizon
-        branch_tail_levin && fast || return false
+        branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
+        _tail_enabled(branch_policy) && fast || return false
         active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
         start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
         if active[]
             return true
-        elseif _use_levin_tail(n; nmin = levin_nmin)
+        elseif _use_levin_tail(n; nmin = levin_nmin) &&
+                (branch_policy === true || _ecc_levin_auto(
+                    n, N, Nmax, adaptive_local_n, levin_max_depth,
+                    levin_nmin))
             active[] = true
             start_n[] = n
             return true
@@ -715,11 +751,14 @@ function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e
         record_h5["meta/horizon_carter_constant_flux"] = total_horizon_carter
         record_h5["meta/n_reached_inf"] = something(n_reached_inf, -1)
         record_h5["meta/n_reached_hor"] = something(n_reached_hor, -1)
-        record_h5["meta/tail_levin_infinity_enabled"] = use_tail_levin_infinity && fast
-        record_h5["meta/tail_levin_horizon_enabled"] = use_tail_levin_horizon && fast
+        record_h5["meta/tail_levin_infinity_enabled"] = _tail_enabled(tail_policy_inf) && fast
+        record_h5["meta/tail_levin_horizon_enabled"] = _tail_enabled(tail_policy_hor) && fast
+        record_h5["meta/tail_levin_infinity_policy"] = string(tail_policy_inf)
+        record_h5["meta/tail_levin_horizon_policy"] = string(tail_policy_hor)
         record_h5["meta/tail_levin_start_inf"] = something(tail_levin_infinity_start_n[], -1)
         record_h5["meta/tail_levin_start_hor"] = something(tail_levin_horizon_start_n[], -1)
         record_h5["meta/tail_levin_nmin"] = levin_nmin
+        record_h5["meta/tail_levin_local_n"] = levin_local_n
         record_h5["meta/infinity_truncation_floor"] = branch_mode_floor_inf[]
         record_h5["meta/horizon_truncation_floor"] = branch_mode_floor_hor[]
         record_h5["meta/total_modes"] = total_modes
@@ -743,11 +782,14 @@ function eccentric_mode_summation(a, p, e; N = 64, N0 = N, Nmax = 2^14, tol = 1e
         N_max = Nmax,
         n_reached_inf = n_reached_inf,
         n_reached_hor = n_reached_hor,
-        tail_levin_infinity_enabled = use_tail_levin_infinity && fast,
-        tail_levin_horizon_enabled = use_tail_levin_horizon && fast,
+        tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
+        tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
+        tail_levin_infinity_policy = tail_policy_inf,
+        tail_levin_horizon_policy = tail_policy_hor,
         tail_levin_start_inf = tail_levin_infinity_start_n[],
         tail_levin_start_hor = tail_levin_horizon_start_n[],
         tail_levin_nmin = levin_nmin,
+        tail_levin_local_n = levin_local_n,
         tail_levin_max_depth = levin_max_depth,
         infinity_truncation_floor = branch_mode_floor_inf[],
         horizon_truncation_floor = branch_mode_floor_hor[],
@@ -1012,7 +1054,7 @@ function inclined_mode_summation(a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-
                 below_count_l = 0
 
                 for l in lmin:lmax
-                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, ci_kwargs...)
+                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, ci_kwargs...)
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1049,7 +1091,7 @@ function inclined_mode_summation(a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-
                 below_count_l = 0
 
                 for l in lmin:lmax
-                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, ci_kwargs...)
+                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, ci_kwargs...)
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1128,7 +1170,7 @@ function inclined_mode_summation(a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-
                 below_count_l = 0
 
                 for l in lmin:lmax
-                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, ci_kwargs...)
+                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, ci_kwargs...)
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1165,7 +1207,7 @@ function inclined_mode_summation(a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-
                 below_count_l = 0
 
                 for l in lmin:lmax
-                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, ci_kwargs...)
+                    mode = ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, ci_kwargs...)
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1242,16 +1284,17 @@ function inclined_mode_summation(a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-
     end
 end
 
-function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, tail_levin = true, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing)
+function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
     nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
+    levin_local_n < 1 && throw(ArgumentError("levin_local_n must be positive"))
     levin_max_depth < 0 && throw(ArgumentError("levin_max_depth must be nonnegative"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
-        return eccentric_mode_summation(x == -1.0 ? -a : a, p, e; N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_max_depth = levin_max_depth)
+        return eccentric_mode_summation(x == -1.0 ? -a : a, p, e; N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth)
     end
     if e == 0.0
         return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
@@ -1266,11 +1309,9 @@ function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax 
 
     KG_master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
     mode_cache = Ref(ConvolutionIntegrals.GenericFluxCache())
-    use_tail_levin_infinity = tail_levin_infinity === nothing ? tail_levin : tail_levin_infinity
-    use_tail_levin_horizon = tail_levin_horizon === nothing ? tail_levin : tail_levin_horizon
-    if (use_tail_levin_infinity || use_tail_levin_horizon) && fast && nmax >= levin_nmin
-        ConvolutionIntegrals.prewarm_generic_adaptive_levin_segments!(mode_cache[], KG_master; max_depth = levin_max_depth)
-    end
+    tail_policy = _tail_policy(tail_levin)
+    tail_policy_inf = _tail_policy(tail_levin_infinity === nothing ? tail_policy : tail_levin_infinity)
+    tail_policy_hor = _tail_policy(tail_levin_horizon === nothing ? tail_policy : tail_levin_horizon)
     model(x, p) = p[1] .* (x .+ 1) .^ p[2] .* exp.(-p[3] .* x)
     p0 = [1e-3, 0.0, 0.1]
     mode_index = Ref(0)
@@ -1334,13 +1375,17 @@ function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax 
         tail_levin_infinity_start_n = Ref{Union{Nothing, Int}}(nothing)
         tail_levin_horizon_start_n = Ref{Union{Nothing, Int}}(nothing)
         use_generic_tail_levin = (s, n) -> begin
-            branch_tail_levin = s == -2 ? use_tail_levin_infinity : use_tail_levin_horizon
-            branch_tail_levin && fast || return false
+            branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
+            _tail_enabled(branch_policy) && fast || return false
             active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
             start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
             if active[]
                 return true
-            elseif _use_levin_tail(n; nmin = levin_nmin)
+            elseif _use_levin_tail(n; nmin = levin_nmin) &&
+                    (branch_policy === true || _gen_levin_auto(
+                        n, N0, K0, Nmax, Kmax,
+                        levin_local_n,
+                        levin_max_depth, levin_nmin))
                 active[] = true
                 start_n[] = n
                 return true
@@ -1355,7 +1400,7 @@ function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax 
                 if use_levin
                     levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux), eps(Float64))
                     levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
-                    ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache[], KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, confirm_low_flux = true, max_depth = levin_max_depth)
+                    ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache[], KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
                 else
                     ConvolutionIntegrals.generic_mode_flux_from_master_cached!(mode_cache[], KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
                 end
@@ -1926,11 +1971,14 @@ function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax 
             record_h5["meta/horizon_carter_constant_flux"] = hor.carter_constant_flux
             record_h5["meta/n_reached_inf"] = something(inf.n_reached, -1)
             record_h5["meta/n_reached_hor"] = something(hor.n_reached, -1)
-            record_h5["meta/tail_levin_infinity_enabled"] = use_tail_levin_infinity && fast
-            record_h5["meta/tail_levin_horizon_enabled"] = use_tail_levin_horizon && fast
+            record_h5["meta/tail_levin_infinity_enabled"] = _tail_enabled(tail_policy_inf) && fast
+            record_h5["meta/tail_levin_horizon_enabled"] = _tail_enabled(tail_policy_hor) && fast
+            record_h5["meta/tail_levin_infinity_policy"] = string(tail_policy_inf)
+            record_h5["meta/tail_levin_horizon_policy"] = string(tail_policy_hor)
             record_h5["meta/tail_levin_start_inf"] = something(tail_levin_infinity_start_n[], -1)
             record_h5["meta/tail_levin_start_hor"] = something(tail_levin_horizon_start_n[], -1)
             record_h5["meta/tail_levin_nmin"] = levin_nmin
+            record_h5["meta/tail_levin_local_n"] = levin_local_n
             record_h5["meta/infinity_truncation_floor"] = inf.truncation_floor
             record_h5["meta/horizon_truncation_floor"] = hor.truncation_floor
             record_h5["meta/total_modes"] = total_modes
@@ -1957,11 +2005,14 @@ function generic_mode_summation(a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax 
             K_max = Kmax,
             n_reached_inf = inf.n_reached,
             n_reached_hor = hor.n_reached,
-            tail_levin_infinity_enabled = use_tail_levin_infinity && fast,
-            tail_levin_horizon_enabled = use_tail_levin_horizon && fast,
+            tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
+            tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
+            tail_levin_infinity_policy = tail_policy_inf,
+            tail_levin_horizon_policy = tail_policy_hor,
             tail_levin_start_inf = tail_levin_infinity_start_n[],
             tail_levin_start_hor = tail_levin_horizon_start_n[],
             tail_levin_nmin = levin_nmin,
+            tail_levin_local_n = levin_local_n,
             tail_levin_max_depth = levin_max_depth,
             infinity_truncation_floor = inf.truncation_floor,
             horizon_truncation_floor = hor.truncation_floor,

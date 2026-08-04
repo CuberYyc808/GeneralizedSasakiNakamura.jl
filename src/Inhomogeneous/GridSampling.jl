@@ -315,6 +315,7 @@ function subsample_eccentric_sample(KG_sample::Dict, N_sample::Int64)
     full_intervals = full_points - 1
     target_intervals = target_points - 1
     full_intervals % target_intervals == 0 || throw(ArgumentError("N_sample does not divide the stored eccentric grid"))
+    full_intervals == target_intervals && return KG_sample
     step = div(full_intervals, target_intervals)
     idx = 1:step:full_points
     sample = Dict{Any, Any}()
@@ -1029,7 +1030,7 @@ function refine_eccentric_y_sample(Y_soln, Y_sample::Dict, KG_sample::Dict, N_sa
     return _refine_y_sample(Y_soln, Y_sample, subsample_eccentric_sample(KG_sample, 2N_sample))
 end
 
-@inline function _generic_integrand_sample_m2_fast(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
+@inline function _generic_integral_sample_m2_fast(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
     r_vec = KG_samp["r"]::Vector{Float64}
     rs_vec = KG_samp["rs"]::Vector{Float64}
     θ_vec = KG_samp["θ"]::Vector{Float64}
@@ -1124,6 +1125,8 @@ end
 
     rphase = Vector{Float64}(undef, N)
     phase = Vector{ComplexF64}(undef, N)
+    exp_rphase_p = Vector{ComplexF64}(undef, N)
+    exp_rphase_m = Vector{ComplexF64}(undef, N)
     Np = Vector{Float64}(undef, N)
     Nm = Vector{Float64}(undef, N)
     Yv = Vector{ComplexF64}(undef, N)
@@ -1136,6 +1139,8 @@ end
         Δ = r2 - 2.0 * r + a^2
         qr_i = N > 1 ? (i - 1) * qr_step : 0.0
         rphase[i] = ω * Δtr[i] - m * Δφr[i] + n * qr_i
+        exp_rphase_p[i] = exp(im * rphase[i])
+        exp_rphase_m[i] = conj(exp_rphase_p[i])
         phase[i] = exp(im * ω * rs_vec[i] - im * a * m * log((r - rp) / (r - rm)) * inv2κ)
         numer = E * (r2 + a^2) - a * Lz
         Np[i] = (numer + urp[i]) / Δ
@@ -1148,8 +1153,9 @@ end
     Xi = Float64(m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0)
     prefactor = 4im * π * ω * exp(im * Xi) / (Γ * Binc)
 
-    out = Matrix{ComplexF64}(undef, N, K)
+    total = 0.0 + 0.0im
     @inbounds for j in 1:K
+        wj = (j == 1 || j == K) ? 0.5 : 1.0
         sθ = sinθ[j]
         cθ = cosθ[j]
         invsθ = inv_sinθ[j]
@@ -1181,7 +1187,6 @@ end
             Ypi = Ypv[i]
             Xi = Xv[i]
             phase_r = phase[i]
-            rphase_i = rphase[i]
             Npi = Np[i]
             Nmi = Nm[i]
 
@@ -1201,8 +1206,8 @@ end
             Nm2 = Nmi * Nmi
             Mpp2 = Mpj * Mpj
             Mm2 = Mmj * Mmj
-            exp_rp = exp(im * rphase_i)
-            exp_rm = exp(-im * rphase_i)
+            exp_rp = exp_rphase_p[i]
+            exp_rm = exp_rphase_m[i]
             exp_pp = exp_rp * expθp
             exp_pm = exp_rp * expθm
             exp_mp = exp_rm * expθp
@@ -1212,14 +1217,15 @@ end
             Jmp = (Wnn * Nm2 + Wnmbar * Nmi * Mpj + Wmbarmbar * Mpp2) * exp_mp * inv4π2
             Jmm = (Wnn * Nm2 + Wnmbar * Nmi * Mmj + Wmbarmbar * Mm2) * exp_mm * inv4π2
 
-            out[i, j] = prefactor * (Jpp + Jpm + Jmp + Jmm)
+            wi = (i == 1 || i == N) ? 0.5 : 1.0
+            total += (wi * wj) * prefactor * (Jpp + Jpm + Jmp + Jmm)
         end
     end
 
-    return out
+    return qr_step * qθ_step * total
 end
 
-@inline function _generic_integrand_sample_p2_fast(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
+@inline function _generic_integral_sample_p2_fast(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
     r_vec = KG_samp["r"]::Vector{Float64}
     rs_vec = KG_samp["rs"]::Vector{Float64}
     θ_vec = KG_samp["θ"]::Vector{Float64}
@@ -1315,6 +1321,8 @@ end
 
     rphase = Vector{Float64}(undef, N)
     phase = Vector{ComplexF64}(undef, N)
+    exp_rphase_p = Vector{ComplexF64}(undef, N)
+    exp_rphase_m = Vector{ComplexF64}(undef, N)
     Lp = Vector{Float64}(undef, N)
     Lm = Vector{Float64}(undef, N)
     Yv = Vector{ComplexF64}(undef, N)
@@ -1327,6 +1335,8 @@ end
         Δ = r2 - 2.0 * r + a^2
         qr_i = N > 1 ? (i - 1) * qr_step : 0.0
         rphase[i] = ω * Δtr[i] - m * Δφr[i] + n * qr_i
+        exp_rphase_p[i] = exp(im * rphase[i])
+        exp_rphase_m[i] = conj(exp_rphase_p[i])
         phase[i] = exp(-im * ω * rs_vec[i] + im * a * m * log((r - rp) / (r - rm)) * inv2κ)
         numer = E * (r2 + a^2) - a * Lz
         Lp[i] = (numer - urp[i]) / Δ
@@ -1350,8 +1360,9 @@ end
     Xi = Float64(m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0)
     prefactor = -im * π * factor * η * exp(im * Xi) / (Γ * κ * Cinc)
 
-    out = Matrix{ComplexF64}(undef, N, K)
+    total = 0.0 + 0.0im
     @inbounds for j in 1:K
+        wj = (j == 1 || j == K) ? 0.5 : 1.0
         sθ = sinθ[j]
         cθ = cosθ[j]
         invsθ = inv_sinθ[j]
@@ -1383,7 +1394,6 @@ end
             Ypi = Ypv[i]
             Xi = Xv[i]
             phase_r = phase[i]
-            rphase_i = rphase[i]
             Lpi = Lp[i]
             Lmi = Lm[i]
 
@@ -1403,8 +1413,8 @@ end
             Lm2 = Lmi * Lmi
             Mp2 = Mpj * Mpj
             Mm2 = Mmj * Mmj
-            exp_rp = exp(im * rphase_i)
-            exp_rm = exp(-im * rphase_i)
+            exp_rp = exp_rphase_p[i]
+            exp_rm = exp_rphase_m[i]
             exp_pp = exp_rp * expθp
             exp_pm = exp_rp * expθm
             exp_mp = exp_rm * expθp
@@ -1414,11 +1424,12 @@ end
             Jmp = (Wll * Lm2 + Wlm * Lmi * Mpj + Wmm * Mp2) * exp_mp * inv4π2
             Jmm = (Wll * Lm2 + Wlm * Lmi * Mmj + Wmm * Mm2) * exp_mm * inv4π2
 
-            out[i, j] = prefactor * (Jpp + Jpm + Jmp + Jmm)
+            wi = (i == 1 || i == N) ? 0.5 : 1.0
+            total += (wi * wj) * prefactor * (Jpp + Jpm + Jmp + Jmm)
         end
     end
 
-    return out
+    return qr_step * qθ_step * total
 end
 
 function integrand_generic_sample_m2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
@@ -2204,6 +2215,185 @@ function integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n::Int64, k
     prefactor = .- im .* π .* factor .* η .* exp(im * Xi) ./ (Γ .* κ .* Cinc)
 
     return Jpp_grid, Jpm_grid, Jmp_grid, Jmm_grid, drphase, dθphase, rphaseL, rphaseR, θphaseL, θphaseR, prefactor
+end
+
+@inline function _eccentric_integral_sample_m2_fast(KG_samp, Y_samp,
+        SH, n::Int64)
+    r_vec = KG_samp["r"]::Vector{Float64}
+    rs_vec = KG_samp["rs"]::Vector{Float64}
+    urp = KG_samp["ur_fwd"]::Vector{Float64}
+    urm = KG_samp["ur_rev"]::Vector{Float64}
+    delta_tr = KG_samp["Δtr"]::Vector{Float64}
+    delta_phir = KG_samp["Δφr"]::Vector{Float64}
+    gamma = KG_samp["Γ"]::Float64
+    energy = KG_samp["E"]::Float64
+    angular_momentum = KG_samp["Lz"]::Float64
+    qt0, qr0, _, qphi0 = KG_samp["InitialPhases"]::NTuple{4, Float64}
+    delta_tr_func, delta_phir_func = KG_samp["CrossFunction"]
+    S0, S1, S2 = SH
+    params = Y_samp["params"]::Mode
+    m = params.m::Int
+    a = params.a::Float64
+    omega = params.omega::Float64
+    Y = Y_samp["Y"]::Vector{ComplexF64}
+    Yp = Y_samp["Yp"]::Vector{ComplexF64}
+    X = Y_samp["X"]::Vector{ComplexF64}
+    Binc = Y_samp["Binc"]::ComplexF64
+    count = length(r_vec)
+
+    horizon_gap = sqrt(1.0 - a^2)
+    rp = 1.0 + horizon_gap
+    rm = 1.0 - horizon_gap
+    L1 = -m + a * omega
+    L2 = L1
+    L2S = S1 + L2 * S0
+    L1L2S = S2 + L1 * S1 - 2.0 * S0 + L2 * S1 +
+        L1 * L2 * S0
+    angular_constant = 3im * a * L1 * S0 + 2im * a * S1 -
+        1im * a * L2 * S0
+    Mbar = im * (a * energy - angular_momentum)
+    Mbar2 = Mbar * Mbar
+    qstep = count > 1 ? pi / (count - 1) : 0.0
+    phase0 = m * (delta_phir_func(qr0) - qphi0) -
+        omega * (delta_tr_func(qr0) - qt0) - n * qr0
+    prefactor = 4im * pi * omega * cis(phase0) / (gamma * Binc)
+    total = 0.0 + 0.0im
+
+    @inbounds for i in eachindex(r_vec)
+        r = r_vec[i]
+        r2 = r * r
+        rho = -1.0 / r
+        carrier = cis(omega * rs_vec[i] -
+            a * m * log((r - rp) / (r - rm)) / (2.0 * horizon_gap))
+        Yi = Y[i]
+        Ypi = Yp[i]
+        Xi = X[i]
+        L1pL2pS = -r * L1L2S + angular_constant
+        Wnn = rho * L1pL2pS * r2 * Yi * carrier / 2.0
+        termB = 2.0 * Yi + r * Ypi
+        termC = L2S * (2.0 * rho) * r * Yi
+        Wnmbar = -r * (L2S * termB + termC) * carrier
+        termD = Xi / (2.0 * sqrt(r2 + a^2))
+        termE = (Yi + 2.0 * r * Ypi) * carrier
+        termF = rho * r * termB * carrier
+        Wmbarmbar = S0 * (termD + termE + termF)
+        delta = r2 - 2.0 * r + a^2
+        numerator = energy * (r2 + a^2) - a * angular_momentum
+        Np = (numerator + urp[i]) / delta
+        Nm = (numerator + urm[i]) / delta
+        radial_phase = omega * delta_tr[i] - m * delta_phir[i] +
+            n * (i - 1) * qstep
+        exp_p = cis(radial_phase)
+        exp_m = conj(exp_p)
+        Jp = (Wnn * Np * Np + Wnmbar * Np * Mbar +
+            Wmbarmbar * Mbar2) * exp_p
+        Jm = (Wnn * Nm * Nm + Wnmbar * Nm * Mbar +
+            Wmbarmbar * Mbar2) * exp_m
+        weight = (i == 1 || i == count) ? 0.5 : 1.0
+        total += weight * prefactor * (Jp + Jm) / (2.0 * pi)
+    end
+    return qstep * total
+end
+
+@inline function _eccentric_integral_sample_p2_fast(KG_samp, Y_samp,
+        SH, n::Int64)
+    r_vec = KG_samp["r"]::Vector{Float64}
+    rs_vec = KG_samp["rs"]::Vector{Float64}
+    urp = KG_samp["ur_fwd"]::Vector{Float64}
+    urm = KG_samp["ur_rev"]::Vector{Float64}
+    delta_tr = KG_samp["Δtr"]::Vector{Float64}
+    delta_phir = KG_samp["Δφr"]::Vector{Float64}
+    gamma = KG_samp["Γ"]::Float64
+    energy = KG_samp["E"]::Float64
+    angular_momentum = KG_samp["Lz"]::Float64
+    qt0, qr0, _, qphi0 = KG_samp["InitialPhases"]::NTuple{4, Float64}
+    delta_tr_func, delta_phir_func = KG_samp["CrossFunction"]
+    S0, S1, S2 = SH
+    params = Y_samp["params"]::Mode
+    m = params.m::Int
+    a = params.a::Float64
+    omega = params.omega::Float64
+    lambda = params.lambda::Float64
+    Y = Y_samp["Y"]::Vector{ComplexF64}
+    Yp = Y_samp["Yp"]::Vector{ComplexF64}
+    X = Y_samp["X"]::Vector{ComplexF64}
+    Cinc = Y_samp["Cinc"]::ComplexF64
+    count = length(r_vec)
+
+    horizon_gap = sqrt(1.0 - a^2)
+    rp = 1.0 + horizon_gap
+    rm = 1.0 - horizon_gap
+    L1 = m - a * omega
+    L2 = L1
+    L2S = S1 + L2 * S0
+    L1L2S = S2 + L1 * S1 - 2.0 * S0 + L2 * S1 +
+        L1 * L2 * S0
+    angular_constant = 3im * a * L1 * S0 + 2im * a * S1 -
+        1im * a * L2 * S0
+    M = -im * (a * energy - angular_momentum)
+    M2 = M * M
+    qstep = count > 1 ? pi / (count - 1) : 0.0
+    kappa = omega - a * m / (2.0 * rp)
+    c0 = 24 + 12im * omega + lambda * (10 + lambda) -
+        12 * a * omega * (a * omega - m)
+    c1 = -32im * a * m - 8im * a * m * lambda +
+        8im * a^2 * omega * (1 + lambda)
+    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 +
+        24im * a^2 * omega + 48 * a^3 * m * omega -
+        24 * a^4 * omega^2
+    c3 = -24im * a^3 * (a * omega - m) - 24 * a^2
+    c4 = 12 * a^4
+    eta = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
+    factor = 2 * sqrt(2) * rp^(3 / 2) *
+        (((4 * omega) * (im - 4 * omega) -
+          a * m * (im - 8 * omega) -
+          a^2 * (m^2 + 2im * omega - 4 * omega^2)) * rp^2 +
+         a^2 * (im - 4 * omega) * (a * m - 2 * omega) * rp) /
+        (2 * rp^3 * (24 + 10 * lambda + lambda^2 + 12im * omega) -
+         rp^2 * (8im * a * m * (11 + 2 * lambda + 6im * omega) +
+          a^2 * (24 + 24 * m^2 + 10 * lambda + lambda^2 -
+           28im * omega - 16im * lambda * omega + 48 * omega^2)) +
+         8im * a^3 * rp * (m * (7 + lambda - 6im * omega) -
+          a * omega * (4 + lambda)) +
+         12 * a^5 * omega * (a * omega - 3 * m))
+    phase0 = m * (delta_phir_func(qr0) - qphi0) -
+        omega * (delta_tr_func(qr0) - qt0) - n * qr0
+    prefactor = -im * pi * factor * eta * cis(phase0) /
+        (gamma * Cinc * kappa)
+    total = 0.0 + 0.0im
+
+    @inbounds for i in eachindex(r_vec)
+        r = r_vec[i]
+        r2 = r * r
+        rho = -1.0 / r
+        carrier = cis(-omega * rs_vec[i] +
+            a * m * log((r - rp) / (r - rm)) / (2.0 * horizon_gap))
+        Yi = Y[i]
+        Ypi = Yp[i]
+        Xi = X[i]
+        L1pL2pS = -r * L1L2S + angular_constant
+        Wll = 2.0 * rho * L1pL2pS * r2 * Yi * carrier
+        termB = 2.0 * Yi + r * Ypi
+        termC = L2S * (2.0 * rho) * r * Yi
+        Wlm = 4.0 * r * (L2S * termB + termC) * carrier
+        termD = Xi / (2.0 * sqrt(r2 + a^2))
+        termE = (Yi + 2.0 * r * Ypi) * carrier
+        termF = rho * r * termB * carrier
+        Wmm = 4.0 * S0 * (termD + termE + termF)
+        delta = r2 - 2.0 * r + a^2
+        numerator = energy * (r2 + a^2) - a * angular_momentum
+        Lp = (numerator - urp[i]) / delta
+        Lm = (numerator - urm[i]) / delta
+        radial_phase = omega * delta_tr[i] - m * delta_phir[i] +
+            n * (i - 1) * qstep
+        exp_p = cis(radial_phase)
+        exp_m = conj(exp_p)
+        Jp = (Wll * Lp * Lp + Wlm * Lp * M + Wmm * M2) * exp_p
+        Jm = (Wll * Lm * Lm + Wlm * Lm * M + Wmm * M2) * exp_m
+        weight = (i == 1 || i == count) ? 0.5 : 1.0
+        total += weight * prefactor * (Jp + Jm) / (2.0 * pi)
+    end
+    return qstep * total
 end
 
 function integrand_eccentric_sample_m2(KG_samp, Y_samp, SH, n::Int64)
@@ -3452,6 +3642,7 @@ function subsample_generic_sample(KG_sample::Dict, N_interval::Int64, K_interval
     target_K_minus = target_K - 1
     full_N_minus % target_N_minus == 0 || throw(ArgumentError("N_interval does not divide the stored generic grid"))
     full_K_minus % target_K_minus == 0 || throw(ArgumentError("K_interval does not divide the stored generic grid"))
+    full_N_minus == target_N_minus && full_K_minus == target_K_minus && return KG_sample
     stepN = div(full_N_minus, target_N_minus)
     stepK = div(full_K_minus, target_K_minus)
     idxN = 1:stepN:full_N

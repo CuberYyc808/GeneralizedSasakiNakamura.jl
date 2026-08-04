@@ -547,41 +547,46 @@ function _Pin_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
     lambda = params.lambda
     Btrans = B_trans(s, epsilon, tau, kappa)
 
-    if TSinHor == 1
-        if s == -2
-            _, _, P_zero_in_plus_rho = iterate_zero_in_rho(rhom, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
-            _, P_zero_in_rho = contour_PlusTwo_to_MinusTwo_Hor(P_zero_in_plus_rho, m, a, omega, lambda - 4, z)
-        else
-            _, _, P_zero_in_rho = iterate_zero_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+    function build_zero_in_rho(target_rho)
+        if TSinHor == 1 && s == -2
+            rho_list, _, P_zero_in_plus_rho = iterate_zero_in_rho(target_rho, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
+            _, evaluator = contour_PlusTwo_to_MinusTwo_Hor(P_zero_in_plus_rho, m, a, omega, lambda - 4, z)
+            return rho_list, evaluator
         end
-    else
-        _, _, P_zero_in_rho = iterate_zero_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        rho_list, _, evaluator = iterate_zero_in_rho(target_rho, s, epsilon, tau, kappa, lambda, z, N, tol)
+        return rho_list, evaluator
+    end
+
+    rho_list_zero_in_rho, P_zero_in_rho = build_zero_in_rho(rhom)
+    rhom_effective = max(Float64(rhom), rho_list_zero_in_rho[1])
+    if rho_list_zero_in_rho[end] < rhom_effective
+        rho_list_zero_in_rho, P_zero_in_rho = build_zero_in_rho(rhom_effective)
     end
 
     if TSinInf == 1
         if s == 2
-            _, _, P_inf_in_minus_rho = iterate_inf_in_rho(rhom, -s, epsilon, tau, kappa, lambda + 4, z, N, tol)
+            _, _, P_inf_in_minus_rho = iterate_inf_in_rho(rhom_effective, -s, epsilon, tau, kappa, lambda + 4, z, N, tol)
             _, P_inf_in_rho = contour_MinusTwo_to_PlusTwo_Inf(P_inf_in_minus_rho, m, a, omega, lambda + 4, z)
         else
-            _, _, P_inf_in_rho = iterate_inf_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+            _, _, P_inf_in_rho = iterate_inf_in_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
         end
     else
-        _, _, P_inf_in_rho = iterate_inf_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        _, _, P_inf_in_rho = iterate_inf_in_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
     end
 
     if TSoutInf == 1
         if s == -2
-            _, _, P_inf_out_plus_rho = iterate_inf_out_rho(rhom, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
+            _, _, P_inf_out_plus_rho = iterate_inf_out_rho(rhom_effective, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
             _, P_inf_out_rho = contour_PlusTwo_to_MinusTwo_Inf(P_inf_out_plus_rho, m, a, omega, lambda - 4, z)
         else
-            _, _, P_inf_out_rho = iterate_inf_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+            _, _, P_inf_out_rho = iterate_inf_out_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
         end
     else
-        _, _, P_inf_out_rho = iterate_inf_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        _, _, P_inf_out_rho = iterate_inf_out_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
     end
 
-    CInfIn = - C_inf(rhom, P_zero_in_rho, P_inf_out_rho, s, epsilon, tau, kappa, z)
-    CInfOut = C_inf(rhom, P_zero_in_rho, P_inf_in_rho, s, epsilon, tau, kappa, z)
+    CInfIn = - C_inf(rhom_effective, P_zero_in_rho, P_inf_out_rho, s, epsilon, tau, kappa, z)
+    CInfOut = C_inf(rhom_effective, P_zero_in_rho, P_inf_in_rho, s, epsilon, tau, kappa, z)
     Binc = B_inc(CInfIn, epsilon, tau, kappa)
     Bref = B_ref(CInfOut, s, epsilon, tau, kappa)
 
@@ -639,6 +644,9 @@ function _Pin_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
             P_zero_in = P_zero_in,
             P_inf_in = P_inf_in,
             P_inf_out = P_inf_out,
+            P_zero_in_rho = P_zero_in_rho,
+            P_inf_in_rho = P_inf_in_rho,
+            P_inf_out_rho = P_inf_out_rho,
             CInfIn = CInfIn,
             CInfOut = CInfOut,
             Btrans = Btrans,
@@ -648,6 +656,10 @@ function _Pin_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
             xm_match = xm_match,
             xsplit = xsplit,
             split_mismatch = split_mismatch,
+            rhom = rhom_effective,
+            horizon_in_patch_count = length(x_list_zero_in),
+            infinity_in_patch_count = length(x_list_inf_in),
+            infinity_out_patch_count = length(x_list_inf_out),
         )
     end
 
@@ -663,41 +675,49 @@ function _Pup_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
     lambda = params.lambda
     Ctrans = _f4(s, epsilon, kappa)
 
-    if TSinHor == 1
-        if s == -2
-            _, _, P_zero_in_plus_rho = iterate_zero_in_rho(rhom, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
-            _, P_zero_in_rho = contour_PlusTwo_to_MinusTwo_Hor(P_zero_in_plus_rho, m, a, omega, lambda - 4, z)
-        else
-            _, _, P_zero_in_rho = iterate_zero_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+    function build_zero_in_rho(target_rho)
+        if TSinHor == 1 && s == -2
+            rho_list, _, P_zero_in_plus_rho = iterate_zero_in_rho(target_rho, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
+            _, evaluator = contour_PlusTwo_to_MinusTwo_Hor(P_zero_in_plus_rho, m, a, omega, lambda - 4, z)
+            return rho_list, evaluator
         end
-    else
-        _, _, P_zero_in_rho = iterate_zero_in_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        rho_list, _, evaluator = iterate_zero_in_rho(target_rho, s, epsilon, tau, kappa, lambda, z, N, tol)
+        return rho_list, evaluator
     end
 
-    if TSoutHor == 1
-        if s == 2
-            _, _, P_zero_out_minus_rho = iterate_zero_out_rho(rhom, -s, epsilon, tau, kappa, lambda + 4, z, N, tol)
-            _, P_zero_out_rho = contour_MinusTwo_to_PlusTwo_Hor(P_zero_out_minus_rho, m, a, omega, lambda + 4, z)
-        else
-            _, _, P_zero_out_rho = iterate_zero_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+    function build_zero_out_rho(target_rho)
+        if TSoutHor == 1 && s == 2
+            rho_list, _, P_zero_out_minus_rho = iterate_zero_out_rho(target_rho, -s, epsilon, tau, kappa, lambda + 4, z, N, tol)
+            _, evaluator = contour_MinusTwo_to_PlusTwo_Hor(P_zero_out_minus_rho, m, a, omega, lambda + 4, z)
+            return rho_list, evaluator
         end
-    else
-        _, _, P_zero_out_rho = iterate_zero_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        rho_list, _, evaluator = iterate_zero_out_rho(target_rho, s, epsilon, tau, kappa, lambda, z, N, tol)
+        return rho_list, evaluator
+    end
+
+    rho_list_zero_in_rho, P_zero_in_rho = build_zero_in_rho(rhom)
+    rho_list_zero_out_rho, P_zero_out_rho = build_zero_out_rho(rhom)
+    rhom_effective = max(Float64(rhom), rho_list_zero_in_rho[1], rho_list_zero_out_rho[1])
+    if rho_list_zero_in_rho[end] < rhom_effective
+        rho_list_zero_in_rho, P_zero_in_rho = build_zero_in_rho(rhom_effective)
+    end
+    if rho_list_zero_out_rho[end] < rhom_effective
+        rho_list_zero_out_rho, P_zero_out_rho = build_zero_out_rho(rhom_effective)
     end
 
     if TSoutInf == 1
         if s == -2
-            _, _, P_inf_out_plus_rho = iterate_inf_out_rho(rhom, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
+            _, _, P_inf_out_plus_rho = iterate_inf_out_rho(rhom_effective, -s, epsilon, tau, kappa, lambda - 4, z, N, tol)
             _, P_inf_out_rho = contour_PlusTwo_to_MinusTwo_Inf(P_inf_out_plus_rho, m, a, omega, lambda - 4, z)
         else
-            _, _, P_inf_out_rho = iterate_inf_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+            _, _, P_inf_out_rho = iterate_inf_out_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
         end
     else
-        _, _, P_inf_out_rho = iterate_inf_out_rho(rhom, s, epsilon, tau, kappa, lambda, z, N, tol)
+        _, _, P_inf_out_rho = iterate_inf_out_rho(rhom_effective, s, epsilon, tau, kappa, lambda, z, N, tol)
     end
 
-    CZeroIn = - C_zero(rhom, P_inf_out_rho, P_zero_out_rho, s, epsilon, tau, kappa, z)
-    CZeroOut = C_zero(rhom, P_inf_out_rho, P_zero_in_rho, s, epsilon, tau, kappa, z)
+    CZeroIn = - C_zero(rhom_effective, P_inf_out_rho, P_zero_out_rho, s, epsilon, tau, kappa, z)
+    CZeroOut = C_zero(rhom_effective, P_inf_out_rho, P_zero_in_rho, s, epsilon, tau, kappa, z)
     Cinc = C_inc(CZeroOut, epsilon, tau, kappa)
     Cref = C_ref(CZeroIn, s, epsilon, tau, kappa)
 
@@ -758,6 +778,9 @@ function _Pup_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
             P_zero_in = P_zero_in,
             P_zero_out = P_zero_out,
             P_inf_out = P_inf_out,
+            P_zero_in_rho = P_zero_in_rho,
+            P_zero_out_rho = P_zero_out_rho,
+            P_inf_out_rho = P_inf_out_rho,
             CZeroIn = CZeroIn,
             CZeroOut = CZeroOut,
             Ctrans = Ctrans,
@@ -767,6 +790,10 @@ function _Pup_contour(s, l, m, a, omega, rhom = _rhom, xm = _xm, N = _TruncatioN
             xm_match = xm_match,
             xsplit = xsplit,
             split_mismatch = split_mismatch,
+            rhom = rhom_effective,
+            horizon_in_patch_count = length(x_list_zero_in),
+            horizon_out_patch_count = length(x_list_zero_out),
+            infinity_out_patch_count = length(x_list_inf_out),
         )
     end
 

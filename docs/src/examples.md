@@ -4,94 +4,62 @@
 Pages = ["examples.md"]
 ```
 
-## Example 1: Solving and visualizing some Teukolsky and GSN functions
-In this example, we solve for the Teukolsky and the GSN function with
-$s = -2, \ell = 2, m = 2, a = 0.7, \omega = 0.25$ that satisfy the purely outgoing condition
-at infinity (i.e. `UP`).
+## Example 1: Direct GSN, Teukolsky, and source-adapted radial functions
+
+The public Direct ISEM route constructs the GSN function $X$ directly. The
+Teukolsky function $R$ and source-adapted function $Y$ are numerical wrappers
+around that route. The $Y$ wrapper is available for `s = -2, IN` and
+`s = +2, UP`.
+
 ```julia
 using GeneralizedSasakiNakamura
 using Plots, LaTeXStrings
 
-# Specify which mode and what boundary condition
-s=-2; l=2; m=2; a=0.7; omega=0.25; bc=UP; # Change to bc=IN to solve for R^in or X^in instead
-# Specify where to match to ansatzes
-rsin=-20; rsout=250;
+s = -2
+l = 2
+m = 2
+a = 0.7
+omega = 0.25
+bc = IN
 
-# NOTE: julia uses 'just-ahead-of-time' compilation. Calling this the first time in each session will take some time
-R = Teukolsky_radial(s, l, m, a, omega, bc, rsin, rsout);
+X = GSN_radial(s, l, m, a, omega, bc; method = "direct_ISEM")
+R = Teukolsky_radial(s, l, m, a, omega, bc; method = "direct_ISEM")
+Y = Y_radial(s, l, m, a, omega, bc; method = "direct_ISEM")
 
-# Set up a grid of the tortoise coordinate rs
-rsgrid = collect(-30:1:300); # Does not have to be within [rsin, rsout]
-# Set up a grid of the Boyer-Lindquist r coordinate
-# Convert from rsgrid using r_from_rstar(a, rs)
-rgrid = [r_from_rstar(a, rs) for rs in rsgrid];
+rstar_grid = collect(range(-30, 100; length = 1400))
+r_grid = r_from_rstar.(a, rstar_grid)
+
+x_state = X.GSN_solution.(rstar_grid)
+r_state = R.Teukolsky_solution.(r_grid)
+y_state = Y.Y_solution.(r_grid)
 ```
 
 ```julia
-# Visualize the Teukolsky function
+X_values = getindex.(x_state, 1)
+dXdrstar_values = getindex.(x_state, 2)
+R_values = getindex.(r_state, 1)
+Y_values = getindex.(y_state, 1)
 
-# Use the 'shortcut' interface to access the function
-plot(rgrid, [real(R(r)) for r in rgrid], label="real")
-# Use the full interface to access the function (and its derivative)
-plot!(rgrid, [imag(R.Teukolsky_solution(r)[1]) for r in rgrid], label="imag")
-plot!(
-    legendfontsize=14,
-    xguidefontsize=14,
-    yguidefontsize=14,
-    xtickfontsize=14,
-    ytickfontsize=14,
-    foreground_color_legend=nothing,
-    background_color_legend=nothing,
-    legend=:topleft,
-    xlabel=L"r/M",
-    ylabel=L"R(r)",
-)
-title!("$(R.boundary_condition) solution")
-```
-![R.png](R.png)
-```julia
-# Visualize the underlying GSN function
+pX = plot(rstar_grid, [real.(X_values) imag.(X_values)];
+    label = ["real" "imag"], xlabel = L"r_*/M", ylabel = L"X(r_*)",
+    title = "Direct GSN solution")
+pR = plot(r_grid, [real.(R_values) imag.(R_values)];
+    label = ["real" "imag"], xlabel = L"r/M", ylabel = L"R(r)",
+    title = "Teukolsky wrapper")
+pY = plot(r_grid, [real.(Y_values) imag.(Y_values)];
+    label = ["real" "imag"], xlabel = L"r/M", ylabel = L"Y(r)",
+    title = "Source-adapted wrapper")
 
-# Use the 'shortcut' interface to access the function
-plot(rsgrid, [real(R.GSN_solution(rs)) for rs in rsgrid], label="real")
-# Use the full interface to access the function (and its derivative)
-plot!(rsgrid, [imag(R.GSN_solution.GSN_solution(rs)[1]) for rs in rsgrid], label="imag")
-plot!(
-    legendfontsize=14,
-    xguidefontsize=14,
-    yguidefontsize=14,
-    xtickfontsize=14,
-    ytickfontsize=14,
-    foreground_color_legend=nothing,
-    background_color_legend=nothing,
-    legend=:bottomright,
-    xlabel=L"r_{*}/M",
-    ylabel=L"X(r_{*})",
-)
-title!("$(R.boundary_condition) solution")
+plot(pX, pR, pY; layout = (3, 1), size = (900, 960))
 ```
-![X.png](X.png)
+
+The full X state evaluates $X$ and $dX/dr_*$ together:
+
 ```julia
-# Visualize the underlying complex frequency function
-# NOTE: for this one, rstar has to be within [rsin, rsout]
-plot(collect(rsin:0.1:rsout), [real(R.GSN_solution.numerical_Riccati_solution(rs)[2]) for rs in rsin:0.1:rsout], label="real")
-# Use the full interface to access the function (and its derivative)
-plot!(collect(rsin:0.1:rsout), [imag(R.GSN_solution.numerical_Riccati_solution(rs)[2]) for rs in rsin:0.1:rsout], label="imag")
-plot!(
-    legendfontsize=14,
-    xguidefontsize=14,
-    yguidefontsize=14,
-    xtickfontsize=14,
-    ytickfontsize=14,
-    foreground_color_legend=nothing,
-    background_color_legend=nothing,
-    legend=:bottomright,
-    xlabel=L"r_{*}/M",
-    ylabel=L"d\Phi(r_{*})/dr_{*}",
-)
-title!("$(R.boundary_condition) solution")
+plot(rstar_grid, [real.(dXdrstar_values) imag.(dXdrstar_values)];
+    label = ["real" "imag"], xlabel = L"r_*/M", ylabel = L"dX/dr_*",
+    title = "Derivative from the same Direct ISEM series evaluation")
 ```
-![dPhidrs.png](dPhidrs.png)
 
 ## Example 2: Plotting reflectivity of black holes (in GSN formalism)
 ```julia
@@ -106,7 +74,7 @@ omegas = collect(0.01:0.01:2.0);
 for s in sarr
     reflectivity_from_inf_nonrotating[s] = []
     for omg in omegas
-        Xin = GSN_radial(s, l, m, a, omg, IN, -20, 250)
+        Xin = GSN_radial(s, l, m, a, omg, IN; method = "direct_ISEM")
         append!(reflectivity_from_inf_nonrotating[s], Xin.reflection_amplitude/Xin.incidence_amplitude)
     end
 end
@@ -142,7 +110,7 @@ omegas = collect(0.01:0.01:2.0);
 for s in sarr
     reflectivity_from_inf_rotating[s] = []
     for omg in omegas
-        Xin = GSN_radial(s, l, m, a, omg, IN, -20, 250)
+        Xin = GSN_radial(s, l, m, a, omg, IN; method = "direct_ISEM")
         append!(reflectivity_from_inf_rotating[s], Xin.reflection_amplitude/Xin.incidence_amplitude)
     end
 end
@@ -703,8 +671,9 @@ function SN_convolution(l, omega, a; rsout = 5000, rsin = - 50)
     s = -2
     m = 0
     rsin = min(rsin, 50*log10(1-a))
-    rsout = max(50pi*abs(omega)^(-1.0), rsout)
-    X = GSN_radial(s, l, m, a, omega, IN, rsin, rsout)
+    rsout = max(50 * pi / abs(omega), rsout)
+    # Direct ISEM constructs X itself; rsin and rsout are convolution bounds.
+    X = GSN_radial(s, l, m, a, omega, IN; method = "direct_ISEM")
     Binc = X.incidence_amplitude
     W = Wnn_integrals(l, a, omega; rsout = rsout)
     function integrand!(du, u, p, rs)

@@ -402,7 +402,25 @@ function iterate_inf_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trunc
 end
 
 function iterate_inf_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _TruncatioN, tol = _TOLERANCE, sfe = 0, lfe = 0)
-    coeffs_inf, Nopt, R0 = inf_out_coeffs(s, epsilon, tau, kappa, lambda, z, N; tol = tol)
+    coeffs_inf, Nopt, canonical_R0 = inf_out_coeffs(
+        s, epsilon, tau, kappa, lambda, z, N; tol = tol)
+    R0 = canonical_R0
+    seed_target = max(0.05 * Float64(tol), 2.5 * eps(Float64))
+    seed_error = error_inf_out(
+        R0, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
+    if !isfinite(seed_error) || seed_error > seed_target
+        for step in 1:10
+            factor = Float64(100 + 5 * step) / 100.0
+            candidate_R0 = factor * canonical_R0
+            candidate_error = error_inf_out(
+                candidate_R0, s, epsilon, tau, kappa, lambda,
+                coeffs_inf, z)
+            if isfinite(candidate_error) && candidate_error <= seed_target
+                R0 = candidate_R0
+                break
+            end
+        end
+    end
     rho = R0
     P, Pp, _ = evaluate_inf_out(rho, s, epsilon, tau, kappa, coeffs_inf, z)
     coeffs_list = Vector{typeof(coeffs_inf)}()
@@ -472,7 +490,11 @@ function iterate_zero_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trun
         push!(coeffs_list, coeffs_ord)
     end
     function evaluate_P(rho_eval)
-        if rho_eval < rho_list[1]
+        if rho_eval == rho_list[1]
+            P0, P0p, P0pp = evaluate_zero_in_rho(rho_eval, coeffs_zero)
+            err = error_zero_in_rho(rho_eval, s, epsilon, tau, kappa, lambda, z, coeffs_zero)
+            return (P0, P0p, P0pp, err)
+        elseif rho_eval < rho_list[1]
             error("rho = $rho_eval is outside the computed domain rho >= $(rho_list[1]).")
         elseif rho_eval <= rho_list[end]
             if rho_eval <= R0
@@ -614,7 +636,11 @@ function iterate_zero_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Tru
         push!(coeffs_list, coeffs_ord)
     end
     function evaluate_P(rho_eval)
-        if rho_eval < rho_list[1]
+        if rho_eval == rho_list[1]
+            P0, P0p, P0pp = evaluate_zero_out_rho(rho_eval, s, epsilon, tau, coeffs_zero, z)
+            err = error_zero_out_rho(rho_eval, s, epsilon, tau, kappa, lambda, z, coeffs_zero)
+            return (P0, P0p, P0pp, err)
+        elseif rho_eval < rho_list[1]
             error("rho = $rho_eval is outside the computed domain rho >= $(rho_list[1]).")
         elseif rho_eval <= rho_list[end]
             if rho_eval <= R0

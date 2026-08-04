@@ -12,9 +12,13 @@ using Logging
 using LoggingExtras
 using Serialization
 
+include("DirectGSN/DirectGSN.jl")
+using .DirectGSN
+
 include("Matching.jl")
 using .Matching
 
+export DirectGSN
 export Matching, _Pin, _Pup, _P
 export BoundaryCondition, IN, UP, OUT, DOWN
 export NormalizationConvention, UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
@@ -572,13 +576,40 @@ function _rho_parameters(s, l, m, a, omega)
     return params.kappa, params.epsilon, params.tau, params.lambda, params.z
 end
 
-_is_negative_real_frequency(omega) = isreal(omega) && real(omega) < -_STATIC_OMEGA_TOL
+function _is_reflected_lhp_frequency(omega)
+    real_part = real(omega)
+    real_part < -_STATIC_OMEGA_TOL || return false
+    isreal(omega) && return true
+    return abs(real_part) <= 1.0 &&
+        abs(imag(omega)) <= 1.0e-3 * abs(real_part)
+end
 _conjugate_or_missing(x) = x === missing ? missing : conj(x)
 _conjugate_solution_value(x) = x isa Tuple ? map(_conjugate_solution_value, x) : _conjugate_or_missing(x)
 _conjugate_solution_function(f) = f === missing ? missing : (args...; kwargs...) -> _conjugate_solution_value(f(args...; kwargs...))
 
+struct ConjugatedTeukolskySolution{F,P,R}
+    full_value::F
+    pair_value::P
+    radial_value::R
+end
+
+(solution::ConjugatedTeukolskySolution)(args...; kwargs...) =
+    solution.full_value(args...; kwargs...)
+
+function _conjugate_teukolsky_solution(solution)
+    solution === missing && return missing
+    full_value = _conjugate_solution_function(solution)
+    hasproperty(solution, :pair_value) && hasproperty(solution, :radial_value) ||
+        return full_value
+    return ConjugatedTeukolskySolution(
+        full_value,
+        _conjugate_solution_function(solution.pair_value),
+        _conjugate_solution_function(solution.radial_value),
+    )
+end
+
 function _conjugate_teukolsky_radial_function(f::TeukolskyRadialFunction, m::Int, omega)
-    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, f.mode.lambda)
+    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return TeukolskyRadialFunction(
         mode,
         f.boundary_condition,
@@ -587,13 +618,13 @@ function _conjugate_teukolsky_radial_function(f::TeukolskyRadialFunction, m::Int
         _conjugate_or_missing(f.reflection_amplitude),
         _conjugate_solution_function(f.P_solution),
         f.GSN_solution === missing ? missing : _conjugate_gsn_radial_function(f.GSN_solution, m, omega),
-        _conjugate_solution_function(f.Teukolsky_solution),
+        _conjugate_teukolsky_solution(f.Teukolsky_solution),
         f.normalization_convention,
     )
 end
 
 function _conjugate_gsn_radial_function(f::GSNRadialFunction, m::Int, omega)
-    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, f.mode.lambda)
+    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return GSNRadialFunction(
         mode,
         f.boundary_condition,
@@ -614,7 +645,7 @@ function _conjugate_gsn_radial_function(f::GSNRadialFunction, m::Int, omega)
 end
 
 function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
-    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, f.mode.lambda)
+    mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return YRadialFunction(
         mode,
         f.boundary_condition,
@@ -622,7 +653,7 @@ function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
         _conjugate_or_missing(f.incidence_amplitude),
         _conjugate_or_missing(f.reflection_amplitude),
         _conjugate_solution_function(f.P_solution),
-        _conjugate_solution_function(f.Teukolsky_solution),
+        _conjugate_teukolsky_solution(f.Teukolsky_solution),
         _conjugate_solution_function(f.X_solution),
         _conjugate_solution_function(f.Y_scalar_solution),
         _conjugate_solution_function(f.Y_solution),
@@ -1159,8 +1190,8 @@ function Teukolsky_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::
         )
     end
 
-    if _is_negative_real_frequency(omega)
-        positive_func = Teukolsky_radial(s, l, -m, a, -omega, boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor)
+    if _is_reflected_lhp_frequency(omega)
+        positive_func = Teukolsky_radial(s, l, -m, a, -conj(omega), boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor)
         return _conjugate_teukolsky_radial_function(positive_func, m, omega)
     end
 
@@ -1178,8 +1209,8 @@ function Teukolsky_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::
 end
 
 function GSN_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; xm=nothing, rhom=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, use_gsn_asymptotic_patches=false, gsn_horizon_delta_r_max=_GSN_HORIZON_DELTA_R_MAX, gsn_infinity_phase_min=_GSN_INFINITY_PHASE_MIN)
-    if _is_negative_real_frequency(omega)
-        positive_func = GSN_radial(s, l, -m, a, -omega, boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, use_gsn_asymptotic_patches=use_gsn_asymptotic_patches, gsn_horizon_delta_r_max=gsn_horizon_delta_r_max, gsn_infinity_phase_min=gsn_infinity_phase_min)
+    if _is_reflected_lhp_frequency(omega)
+        positive_func = GSN_radial(s, l, -m, a, -conj(omega), boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, use_gsn_asymptotic_patches=use_gsn_asymptotic_patches, gsn_horizon_delta_r_max=gsn_horizon_delta_r_max, gsn_infinity_phase_min=gsn_infinity_phase_min)
         return _conjugate_gsn_radial_function(positive_func, m, omega)
     end
 
@@ -1474,12 +1505,20 @@ function _try_y_high_spin_isem_sanity_then_legacy(
 end
 
 function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, rhom=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, info::Bool=false)
-    if _is_negative_real_frequency(omega)
-        positive_func = Y_radial(s, l, -m, a, -omega, boundary_condition; method=method, xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, info=info)
+    if _is_reflected_lhp_frequency(omega)
+        positive_func = Y_radial(s, l, -m, a, -conj(omega), boundary_condition; method=method, xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, info=info)
         return _conjugate_y_radial_function(positive_func, m, omega)
     end
 
-    if method == "ISEM"
+    if (method == "auto" && !_is_static_frequency(omega)) || method == "direct_ISEM"
+        _validate_y_branch(s, boundary_condition)
+        branch = boundary_condition == IN ? :IN : :UP
+        route = DirectGSN.direct_gsn_radial(s, l, m, a, omega, branch;
+            N=N, xm=xm, tol=tol,
+            sfe=sfe === nothing ? :auto : sfe,
+            lfe=lfe === nothing ? :auto : lfe)
+        return DirectGSN.direct_y_radial_function(route)
+    elseif method == "ISEM"
         return _build_y_solution(s, l, m, a, omega, boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor)
     elseif method == "Riccati" || method == "linear"
         return _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition; method=method, tol=tol)
@@ -1504,7 +1543,7 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
             info=info,
         )
     else
-        error("Method must be 'auto', 'ISEM', 'Riccati', or 'linear'")
+        error("Method must be 'auto', 'ISEM', 'direct_ISEM', 'Riccati', or 'linear'")
     end
 end
 

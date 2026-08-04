@@ -1,6 +1,7 @@
 module Parameters
 
 using SpinWeightedSpheroidalHarmonics
+using ...DirectGSN: direct_swsh_eigenvalue
 
 export TeukolskyParameters, MSEParameters, isem_parameters
 export RhoTeukolskyParameters, RhoISEMParameters, rho_parameters
@@ -52,7 +53,13 @@ function Base.show(io::IO, ::MIME"text/plain", para::ISEMParameters)
 end
 
 @inline function _core_parameters(s, l, m, a, omega)
-    lambda = SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(s, l, m, a * omega)
+    c = a * omega
+    lambda = if c isa Real && s in (-2, -1, 0, 1, 2)
+        direct_swsh_eigenvalue(s, l, m, c)
+    else
+        SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(
+            s, l, m, c)
+    end
     kappa = sqrt(1 - a^2)
     return lambda, kappa
 end

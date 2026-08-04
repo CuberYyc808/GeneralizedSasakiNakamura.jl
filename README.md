@@ -16,9 +16,9 @@ The paper describing both the GSN formalism and the implementation can be found 
 
 Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
 
-Starting from v0.9.0, the package includes the ISEM solver, short for _iterative series expansion matching_. ISEM is now used by the default `method = "auto"` option whenever possible and accelerates the homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The release also adds a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
+Starting from v0.9.0, the package includes the direct GSN-based ISEM solver, short for _iterative series expansion matching_. The default `method = "auto"` uses `direct_ISEM`, which constructs the GSN radial function directly and accelerates the homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The release also adds a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
 
-For high-index tail modes in eccentric and generic flux summations, the ISEM path can use adaptive Levin quadrature instead of globally densifying a trapezoidal grid. The radial phase interval is refined only where the oscillatory integral has not stabilized. In generic two-dimensional convolutions, this radial adaptive Levin rule is combined with a fixed Clenshaw-Curtis rule in the polar direction, which resolves the smooth polar dependence with a compact cosine-spaced grid while keeping the expensive adaptivity in the radial direction.
+For high-index tail modes in eccentric and generic flux summations, the ISEM convolution path uses `direct_ISEM` for its homogeneous radial functions and can use adaptive Levin quadrature instead of globally densifying a trapezoidal grid. The radial phase interval is refined only where the oscillatory integral has not stabilized. In generic two-dimensional convolutions, this radial adaptive Levin rule is combined with a fixed Clenshaw-Curtis rule in the polar direction, which resolves the smooth polar dependence with a compact cosine-spaced grid while keeping the expensive adaptivity in the radial direction.
 
 ## Installation
 To install the package using the Julia package manager, simply type the following in the Julia REPL:
@@ -29,12 +29,19 @@ Pkg.add("GeneralizedSasakiNakamura")
 
 *Note: There is no need to install [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) separately as it should be automatically installed by the package manager.*
 
+The `GSN-ISEM` development branch is paired with the `Fast-eigenvalue` angular-solver branch. Install both branches explicitly (this also works on Julia 1.10):
+```julia
+using Pkg
+Pkg.add(url="https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git", rev="Fast-eigenvalue")
+Pkg.add(url="https://github.com/CuberYyc808/GeneralizedSasakiNakamura.jl.git", rev="GSN-ISEM")
+```
+
 ## Highlights
 ### Two classes of solvers
 The package supports two complementary classes of solvers:
 
 - **Numerical solver**: direct numerical integration of the radial equation using the `linear` or `Riccati` methods, patched with analytical solutions near the boundaries.
-- **Semi-analytical solver**: matching series expansion iteratively, by specifying `method = "ISEM"` or by the default `method = "auto"`.
+- **Semi-analytical solver**: matching series expansions iteratively, by specifying `method = "direct_ISEM"` or by the default `method = "auto"`.
 
 ### Numerical solver: linear/Riccati integration
 The original GSN solver works at *both low and high frequencies* by numerically evolving the radial equation and attaching analytical boundary ansatzes near the horizon and infinity:
@@ -58,24 +65,20 @@ The on-the-fly benchmark against the Mathematica MST implementation is shown bel
 
 *(There was no caching in this benchmark; the equation was solved on the fly. The notebook generating the speed animation can be found [here](https://github.com/ricokaloklo/GeneralizedSasakiNakamura.jl/blob/main/examples/realtime-demo.ipynb).)*
 
-### Semi-analytical solver: iterative series expansion matching
-The semi-analytical solver ISEM constructs the Teukolsky and GSN radial functions directly from matched series expansions:
+### Semi-analytical solver: direct GSN-based ISEM
+The semi-analytical `direct_ISEM` solver constructs the GSN radial function $X$ directly from matched series expansions; the Teukolsky function $R$ and the source-adapted function $Y$ are numerical transformations of the same route:
 
 <p align="center">
-  <img width="80%" src="docs/src/isem_matching_original_30fps.gif">
+  <img width="80%" alt="GSN-based direct ISEM matching" src="docs/src/isem_matching_original_30fps.gif">
 </p>
 
-Users can choose this solver by specifying `method = "ISEM"` or by `method = "auto"`, where ISEM will be used whenever possible. For real frequencies in the trained selector domain, ISEM chooses matching controls automatically. When the option `method = "auto"` is used but ISEM cannot obtain a reliable solution, it falls back to the legacy `linear` solver.
+Users can choose this solver by specifying `method = "direct_ISEM"`. The default `method = "auto"` selects `direct_ISEM` and its automatic frequency, spin, representation, and matching controls. The previous `method = "ISEM"` implementation and the legacy `linear` and `Riccati` solvers remain available explicitly.
 
-The homogeneous radial Teukolsky/GSN equations are solved typically at millisecond timescale or faster. The ISEM on-the-fly Teukolsky/GSN solve and evaluation benchmark is shown below:
+The homogeneous radial Teukolsky/GSN equations are solved typically at millisecond timescale or faster.
 
-<p align="center">
-  <img width="80%" src="https://raw.githubusercontent.com/CuberYyc808/CuberYyc808.github.io/3b847bfb92587eecb078bf7284f1cbc86e476ddb/images/teukolsky_gsn_solver_demo_60s.gif">
-</p>
+The `direct_ISEM` radial path is also used in the accelerated single-mode point-particle amplitudes and total-flux mode summations.
 
-ISEM is also used in the accelerated single-mode point-particle amplitudes and total-flux mode summations where available.
-
-Superradiance-threshold solutions with $\omega = m a / (2 r_+)$ are handled by a dedicated horizon-threshold ISEM branch, while static/zero-frequency solutions are solved analytically with Gauss hypergeometric functions.
+Superradiance-threshold solutions with $\omega = m a / (2 r_+)$ are handled by a dedicated horizon-threshold direct ISEM branch, while static/zero-frequency solutions are solved analytically with Gauss hypergeometric functions.
 
 ### Easy to use
 The following code snippet lets you solve the (source-free) Teukolsky function (in frequency domain) for the mode $s=-2, \ell=2, m=2, a/M=0.7, M\omega=0.5$ that satisfies the purely-ingoing boundary condition at the horizon, $R^{\textrm{in}}$, and the purely-outgoing boundary condition at spatial infinity, $R^{\textrm{up}}$, respectively:

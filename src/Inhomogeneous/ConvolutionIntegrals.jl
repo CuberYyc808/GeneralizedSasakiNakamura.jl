@@ -3,6 +3,7 @@ module ConvolutionIntegrals
 using LinearAlgebra
 using SpinWeightedSpheroidalHarmonics
 using KerrGeodesics
+import KerrGeodesics.KerrGeoOrbit: kerr_geo_orbit
 
 using ..ISEM
 using ..Coordinates
@@ -57,6 +58,29 @@ const _eccentric_levin_last_result = Ref{Any}(nothing)
 const _inclined_levin_last_key = Ref{Any}(nothing)
 const _inclined_levin_last_result = Ref{Any}(nothing)
 const _Y_RADIAL_INFO = Ref(false)
+
+mutable struct OrbitMasterCache
+    lock::ReentrantLock
+    key::Any
+    value::Any
+end
+
+OrbitMasterCache() = OrbitMasterCache(ReentrantLock(), nothing, nothing)
+
+const _eccentric_master_cache = OrbitMasterCache()
+const _generic_master_cache = OrbitMasterCache()
+
+function _cached_orbit_master!(builder, cache::OrbitMasterCache, key)
+    lock(cache.lock) do
+        if isequal(cache.key, key)
+            return cache.value
+        end
+        value = builder()
+        cache.key = key
+        cache.value = value
+        return value
+    end
+end
 
 function with_y_radial_info(f, info::Bool)
     old_info = _Y_RADIAL_INFO[]
@@ -157,7 +181,7 @@ function _generic_trapezoidal_context(a, p, e, x, s, l, m, n, k, N_sample, K_sam
         omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
         KG_samp = kerr_geo_generic_sample(KG, N_sample, K_sample)
         SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Ysol = _isem_y_solution(s, l, m, a, omega)
+        Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
         Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
         SHsamp = swsh_sample(SH, KG_samp)
         carter_samp = carter_ingredients_sample(KG_samp, a, m, omega)
@@ -180,7 +204,7 @@ function _eccentric_trapezoidal_context(a, p, e, s, l, m, n, N_sample)
         omega = (m * ϒφ + n * ϒr) / Γ
         KG_samp = kerr_geo_eccentric_sample(KG, N_sample)
         SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Ysol = _isem_y_solution(s, l, m, a, omega)
+        Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
         Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
         SHsamp = swsh_sample(SH, KG_samp)
         return (KG = KG, KG_samp = KG_samp, omega = omega, Γ = Γ, ϒθ = ϒθ, Ysol = Ysol, Ysamp = Ysamp, SH = SH, SHsamp = SHsamp)
@@ -197,8 +221,8 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
         a = KG_sample["a"]
         ω = (m * ϒφ + k * ϒθ) / Γ
         KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
-        Ysol = _isem_y_solution(s, l, m, a, ω)
         SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+        Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
         Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
         Ydic = Dict(
             "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
@@ -324,7 +348,8 @@ function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sa
     result = if s == 2
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
         SH_p2_samp = swsh_sample(SH_p2, KG_samp)
-        Yup_soln = _isem_y_solution(s, l, m, a, omega)
+        Yup_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_p2.lambda)
         Yup_samp = y_sample_p2_isem(Yup_soln, KG_samp)
         rphase = _radial_phase_vector(KG_samp, omega, m, n)
         θphase = _polar_phase_vector(KG_samp, omega, m, k)
@@ -347,7 +372,8 @@ function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sa
         )
     elseif s == -2
         SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Yin_soln = _isem_y_solution(s, l, m, a, omega)
+        Yin_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_m2.lambda)
         Yin_samp = y_sample_m2_isem(Yin_soln, KG_samp)
         SH_m2_samp = swsh_sample(SH_m2, KG_samp)
         rphase = _radial_phase_vector(KG_samp, omega, m, n)
@@ -376,25 +402,36 @@ function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sa
     return result
 end
 
-@inline function _isem_y_solution(s, l, m, a, omega)
-    if s == -2
-        return Y_radial(s, l, m, a, omega, IN; info = _Y_RADIAL_INFO[])
-    elseif s == 2
-        return Y_radial(s, l, m, a, omega, UP; info = _Y_RADIAL_INFO[])
-    else
-        error("ISEM Y interfaces currently support only s = -2 and s = 2.")
-    end
+const _INHOMOGENEOUS_ORDINARY_MIN_OMEGA = 0.05
+const _INHOMOGENEOUS_ORDINARY_MAX_L = 4
+
+@inline function _inhomogeneous_sfe_control(l, a, omega)
+    regular_low_mode = isreal(omega) &&
+        abs(omega) >= _INHOMOGENEOUS_ORDINARY_MIN_OMEGA &&
+        l <= _INHOMOGENEOUS_ORDINARY_MAX_L && abs(a) <= 0.95
+    return regular_low_mode ? false : :auto
 end
 
-@inline function _generic_isem_y_solution(s, l, m, a, omega)
-    return _isem_y_solution(s, l, m, a, omega)
+@inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing)
+    branch = s == -2 ? :IN : s == 2 ? :UP :
+        error("ISEM Y interfaces currently support only s = -2 and s = 2.")
+    route = DirectGSN.direct_gsn_radial(s, l, m, a, omega, branch;
+        lambda = lambda,
+        sfe = _inhomogeneous_sfe_control(l, a, omega),
+        lfe = :auto)
+    return DirectGSN.direct_y_radial_function(route)
+end
+
+@inline function _generic_isem_y_solution(s, l, m, a, omega;
+        lambda = nothing)
+    return _isem_y_solution(s, l, m, a, omega; lambda = lambda)
 end
 
 function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s::Int, l::Int, m::Int, n::Int, k::Int, a::Float64, ω::Float64, ϒθ::Float64)
     carter_factor = trapezoidal_1d_integral(carter_ingredients_sample(KG_samp, a, m, ω))
     if s == 2
-        inte = GridSampling._generic_integrand_sample_p2_fast(KG_samp, Y_samp, SH_samp, n, k)
-        integral = trapezoidal_2d_integral(inte)
+        integral = GridSampling._generic_integral_sample_p2_fast(
+            KG_samp, Y_samp, SH_samp, n, k)
         hf = horizon_factor(ω, a, m)
         return Dict(
             "Amplitude" => integral,
@@ -407,8 +444,8 @@ function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s
             "SWSH" => SH_samp,
         )
     elseif s == -2
-        inte = GridSampling._generic_integrand_sample_m2_fast(KG_samp, Y_samp, SH_samp, n, k)
-        integral = trapezoidal_2d_integral(inte)
+        integral = GridSampling._generic_integral_sample_m2_fast(
+            KG_samp, Y_samp, SH_samp, n, k)
         return Dict(
             "Amplitude" => integral,
             "omega" => ω,
@@ -1406,7 +1443,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
 
     N = N0
     K = K0
@@ -1518,7 +1555,7 @@ function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, 
     end
 
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
     flux_scale = max(max_flux, eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
     low_flux_budget = _levin_low_flux_budget(Float64(max_flux), Float64(tol), mode_abs_floor)
@@ -1621,7 +1658,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     effective_local_theta_intervals = _generic_adaptive_effective_theta_intervals(local_theta_intervals, k)
     nt = effective_local_theta_intervals + 1
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     root = _generic_adaptive_segment_amplitude!(cache, KG_master, Ysol, SH, s, a, ω, m, n, k, root_key, nr, nt; threaded_sampling = threaded_sampling)
     root_energy = abs(_generic_adaptive_energy_from_amp(root, s, a, m, ω))
@@ -1858,7 +1895,7 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
 
     N = N0
     K = K0
@@ -3342,12 +3379,11 @@ function convolution_integral_circular_equatorial_isem(a, p, s, l, m)
     rp = 1.0 + sqrt(1.0 - a^2)
     rm = 1.0 - sqrt(1.0 - a^2)
 
-    Y_soln = _isem_y_solution(s, l, m, a, ω)
-    Y, Yp, X, _ = Y_soln.Y_solution(r)
-    A = Y_soln.mode.lambda
-
     c = a * ω
     SH = spin_weighted_spheroidal_harmonic(s, l, m, c)
+    Y_soln = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Y, Yp, X, _ = Y_soln.Y_solution(r)
+    A = Y_soln.mode.lambda
     S0 = SH(θ, 0.0)
     S1 = SH(θ, 0.0; theta_derivative = 1)
     S2 = s == -2 ? (m^2 + c^2 + 2 - 2c*m - A) * S0 : (m^2 + c^2 - 2 - 2c*m - A) * S0
@@ -3465,7 +3501,7 @@ function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     flux_scale = max(Float64(max_flux), eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(Float64(tol)))
@@ -3530,8 +3566,8 @@ function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m
         S0 = SH(π/2, 0.0)
         S1 = SH(π/2, 0.0; theta_derivative = 1)
         S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
-        inte_samp = integrand_eccentric_sample_p2(KG_samp, Ysamp, (S0, S1, S2), n)
-        integral = trapezoidal_1d_integral(inte_samp)
+        integral = GridSampling._eccentric_integral_sample_p2_fast(
+            KG_samp, Ysamp, (S0, S1, S2), n)
         hf = horizon_factor(ω, a, m)
         return Dict(
             "Amplitude" => integral,
@@ -3547,8 +3583,8 @@ function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m
         S0 = SH(π/2, 0.0)
         S1 = SH(π/2, 0.0; theta_derivative = 1)
         S2 = (m^2 + (a * ω)^2 + 2 - 2 * a * ω * m - SH.lambda) * S0
-        inte_samp = integrand_eccentric_sample_m2(KG_samp, Ysamp, (S0, S1, S2), n)
-        integral = trapezoidal_1d_integral(inte_samp)
+        integral = GridSampling._eccentric_integral_sample_m2_fast(
+            KG_samp, Ysamp, (S0, S1, S2), n)
         return Dict(
             "Amplitude" => integral,
             "omega" => ω,
@@ -3824,7 +3860,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     KG = haskey(KG_sample, "Energy") ? KG_sample : _kg_from_presampled_master(KG_sample)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
 
     segment_evaluations = 0
     root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling)
@@ -3947,7 +3983,7 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
 
     N = N_sample
     KG_samp = cache isa EccentricFluxCache ? _cached_eccentric_sample!(cache, KG_sample, N) : subsample_eccentric_sample(KG_sample, N)
@@ -4027,8 +4063,9 @@ function convolution_integral_eccentric_levin_isem(a, p, e, s, l, m, n, N_sample
     KG_samp = kerr_geo_eccentric_sample_cheby(KG, N_sample)
 
     result = if s == 2
-        Yup_soln = _isem_y_solution(s, l, m, a, omega)
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        Yup_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_p2.lambda)
         Yup_samp = y_sample_p2_isem(Yup_soln, KG_samp)
         S0_p2 = SH_p2(π/2, 0.0)
         S1_p2 = SH_p2(π/2, 0.0; theta_derivative=1)
@@ -4050,8 +4087,9 @@ function convolution_integral_eccentric_levin_isem(a, p, e, s, l, m, n, N_sample
             "SWSH" => SH_p2
         )
     elseif s == -2
-        Yin_soln = _isem_y_solution(s, l, m, a, omega)
         SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        Yin_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_m2.lambda)
         Yin_samp = y_sample_m2_isem(Yin_soln, KG_samp)
         S0_m2 = SH_m2(π/2, 0.0)
         S1_m2 = SH_m2(π/2, 0.0; theta_derivative=1)
@@ -4186,8 +4224,9 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
     carter_factor = trapezoidal_1d_integral(carter_samp)
 
     result = if s == 2
-        Yup_soln = _isem_y_solution(s, l, m, a, omega)
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        Yup_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_p2.lambda)
         Y, Yp, X, _ = Yup_soln.Y_solution(p)
         Yup = Dict("params" => (s=2, l=l, m=m, a=a, omega=omega, lambda=SH_p2.lambda),
             "Cinc" => GridSampling._isem_gsn_incidence_amplitude(Yup_soln),
@@ -4212,8 +4251,9 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
             "SWSH" => SH_p2
         )
     elseif s == -2
-        Yin_soln = _isem_y_solution(s, l, m, a, omega)
         SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        Yin_soln = _isem_y_solution(s, l, m, a, omega;
+            lambda = SH_m2.lambda)
         Y, Yp, X, _ = Yin_soln.Y_solution(p)
         Yin = Dict("params" => (s=-2, l=l, m=m, a=a, omega=omega, lambda=SH_m2.lambda),
             "Binc" => GridSampling._isem_gsn_incidence_amplitude(Yin_soln),
@@ -4245,30 +4285,58 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
 end
 
 function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax::Int = 2^14, Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
-    KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
     if m == 0 && n == 0 && k == 0
+        KG = kerr_geo_orbit(a, p, e, x)
+        typeof(KG) == Vector{String} && return KG
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
     if isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0 || k != 0
+            KG = kerr_geo_orbit(a, p, e, x)
+            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         return convolution_integral_circular_equatorial_isem(a, p, s, l, m)
     elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0
+            KG = kerr_geo_orbit(a, p, e, x)
+            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         return convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
     elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if k != 0
+            KG = kerr_geo_orbit(a, p, e, x)
+            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        return convolution_integral_eccentric_trapezoidal_isem(a, p, e, s, l, m, n, N; Nmax = Nmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
+        master = _cached_orbit_master!(_eccentric_master_cache,
+                (a, p, e, Nmax)) do
+            KG = kerr_geo_orbit(a, p, e, x)
+            typeof(KG) == Vector{String} && return KG
+            kerr_geo_eccentric_sample_dense(KG, Nmax)
+        end
+        typeof(master) == Vector{String} && return master
+        return convolution_integral_eccentric_trapezoidal_isem(master,
+            s, l, m, n, N; Nmax = Nmax, tol = tol,
+            sample_tol = sample_tol, max_flux = max_flux,
+            mode_abs_floor = mode_abs_floor,
+            zero_low_flux = zero_low_flux,
+            threaded_sampling = threaded_sampling)
     else
-        return generic_mode_flux(a, p, e, x, s, l, m, n, k; N0 = N, K0 = K, Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
+        master = _cached_orbit_master!(_generic_master_cache,
+                (a, p, e, x, Nmax, Kmax)) do
+            KG = kerr_geo_orbit(a, p, e, x)
+            typeof(KG) == Vector{String} && return KG
+            GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
+        end
+        typeof(master) == Vector{String} && return master
+        return generic_mode_flux_from_master(master, s, l, m, n, k;
+            N0 = N, K0 = K, Nmax = Nmax, Kmax = Kmax, tol = tol,
+            sample_tol = sample_tol, max_flux = max_flux,
+            mode_abs_floor = mode_abs_floor,
+            zero_low_flux = zero_low_flux,
+            threaded_sampling = threaded_sampling)
     end
 end
 
