@@ -441,7 +441,7 @@ function direct_gsn_radial_function(route::DirectRoute)
         missing,
         solution,
         getfield(root, :UNIT_GSN_TRANS),
-        "direct_ISEM",
+        "GSN-ISEM",
     )
 end
 

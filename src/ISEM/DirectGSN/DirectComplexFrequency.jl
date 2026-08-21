@@ -527,16 +527,28 @@ function _direct_complex_p_route(
     factors = _amplitude_factors(params, branch_symbol)
     all(_finite_complex, (factors.transmission, factors.incidence, factors.reflection)) ||
         error("nonfinite Teukolsky-to-GSN asymptotic conversion factor.")
-    teukolsky_transmission = ComplexF64(teukolsky.transmission_amplitude)
-    teukolsky_incidence = ComplexF64(teukolsky.incidence_amplitude)
-    teukolsky_reflection = ComplexF64(teukolsky.reflection_amplitude)
+    raw_teukolsky_transmission =
+        ComplexF64(teukolsky.transmission_amplitude)
+    raw_teukolsky_incidence = ComplexF64(teukolsky.incidence_amplitude)
+    raw_teukolsky_reflection = ComplexF64(teukolsky.reflection_amplitude)
 
-    raw_gsn_transmission = teukolsky_transmission / factors.transmission
+    raw_gsn_transmission =
+        raw_teukolsky_transmission / factors.transmission
     state_scale = inv(raw_gsn_transmission)
-    incidence = ComplexF64((teukolsky_incidence / factors.incidence) * state_scale)
-    reflection = ComplexF64((teukolsky_reflection / factors.reflection) * state_scale)
+    incidence = ComplexF64(
+        (raw_teukolsky_incidence / factors.incidence) * state_scale)
+    reflection = ComplexF64(
+        (raw_teukolsky_reflection / factors.reflection) * state_scale)
     transmission = ComplexF64(1)
-    all(_finite_complex, (state_scale, incidence, reflection)) ||
+    teukolsky_transmission =
+        ComplexF64(raw_teukolsky_transmission * state_scale)
+    teukolsky_incidence =
+        ComplexF64(raw_teukolsky_incidence * state_scale)
+    teukolsky_reflection =
+        ComplexF64(raw_teukolsky_reflection * state_scale)
+    all(_finite_complex, (state_scale, incidence, reflection,
+        teukolsky_transmission, teukolsky_incidence,
+        teukolsky_reflection)) ||
         error("nonfinite GSN unit-transmission normalization in Direct complex construction.")
 
     coefficient_evaluator = _p_to_gsn_coefficients(params)
@@ -1311,7 +1323,7 @@ const _POLE_RECIPROCAL_STATE_ERROR_MAX = 2.0e-5
 const _POLE_RECIPROCAL_SEPARATION_MIN = 1.0e-10
 const _POLE_RECIPROCAL_SPLIT_MISMATCH_MAX = 1.0e-10
 const _OFFPOLE_MATCH_PLATEAU_KAPPA_MAX = 0.15
-const _OFFPOLE_MATCH_PLATEAU_UP_AGREEMENT_MAX = 1.0e-10
+const _OFFPOLE_MATCH_PLATEAU_UP_AGREEMENT_MAX = 2.5e-10
 const _OFFPOLE_MATCH_PLATEAU_IN_AGREEMENT_MAX = 2.5e-11
 const _OFFPOLE_MATCH_PLATEAU_UP_SEPARATION_RATIO_MIN = 10.0
 const _OFFPOLE_MATCH_PLATEAU_IN_SEPARATION_RATIO_MIN = 11.0
@@ -3912,13 +3924,22 @@ function _direct_complex_route_impl(
             rational, pole_normalization)
         horizon_retry = _try_up_horizon_in_order_consensus(
             rational, s, l, m, a, omega, branch)
+        initial_match_retry = _try_up_initial_match_consensus(rational)
+        p_retry = _try_p_consensus(
+            rational, s, l, m, a, omega, branch)
         selected = if horizon_retry !== rational
             horizon_retry
+        elseif p_retry !== rational &&
+                _metadata_value(
+                    p_retry.metadata,
+                    :consensus_acceptance_kind,
+                    nothing,
+                ) == :pole_dual_order
+            p_retry
+        elseif initial_match_retry !== rational
+            initial_match_retry
         else
-            p_retry = _try_p_consensus(
-                rational, s, l, m, a, omega, branch)
-            p_retry !== rational ? p_retry :
-                _try_up_initial_match_consensus(rational)
+            p_retry
         end
         pole_normalization || (selected =
             _try_offpole_match_plateau(
@@ -4354,6 +4375,17 @@ function _complex_gsn_wrapper(route::DirectComplexRoute)
         propagation_representation=full_mst_backend ? :direct_mst :
             anchor_backend ? :ordinary_taylor : :complex_rational,
         matching_representation=match_policy,
+        control_tolerance=route.plan.controls.tolerance,
+        horizon_endpoint_score=_metadata_value(
+            route.metadata, :horizon_endpoint_score, missing),
+        infinity_endpoint_score=_metadata_value(
+            route.metadata, :infinity_endpoint_score, missing),
+        propagation_score=_metadata_value(
+            route.metadata, :propagation_score, missing),
+        horizon_path_kind=_metadata_value(
+            route.metadata, :horizon_path_kind, missing),
+        horizon_coordinate_steps=_metadata_value(
+            route.metadata, :horizon_coordinate_steps, missing),
         eikonal_candidate=false,
         horizon_order=order,
         ordinary_order=order,
@@ -4422,7 +4454,7 @@ function _complex_gsn_wrapper(route::DirectComplexRoute)
         missing,
         direct_complex_gsn_solution_rstar(route),
         getfield(root, :UNIT_GSN_TRANS),
-        "direct_complex_ISEM",
+        "GSN-ISEM",
     )
 end
 

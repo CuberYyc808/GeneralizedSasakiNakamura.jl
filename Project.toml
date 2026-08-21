@@ -4,7 +4,6 @@ version = "0.9.0"
 authors = ["Rico Ka Lok Lo", "Yucheng Yin"]
 
 [deps]
-AdaptiveLevin = "cb2033fd-04a4-45e1-a176-a3c784c945f7"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
@@ -27,7 +26,6 @@ TaylorSeries = "6aa5eb33-94cf-58f4-a9d0-e4b2c4fc25ea"
 SpinWeightedSpheroidalHarmonics = {url = "https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git", rev = "Fast-eigenvalue"}
 
 [compat]
-AdaptiveLevin = "0.1.1"
 DifferentialEquations = "7"
 ForwardDiff = "^0.10"
 HDF5 = "0.17"

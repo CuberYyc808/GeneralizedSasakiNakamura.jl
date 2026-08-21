@@ -12,9 +12,23 @@ The paper describing both the GSN formalism and the implementation can be found 
 
 Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
 
-Starting from v0.9.0, the package includes the ISEM solver, short for _iterative series expansion matching_. ISEM is now used by the default `method = "auto"` path where available and accelerates the homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The release also adds a high-level total-flux interface, [`Teukolsky_pointparticle_flux`](@ref), which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
+Starting from v0.9.0, the package includes the direct GSN-based ISEM solver,
+short for _iterative series expansion matching_. The default
+`method = "auto"` tries `GSN-ISEM` first and falls back to the legacy automatic
+radial route only when direct construction fails. The explicit
+`method = "GSN-ISEM"` form is strict. The direct route constructs the GSN radial
+function directly and accelerates homogeneous radial functions, single-mode
+point-particle amplitudes, and total-flux mode summations. The release also adds
+a high-level total-flux interface, [`Teukolsky_pointparticle_flux`](@ref), which
+automatically selects the circular, eccentric, inclined, or generic
+mode-summation strategy.
 
-For high-index tail modes in eccentric and generic flux summations, the ISEM path can use adaptive Levin quadrature instead of globally densifying a trapezoidal grid. The radial phase interval is refined only where the oscillatory integral has not stabilized. In generic two-dimensional convolutions, this radial adaptive Levin rule is combined with a fixed Clenshaw-Curtis rule in the polar direction, which resolves the smooth polar dependence with a compact cosine-spaced grid while keeping the expensive adaptivity in the radial direction.
+For high-index tail modes in eccentric and generic flux summations, the
+GSN-ISEM path can use adaptive Levin quadrature instead of globally densifying
+a trapezoidal grid. The radial phase interval is refined only where the
+oscillatory integral has not stabilized. In generic two-dimensional
+convolutions, this radial adaptive Levin rule is combined with a fixed
+Clenshaw-Curtis rule in the polar direction.
 
 ## Installation
 To install the package using the Julia package manager, simply type the following in the Julia REPL:
@@ -43,8 +57,15 @@ The numerical path directly evolves the radial equation with the `linear` or `Ri
 
 *(There was no caching in this benchmark; the equation was solved on the fly. The notebook generating this animation can be found [here](https://github.com/ricokaloklo/GeneralizedSasakiNakamura.jl/blob/main/examples/realtime-demo.ipynb).)*
 
-### Semi-analytical solver path: iterative series expansion matching
-Starting from v0.9.0, the default ISEM path solves the Teukolsky and GSN radial functions on the fly at approximately millisecond scale after warm-up, while retaining interactive evaluation over a dense grid. For real frequencies in the trained selector domain, ISEM chooses matching controls automatically and performs a local-`N` rescue scan if the split mismatch is above tolerance. If `method = "auto"` cannot obtain a reliable ISEM solution, it falls back to the legacy `linear` path.
+### Semi-analytical solver path: GSN-ISEM
+The `GSN-ISEM` path constructs the GSN function $X$ directly and
+derives the Teukolsky function $R$ and source-adapted function $Y$ from the same
+matched solution. `method = "auto"` tries this route first and falls back to
+the legacy automatic radial solver only after an explicit construction failure;
+`method = "GSN-ISEM"` selects it strictly with no fallback. The former spelling
+`method = "direct_ISEM"` is retained only as a
+compatibility alias; `method = "ISEM"` selects the previous implementation,
+while `linear` and `Riccati` select the legacy ODE solvers.
 
 ```@raw html
 <p align="center">
@@ -60,7 +81,24 @@ Starting from v0.9.0, the default ISEM path solves the Teukolsky and GSN radial 
 
 Static/zero-frequency solutions are solved analytically with Gauss hypergeometric functions.
 
-Superradiance-threshold solutions with $\omega = m a / (2 r_+)$ are handled by a dedicated horizon-threshold ISEM branch.
+Superradiance-threshold solutions with $\omega = m a / (2 r_+)$ are handled by a dedicated horizon-threshold GSN-ISEM branch.
+
+### Quasinormal modes
+
+The native QNM interface computes a Leaver root and validates its scattering
+data with the GSN-ISEM radial route:
+
+```julia
+ordinary_mode = qnm(0.9, -2, 2, 2, 10)
+mirror_mode = qnm(0.9, -2, 2, 2, 10, mirror)
+```
+
+The five numerical inputs are `(a, s, l, m, n)`. `ordinary` is the default
+branch; `mirror` requests a directly polished negative-real root and directly
+evaluated amplitudes. The compact result exposes `omega`, `lambda`,
+`incidence_amplitude`, `reflection_amplitude`, `incidence_derivative`, and
+`excitation_factor`. Use `detailed=true` only when the Teukolsky bridge and
+callable `X`, `Y`, and `R` objects are needed. See [Quasinormal modes](@ref).
 
 ### Solutions that are accurate everywhere
 Numerical-path solutions are *smoothly stitched* to analytical ansatzes near the horizon and infinity at user-specified locations `rsin` and `rsout` respectively:
@@ -84,17 +122,17 @@ Rin, Rup = Teukolsky_radial(s, l, m, a, omega)
 ```
 That's it! If you run this on Julia REPL, it should give you something like this
 ```
-(TeukolskyRadialFunction(mode=Mode(s=-2, l=2, m=2, a=0.7, omega=0.5, lambda=1.696609401635342), boundary_condition=IN), TeukolskyRadialFunction(mode=Mode(s=-2, l=2, m=2, a=0.7, omega=0.5, lambda=1.696609401635342), boundary_condition=UP))
+(TeukolskyRadialFunction(mode=Mode(s=-2, l=2, m=2, a=0.7, omega=0.5, lambda=1.6966094016353415), boundary_condition=IN), TeukolskyRadialFunction(mode=Mode(s=-2, l=2, m=2, a=0.7, omega=0.5, lambda=1.6966094016353415), boundary_condition=UP))
 ```
 In Julia REPL, you can check out all the asymptotic amplitudes at a glimpse using something like
 ```julia
 julia> Rin
 TeukolskyRadialFunction(
-    mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.696609401635342),
+    mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = IN,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 6.5365876612287765 - 4.9412038970871555im,
-    reflection_amplitude = -0.1282466191307726 - 0.440481334972911im,
+    incidence_amplitude = 6.5365876610342255 - 4.941203896939344im,
+    reflection_amplitude = -0.12824661911999655 - 0.44048133495464536im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -105,11 +143,13 @@ Rin(10)
 ```
 This should give
 ```
-77.57508416835319 - 429.40290952262677im
+77.5750841719755 - 429.40290951043795im
 ```
 
-#### Solving for complex frequencies
-One can use the same interface to compute solutions with complex frequencies. For example, the QNM solution of the $s=-2, \ell=2, m=2, a/M=0.68$ fundamental tone can be obtained using
+#### Solving radial equations at complex frequencies
+The radial interfaces also accept a supplied complex frequency. For example,
+the $s=-2, \ell=2, m=2, a/M=0.68$ fundamental QNM frequency can be checked
+independently with
 ```julia
 Rin, Rup = Teukolsky_radial(-2, 2, 2, 0.68, 0.5239751-0.0815126im)
 ```
@@ -117,11 +157,11 @@ We can check out the $R^{\textrm{up}}$ solution using
 ```julia
 julia> Rup
 TeukolskyRadialFunction(
-    mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.5239751 - 0.0815126im, lambda = 1.655003080578682 + 0.3602676563885877im),
+    mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.5239751 - 0.0815126im, lambda = 1.6550030805786913 + 0.36026765638858793im),
     boundary_condition = UP,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = -5.850900444651249e-8 - 3.80716581300155e-7im,
-    reflection_amplitude = 1.1011632133920028 + 2.1300597377432497im,
+    incidence_amplitude = -5.821260188342159e-8 - 3.8053386080536867e-7im,
+    reflection_amplitude = 1.1011632105075442 + 2.13005973680996im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -132,7 +172,7 @@ Rup.incidence_amplitude
 
 This should give
 ```julia
--5.850900444651249e-8 - 3.80716581300155e-7im
+-5.821260188342159e-8 - 3.8053386080536867e-7im
 ```
 
 #### Solving the inhomogeneous radial Teukolsky/SN equation with a point-particle source on a generic timelike bound orbit
@@ -147,17 +187,17 @@ To have a glimpse of the output, one can do so with
 julia> mode_info
 TeukolskyPointParticleMode(
     mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = 3.6067890121199833),
-    amplitude_inf = 0.00023429507957491088 - 6.558414418883069e-5im,
-    energy_flux_inf = 1.091733010828344e-6,
-    angular_momentum_flux_inf = 3.3240333740438795e-5,
-    Carter_const_flux_inf = 5.890504440487091e-5,
-    method = (method = "isem_trapezoidal", N = 256, K = 64),
+    amplitude_inf = 0.00023429507956769735 - 6.558414441157074e-5im,
+    energy_flux_inf = 1.0917330113048381e-6,
+    angular_momentum_flux_inf = 3.324033375494676e-5,
+    Carter_const_flux_inf = 5.890504443058042e-5,
+    method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at infinity
 ```julia
 julia> mode_info.amplitude
-0.00023429507957491088 - 6.558414418883069e-5im
+0.00023429507956769735 - 6.558414441157074e-5im
 ```
 which is the value for $Z^{\infty}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near infinity for that particular frequency.
 
@@ -170,24 +210,24 @@ The output should be
 ```julia
 julia> mode_info
 TeukolskyPointParticleMode(
-    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = -0.3932109878800167),
-    amplitude_hor = 0.006089946888787634 - 0.0014130019665122818im,
-    energy_flux_hor = -2.843814878427963e-9,
-    angular_momentum_flux_hor = -8.658651402621547e-8,
-    Carter_const_flux_hor = -1.5343956812841173e-7,
-    method = (method = "isem_trapezoidal", N = 256, K = 64),
+    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = -0.39321098788001657),
+    amplitude_hor = 0.006089946888790547 - 0.0014130019665094177im,
+    energy_flux_hor = -2.8438148784299547e-9,
+    angular_momentum_flux_hor = -8.658651402627612e-8,
+    Carter_const_flux_hor = -1.5343956812851922e-7,
+    method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at the horizon
 ```julia
 julia> mode_info.amplitude
-0.006089946888787634 - 0.0014130019665122818im
+0.006089946888790547 - 0.0014130019665094177im
 ```
 which is the value for $Z^{\mathrm{H}}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near the horizon for that particular frequency.
 
 Total fluxes can be computed with the orbit-aware high-level interface. A generic-orbit total-flux run can be substantially slower than a single-mode calculation because it performs a full mode summation.
 ```julia
-flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.5, 0.8)
+flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.7, 0.5)
 flux.infinity_energy_flux
 flux.horizon_energy_flux
 ```
@@ -196,29 +236,29 @@ The function automatically dispatches to circular, eccentric, inclined, or gener
 
 In the high-`n` tail, eccentric and generic summations can switch from uniform-grid trapezoidal sampling to adaptive Levin quadrature. For generic two-dimensional convolutions, the default accelerated tail path uses adaptive Levin in the radial direction and Clenshaw-Curtis sampling in the polar direction, reducing the need for a uniformly dense two-dimensional grid.
 
-After a generic-orbit warmup call,
+After an API warmup call,
 ```julia
 Teukolsky_pointparticle_flux(0.9, 6.0, 0.01, 0.99)
 ```
 the example above produced the following result on the test machine:
 
 ```julia
-julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.5, 0.8; tol = 1e-8)
+julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.7, 0.5; tol = 1e-8)
 TeukolskyPointParticleFlux(
-    orbital_parameters(a = 0.9, p = 6.0, e = 0.5, x = 0.8),
+    orbital_parameters(a = 0.9, p = 6.0, e = 0.7, x = 0.5),
     orbit_type = generic,
-    infinity_energy_flux = 0.0008574966646038735,
-    infinity_angular_momentum_flux = 0.007923768365833873,
-    infinity_carter_constant_flux = 0.016863436423747588,
-    horizon_energy_flux = -8.856729380897054e-6,
-    horizon_angular_momentum_flux = -0.0001261648560010202,
-    horizon_carter_constant_flux = 0.00011196575779113798,
-    total_modes = 207824,
-    n_reached = (infinity = 89, horizon = 29),
-    convolution_integral = (strategy = "infinity: ISEM adaptive trapezoidal for n < 50; tail ISEM adaptive Levin for n >= 50; horizon: ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered", infinity = (tail_levin_enabled = true, tail_levin_start_n = 50), horizon = (tail_levin_enabled = true, tail_levin_start_n = nothing), tail_levin_nmin = 50, tail_levin_max_depth = 8),
+    infinity_energy_flux = 0.001146554871827448,
+    infinity_angular_momentum_flux = 0.006379470773907821,
+    infinity_carter_constant_flux = 0.04144388278184294,
+    horizon_energy_flux = -9.201266282186275e-6,
+    horizon_angular_momentum_flux = -0.00036271559365667997,
+    horizon_carter_constant_flux = 0.0009653100803714303,
+    total_modes = 443900,
+    n_reached = (infinity = 134, horizon = 72),
+    convolution_integral = (strategy = "ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered", tail_levin_nmin = 50, tail_levin_local_n = 16, tail_levin_max_depth = 8),
     tolerance = 1.0e-8,
     truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-    cost = 349.4742510318756 seconds,
+    cost = 1627.6419110298157 seconds,
 )
 ```
 

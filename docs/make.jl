@@ -12,6 +12,7 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "Examples" => "examples.md",
+        "Quasinormal modes" => "QNM.md",
         "API Reference" => "APIs.md",
     ],
     checkdocs = :none,

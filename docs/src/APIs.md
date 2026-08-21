@@ -4,6 +4,9 @@ This page documents the public interface intended for direct user calls. The pac
 
 ## Exported Functions
 
+The native QNM frequency, independent ISEM validation, and excitation-factor
+interfaces are documented on the [Quasinormal modes](@ref) page.
+
 ```@docs
 Teukolsky_radial
 ```
@@ -31,6 +34,32 @@ rstar_from_r
 ```@docs
 r_from_rstar
 ```
+
+## Quasinormal Modes
+
+```julia
+result = qnm(a, s, l, m, n)
+result = qnm(a, s, l, m, n, mirror)
+pair = qnm_pair(a, s, l, m, n)
+root = qnm_frequency(QNMMode(s, l, m, n), a)
+```
+
+`ordinary` is the default branch. `mirror` evaluates the negative-real root
+and amplitudes directly. The compact result contains:
+
+| field | meaning |
+| :--- | :--- |
+| `omega` or `frequency` | polished Leaver QNM frequency |
+| `lambda` | radial Teukolsky separation constant |
+| `incidence_amplitude` | GSN incoming amplitude |
+| `reflection_amplitude` | GSN reflected amplitude |
+| `incidence_derivative` | Richardson-extrapolated $dA_{\rm in}/d\omega$ |
+| `excitation_factor` | GSN excitation factor |
+| `status`, `stop_reason` | combined root, radial, and derivative status |
+
+Set `detailed=true` to construct callable `X`, `Y`, and `R` solutions. Root
+label conventions, result types, and lower-level interfaces are documented on
+the [Quasinormal modes](@ref) page.
 
 ## Boundary and Normalization Constants
 
@@ -70,7 +99,7 @@ Keyword summary:
 
 | keyword | default | meaning |
 | :--- | :--- | :--- |
-| `method` | `"auto"` | `"auto"` tries ISEM first and falls back to `"linear"` if ISEM emits a matching warning or construction error; `"ISEM"` forces ISEM; `"linear"` and `"Riccati"` use the legacy GSN ODE solvers |
+| `method` | `"auto"` | `"auto"` tries GSN-ISEM first and falls back to the legacy automatic route only on direct failure; `"GSN-ISEM"` is strict; `"ISEM"` selects the previous implementation; `"linear"` and `"Riccati"` select the legacy GSN ODE solvers |
 | `tol` | internal default | ISEM matching tolerance or alias for the ODE tolerance in high-level calls |
 | `tolerance` | internal default | legacy ODE tolerance; `tol` takes precedence when both are supplied |
 | `xm`, `rhom` | `nothing` | optional ISEM matching controls |
@@ -78,7 +107,7 @@ Keyword summary:
 | `sfe`, `lfe` | `nothing` | optional small/large-frequency expansion switches |
 | `TSinInf`, `TSoutInf`, `TSinHor`, `TSoutHor` | `nothing` | optional Teukolsky-Starobinsky identity switches |
 
-For real frequencies in the trained selector domain, ISEM predicts matching controls and then rescues failed or high-mismatch builds by scanning nearby `N` values. This rescue is applied at the shared Teukolsky/P-construction layer, so `Teukolsky_radial`, `GSN_radial`, and `Y_radial` all use it. Direct low-level `_P`, `_Pin`, and `_Pup` calls are internal and do not apply the public-interface rescue layer.
+For real frequencies in the trained selector domain, GSN-ISEM predicts matching controls and then rescues failed or high-mismatch builds by scanning nearby `N` values. This rescue is applied at the shared Teukolsky/P-construction layer, so `Teukolsky_radial`, `GSN_radial`, and `Y_radial` all use it. Direct low-level `_P`, `_Pin`, and `_Pup` calls are internal and do not apply the public-interface rescue layer.
 
 Static modes with `abs(omega) < 1e-12` use the analytic zero-frequency branch. Horizon-threshold modes with real `omega = m a / (2 r_+)` and `UP` boundary condition use the dedicated superradiance-threshold branch.
 
@@ -102,7 +131,7 @@ X = GSN_radial(s, l, m, a, omega, IN; method = "auto")
 X = GSN_radial(s, l, m, a, omega, UP; method = "auto")
 ```
 
-`method = "auto"` tries ISEM first for homogeneous solutions and falls back to `"linear"` if ISEM emits a matching warning or construction error. Legacy `"linear"` and `"Riccati"` methods remain available for direct GSN ODE evolution. The ISEM matching controls, local-`N` rescue, static branch, and superradiance-threshold branch follow the same rules as `Teukolsky_radial`.
+`method = "auto"` tries the direct GSN-ISEM route first and falls back to the legacy automatic radial route only after an explicit direct-construction failure. `method = "GSN-ISEM"` is strict and does not fall back. The former `"direct_ISEM"` spelling remains a strict compatibility alias. The previous implementation remains available as `"ISEM"`, and `"linear"` and `"Riccati"` select the legacy GSN ODE evolution. Matching controls, the static branch, and the superradiance-threshold branch follow the same rules as `Teukolsky_radial`.
 
 Returned objects are `GSNRadialFunction`. They are callable:
 
@@ -314,7 +343,7 @@ Stores a homogeneous GSN radial solution.
 | `transmission_amplitude` | GSN transmission amplitude |
 | `incidence_amplitude` | GSN incidence amplitude |
 | `reflection_amplitude` | GSN reflection amplitude |
-| `numerical_GSN_solution` | ODE solution for legacy methods; ISEM matching metadata for `method == "ISEM"` |
+| `numerical_GSN_solution` | ODE solution for legacy methods; matching metadata for `method == "ISEM"` or `method == "GSN-ISEM"` |
 | `numerical_Riccati_solution` | Riccati ODE solution when applicable |
 | `GSN_solution` | callable GSN radial solution |
 | `normalization_convention` | normally `UNIT_GSN_TRANS` |

@@ -455,9 +455,30 @@ function _integrate_coordinate_path(
     )
 end
 
+@inline function _ordinary_q0_degeneracy(error)
+    return error isa ErrorException && occursin(
+        "noninvertible q0 in direct GSN ordinary P/Q recurrence",
+        error.msg,
+    )
+end
+
 @inline function _ode_ab!(scratch, coefficients, x)
-    direct_ordinary_ab_series!(
-        scratch.avec, scratch.bvec, scratch.pq, coefficients, x, 0)
+    try
+        direct_ordinary_ab_series!(
+            scratch.avec, scratch.bvec, scratch.pq, coefficients, x, 0)
+    catch error
+        _ordinary_q0_degeneracy(error) || rethrow()
+        try
+            _local_ab_series!(
+                scratch, coefficients, x, 0, 1.0e-13, true)
+        catch shifted_error
+            _ordinary_q0_degeneracy(shifted_error) || rethrow()
+            Base.error(
+                "noninvertible q0 in direct GSN ordinary P/Q recurrence " *
+                "at x=$(repr(x)); endpoint-shift reconstruction also failed.",
+            )
+        end
+    end
     return scratch.avec[1], scratch.bvec[1]
 end
 
@@ -1012,7 +1033,10 @@ end
 
 function _complex_infinity_solution(coefficients, branch::Symbol, order::Int)
     omega = coefficients.params.omega
-    if !iszero(omega) && abs(omega) <= _SCALED_Y_PHYSICAL_HANDOFF
+    strongly_damped = imag(omega) < -0.5
+    if !iszero(omega) &&
+            (abs(omega) <= _SCALED_Y_PHYSICAL_HANDOFF ||
+             strongly_damped)
         return direct_infinity_local_solution(
             coefficients,
             branch,
@@ -1219,6 +1243,22 @@ function _select_horizon_path(
     pair_abel_target=nothing,
     fallback_pair_abel_target=pair_abel_target,
 )
+    params = coefficients.params
+    prefer_real = 0.0 < params.kappa <= 0.02 &&
+        abs(p) <= 8 * params.kappa && !iszero(real(params.omega))
+    real_failure = nothing
+    if prefer_real
+        try
+            return _select_real_horizon_path(
+                coefficients, solutions, kinds, match_x, settings;
+                pair_abel_target=fallback_pair_abel_target)
+        catch exception
+            message = sprint(showerror, exception)
+            startswith(message, "no certified real-axis horizon path") ||
+                rethrow()
+            real_failure = message
+        end
+    end
     try
         return _select_rotated_horizon_path(
             coefficients, solutions, kinds, p, match_x, settings;
@@ -1228,6 +1268,8 @@ function _select_horizon_path(
         expected = occursin("two-ray coordinate path", message) ||
             occursin("no certified two-ray horizon path", message)
         expected || rethrow()
+        real_failure === nothing || error(
+            real_failure * " Rotated-path failure: " * message)
         try
             return _select_real_horizon_path(
                 coefficients, solutions, kinds, match_x, settings;
@@ -1455,9 +1497,14 @@ function _local_ab_series!(
     shifted,
 )
     if !shifted
-        a_terms, b_terms = direct_ordinary_ab_series!(
-            scratch.avec, scratch.bvec, scratch.pq, coefficients, x, order)
-        return a_terms, b_terms, :ordinary, 0.0
+        try
+            a_terms, b_terms = direct_ordinary_ab_series!(
+                scratch.avec, scratch.bvec, scratch.pq,
+                coefficients, x, order)
+            return a_terms, b_terms, :ordinary, 0.0
+        catch error
+            _ordinary_q0_degeneracy(error) || rethrow()
+        end
     end
 
     shift_condition = Inf

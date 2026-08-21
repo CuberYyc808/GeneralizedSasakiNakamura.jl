@@ -45,6 +45,8 @@ const _CONTROL_SOURCE_LOCAL_N = :local_N
 const _CONTROL_SOURCE_NORMALIZATION_GUARD = :normalization_guard
 
 _is_static_frequency(omega) = abs(omega) < _STATIC_OMEGA_TOL
+_is_exact_extremal_spin(a) = isreal(a) &&
+    abs(abs(float(real(a))) - 1.0) <= 16eps(Float64)
 _horizon_frequency(a, m) = m * a / (2 * (1 + sqrt(1 - a^2)))
 _is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) && !_is_static_frequency(omega) && abs(omega - _horizon_frequency(a, m)) < _STATIC_OMEGA_TOL
 _use_large_frequency_expansion(a, omega) = isreal(omega) && abs(sqrt(1 - a^2) * omega) > 3
@@ -527,6 +529,15 @@ function _y_phase_derivative(r, a, m, omega)
     return ((r^2 + a^2) * omega - a * m) / (r^2 - 2 * r + a^2)
 end
 
+function _extremal_y_phase(r, a, m, omega)
+    h = r - one(r)
+    h > zero(h) || throw(DomainError(r,
+        "the exact-extremal source-adapted phase requires r > r_+ = 1"))
+    detuning = 2omega - a * m
+    return omega * r - omega * log(oftype(r, 4)) +
+        2omega * log(h) - detuning / h
+end
+
 function _y_branch_transmission_amplitude(s, m, a, omega, lambda)
     if s == -2
         return ConversionFactors.Btrans(s, m, a, omega, lambda)
@@ -657,6 +668,76 @@ function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
         _conjugate_solution_function(f.X_solution),
         _conjugate_solution_function(f.Y_scalar_solution),
         _conjugate_solution_function(f.Y_solution),
+        f.normalization_convention,
+    )
+end
+
+function _spin_reflection_metadata(metadata, source_a, source_m, target_a, target_m)
+    metadata isa NamedTuple || return metadata
+    return merge(metadata, (
+        spin_reflection_applied=true,
+        spin_reflection_map=:a_m_to_minus_a_minus_m,
+        spin_reflection_source_a=source_a,
+        spin_reflection_source_m=source_m,
+        spin_reflection_target_a=target_a,
+        spin_reflection_target_m=target_m,
+    ))
+end
+
+function _spin_reflect_teukolsky_radial_function(
+        f::TeukolskyRadialFunction, m::Int, a)
+    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
+    return TeukolskyRadialFunction(
+        mode,
+        f.boundary_condition,
+        f.transmission_amplitude,
+        f.incidence_amplitude,
+        f.reflection_amplitude,
+        f.P_solution,
+        f.GSN_solution,
+        f.Teukolsky_solution,
+        f.normalization_convention,
+    )
+end
+
+
+function _spin_reflect_gsn_radial_function(f::GSNRadialFunction, m::Int, a)
+    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
+    metadata = _spin_reflection_metadata(
+        f.numerical_GSN_solution, f.mode.a, f.mode.m, a, m)
+    return GSNRadialFunction(
+        mode,
+        f.boundary_condition,
+        f.rsin,
+        f.rsout,
+        f.rsmp,
+        f.horizon_expansion_order,
+        f.infinity_expansion_order,
+        f.transmission_amplitude,
+        f.incidence_amplitude,
+        f.reflection_amplitude,
+        metadata,
+        f.numerical_Riccati_solution,
+        f.GSN_solution,
+        f.normalization_convention,
+        f.method,
+    )
+end
+
+
+function _spin_reflect_y_radial_function(f::YRadialFunction, m::Int, a)
+    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
+    return YRadialFunction(
+        mode,
+        f.boundary_condition,
+        f.transmission_amplitude,
+        f.incidence_amplitude,
+        f.reflection_amplitude,
+        f.P_solution,
+        f.Teukolsky_solution,
+        f.X_solution,
+        f.Y_scalar_solution,
+        f.Y_solution,
         f.normalization_convention,
     )
 end
@@ -1302,29 +1383,88 @@ function _y_fallback_infinity_expansion_order(omega)
     return max(20, ceil(Int, 10 * max(-log10(ω), 0) + 10))
 end
 
-function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition; method="Riccati", tol=nothing)
+function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
+        method="Riccati", tol=nothing, allow_complex::Bool=false)
     _validate_y_branch(s, boundary_condition)
     iszero(omega) && error("Y_radial currently requires nonzero omega.")
-    isreal(omega) || error("Y_radial currently supports only real omega.")
+    (allow_complex || isreal(omega)) ||
+        error("Y_radial currently supports complex omega only on the exact-extremal direct GSN route.")
 
     parent = parentmodule(@__MODULE__)
-    X_func = getfield(parent, :GSN_radial)(
-        s,
-        l,
-        m,
-        a,
-        omega,
-        boundary_condition,
-        getfield(parent, :_DEFAULT_rsin),
-        getfield(parent, :_DEFAULT_rsout);
-        method=method,
-        tolerance = tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
-        horizon_expansion_order = _y_fallback_horizon_expansion_order(a),
-        infinity_expansion_order = _y_fallback_infinity_expansion_order(omega),
-    )
+    X_func = if _is_exact_extremal_spin(a)
+        getfield(parent, :GSN_radial)(
+            s, l, m, a, omega, boundary_condition;
+            method=method,
+            tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
+        )
+    else
+        getfield(parent, :GSN_radial)(
+            s,
+            l,
+            m,
+            a,
+            omega,
+            boundary_condition,
+            getfield(parent, :_DEFAULT_rsin),
+            getfield(parent, :_DEFAULT_rsout);
+            method=method,
+            tolerance = tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
+            horizon_expansion_order = _y_fallback_horizon_expansion_order(a),
+            infinity_expansion_order = _y_fallback_infinity_expansion_order(omega),
+        )
+    end
     lambda = X_func.mode.lambda
     branch_transmission_amplitude = _y_branch_transmission_amplitude(s, m, a, omega, lambda)
     teukolsky_from_gsn_matrix = r -> Solutions.Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(s, m, a, omega, lambda, r)
+
+    if _is_exact_extremal_spin(a)
+        function teukolsky_state(r)
+            rs = rstar_from_r(a, r)
+            return teukolsky_from_gsn_matrix(r) * X_func.GSN_solution(rs)
+        end
+        Xsoln = r -> X_func.GSN_solution(rstar_from_r(a, r))[1]
+        function Ysoln(r)
+            radial = teukolsky_state(r)
+            R, dRdr = radial
+            phase = _extremal_y_phase(r, a, m, omega)
+            phase_derivative = _y_phase_derivative(r, a, m, omega)
+            if s == -2
+                prefactor = branch_transmission_amplitude * exp(-im * phase)
+                Y = prefactor * R / r^2
+                dYdr = prefactor * (dRdr / r^2 - 2R / r^3 -
+                    im * phase_derivative * R / r^2)
+            else
+                delta = _kerr_delta(r, a)
+                delta_derivative = 2r - 2
+                prefactor = branch_transmission_amplitude * exp(im * phase)
+                Y = prefactor * delta^2 * R / r^2
+                dYdr = prefactor * (
+                    delta^2 * dRdr / r^2 +
+                    (2delta * delta_derivative / r^2 -
+                     2delta^2 / r^3 +
+                     im * phase_derivative * delta^2 / r^2) * R)
+            end
+            return (Y, dYdr, Xsoln(r), zero(abs(Y)))
+        end
+        Yscalar = r -> Ysoln(r)[1]
+        conv_incidence = s == -2 ?
+            ConversionFactors.Binc(s, m, a, omega, lambda) :
+            ConversionFactors.Cinc(s, m, a, omega, lambda)
+        conv_reflection = s == -2 ?
+            ConversionFactors.Bref(s, m, a, omega, lambda) :
+            ConversionFactors.Cref(s, m, a, omega, lambda)
+        incidence_amplitude = X_func.incidence_amplitude === missing ?
+            missing : conv_incidence * X_func.incidence_amplitude
+        reflection_amplitude = X_func.reflection_amplitude === missing ?
+            missing : conv_reflection * X_func.reflection_amplitude
+        mode = Mode(s, l, m, a, omega, lambda)
+        return YRadialFunction(
+            mode, boundary_condition, branch_transmission_amplitude,
+            incidence_amplitude, reflection_amplitude, missing,
+            teukolsky_state, Xsoln, Yscalar, Ysoln,
+            UNIT_TEUKOLSKY_TRANS)
+    end
+
     Ysoln = Matching.TeukolskyTransformation.GSN_to_Y_solution_from_matrix(
         r -> rstar_from_r(a, r),
         teukolsky_from_gsn_matrix,
@@ -1505,12 +1645,25 @@ function _try_y_high_spin_isem_sanity_then_legacy(
 end
 
 function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, rhom=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, info::Bool=false)
-    if _is_reflected_lhp_frequency(omega)
+    if a < zero(a)
+        positive = Y_radial(
+            s, l, -m, -a, omega, boundary_condition;
+            method, xm, rhom, N, tol, sfe, lfe,
+            TSinInf, TSoutInf, TSinHor, TSoutHor, info)
+        return _spin_reflect_y_radial_function(positive, m, a)
+    end
+    if _is_exact_extremal_spin(a) && !_is_static_frequency(omega)
+        selected_method = method == "auto" ? "GSN-ISEM" : method
+        return _build_y_solution_from_gsn(
+            s, l, m, a, omega, boundary_condition;
+            method=selected_method, tol=tol, allow_complex=true)
+    elseif _is_reflected_lhp_frequency(omega)
         positive_func = Y_radial(s, l, -m, a, -conj(omega), boundary_condition; method=method, xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, info=info)
         return _conjugate_y_radial_function(positive_func, m, omega)
     end
 
-    if (method == "auto" && !_is_static_frequency(omega)) || method == "direct_ISEM"
+    if (method == "auto" && !_is_static_frequency(omega)) ||
+            method == "GSN-ISEM" || method == "direct_ISEM"
         _validate_y_branch(s, boundary_condition)
         branch = boundary_condition == IN ? :IN : :UP
         route = DirectGSN.direct_gsn_radial(s, l, m, a, omega, branch;
@@ -1543,7 +1696,7 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
             info=info,
         )
     else
-        error("Method must be 'auto', 'ISEM', 'direct_ISEM', 'Riccati', or 'linear'")
+        error("Method must be 'auto', 'ISEM', 'GSN-ISEM', 'Riccati', or 'linear'")
     end
 end
 

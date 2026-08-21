@@ -8,6 +8,7 @@ include("Homogeneous/ConversionFactors.jl")
 include("Homogeneous/Transformation.jl")
 include("Homogeneous/Potentials.jl")
 include("Homogeneous/Solutions.jl")
+include("Homogeneous/ExtremalRadial.jl")
 include("Homogeneous/ComplexFrequencies.jl")
 
 using .Coordinates
@@ -39,7 +40,7 @@ _DEFAULT_infinity_expansion_order_for_cplx_freq = 25
 
 function _adaptive_horizon_expansion_order(a, order::Int)
     spin = abs(float(real(a)))
-    spin >= 1 && return max(order, 50)
+    spin >= 1 && return (1.0, max(order, 50))
     scale = log10(inv(max(1 - spin, eps(Float64))))
     return scale, max(order, _DEFAULT_horizon_expansion_order, ceil(Int, 10 * max(scale, 0) - 1e-12))
 end
@@ -186,20 +187,27 @@ const YRadialFunction = ISEM.YRadialFunction
 const Y_radial = ISEM.Y_radial
 
 _is_auto_method(method) = method == "auto"
-_is_direct_isem_method(method) = method == "direct_ISEM"
+_is_direct_isem_method(method) =
+    method == "GSN-ISEM" || method == "direct_ISEM"
 _use_isem_method(method) = method == "auto" || method == "ISEM" || _is_direct_isem_method(method)
 const _STATIC_OMEGA_TOL = 1e-12
 _is_static_frequency(omega) = abs(omega) < _STATIC_OMEGA_TOL
 _is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) && !_is_static_frequency(omega) && abs(omega - m * Kerr.omega_horizon(a)) < _STATIC_OMEGA_TOL
 
-function _warn_solve_failure(method, retcode)
-    alternatives = if method == "Riccati"
-        "method=\"linear\" or method=\"direct_ISEM\""
-    elseif method == "linear"
-        "method=\"Riccati\" or method=\"direct_ISEM\""
-    else
-        error("Unsupported legacy GSN method: $(method)")
+function _extremal_default_bounds(omega)
+    if isreal(omega)
+        return (-80.0, 160.0)
     end
+    damping = abs(imag(omega))
+    damping == 0 && return (-80.0, 160.0)
+    extent = clamp(12 / float(damping), 24.0, 80.0)
+    return (-extent, extent)
+end
+
+function _warn_solve_failure(method, retcode)
+    alternatives = method == "Riccati" ?
+        "method=\"linear\" or method=\"GSN-ISEM\"" :
+        "method=\"Riccati\" or method=\"GSN-ISEM\""
     @warn "The GSN solve using method=\"$(method)\" failed with retcode=$(retcode). Consider using $(alternatives) instead."
 end
 
@@ -297,7 +305,7 @@ end
 function _direct_isem_branch(boundary_condition)
     boundary_condition == IN && return :IN
     boundary_condition == UP && return :UP
-    error("method = \"direct_ISEM\" currently supports only IN and UP boundary conditions.")
+    error("method = \"GSN-ISEM\" currently supports only IN and UP boundary conditions.")
 end
 
 function _direct_isem_route(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
@@ -350,7 +358,7 @@ function _combine_direct_gsn_down(Xin, Xup)
         missing,
         solution,
         UNIT_GSN_TRANS,
-        "direct_ISEM",
+        "GSN-ISEM",
     )
 end
 
@@ -388,7 +396,7 @@ function _combine_direct_gsn_out(Xin, Xup)
         missing,
         solution,
         UNIT_GSN_TRANS,
-        "direct_ISEM",
+        "GSN-ISEM",
     )
 end
 
@@ -431,6 +439,106 @@ function _gsn_from_direct_isem(s, l, m, a, omega, boundary_condition; xm=nothing
     return ISEM.DirectGSN.direct_gsn_radial_function(route)
 end
 
+function _extremal_method_symbol(method)
+    (_is_auto_method(method) || _is_direct_isem_method(method)) &&
+        return :gsn_isem
+    method == "ISEM" && return :isem
+    method == "Riccati" && return :riccati
+    method == "linear" && return :linear
+    throw(ArgumentError(
+        "exact-extremal Kerr supports method=\"auto\", \"GSN-ISEM\", " *
+        "\"ISEM\", \"Riccati\", or \"linear\""))
+end
+
+function _extremal_method_label(method)
+    symbol = _extremal_method_symbol(method)
+    symbol === :gsn_isem && return "GSN-ISEM"
+    symbol === :isem && return "ISEM"
+    symbol === :riccati && return "Riccati"
+    return "linear"
+end
+
+function _combine_extremal_gsn(Xin, Xup, boundary_condition, method_label)
+    Btrans = Xin.transmission_amplitude
+    Binc = Xin.incidence_amplitude
+    Bref = Xin.reflection_amplitude
+    Ctrans = Xup.transmission_amplitude
+    Cinc = Xup.incidence_amplitude
+    Cref = Xup.reflection_amplitude
+
+    if boundary_condition == DOWN
+        solution = rs -> begin
+            xin = Xin.GSN_solution(rs)
+            xup = Xup.GSN_solution(rs)
+            inv(Binc) .* (xin .- Bref / Ctrans .* xup)
+        end
+        return GSNRadialFunction(
+            Xin.mode, DOWN, Xin.rsin, Xin.rsout, missing,
+            Xin.horizon_expansion_order, Xin.infinity_expansion_order,
+            one(Binc), Btrans / Binc - Bref * Cref / (Binc * Ctrans),
+            -Bref * Cinc / (Binc * Ctrans),
+            (fundamental_solutions=(Xin, Xup),), missing, solution,
+            UNIT_GSN_TRANS, method_label)
+    end
+
+    solution = rs -> begin
+        xin = Xin.GSN_solution(rs)
+        xup = Xup.GSN_solution(rs)
+        inv(Cinc) .* (xup .- Cref / Btrans .* xin)
+    end
+    return GSNRadialFunction(
+        Xin.mode, OUT, Xin.rsin, Xin.rsout, missing,
+        Xin.horizon_expansion_order, Xin.infinity_expansion_order,
+        one(Cinc), Ctrans / Cinc - Bref * Cref / (Btrans * Cinc),
+        -Binc * Cref / (Btrans * Cinc),
+        (fundamental_solutions=(Xin, Xup),), missing, solution,
+        UNIT_GSN_TRANS, method_label)
+end
+
+function _gsn_from_extremal(s, l, m, a, omega, boundary_condition,
+        rsin, rsout; horizon_expansion_order, infinity_expansion_order,
+        method, data_type, ODE_algorithm, tolerance, lambda=nothing)
+    method_symbol = _extremal_method_symbol(method)
+    method_label = _extremal_method_label(method)
+    lambda_value = lambda === nothing ?
+        _swsh_eigenvalue(s, l, m, a * omega) : lambda
+
+    if boundary_condition == DOWN || boundary_condition == OUT
+        Xin = _gsn_from_extremal(
+            s, l, m, a, omega, IN, rsin, rsout;
+            horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tolerance,
+            lambda=lambda_value)
+        Xup = _gsn_from_extremal(
+            s, l, m, a, omega, UP, rsin, rsout;
+            horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tolerance,
+            lambda=lambda_value)
+        return _combine_extremal_gsn(
+            Xin, Xup, boundary_condition, method_label)
+    end
+
+    branch = boundary_condition == IN ? :IN :
+        boundary_condition == UP ? :UP :
+        throw(ArgumentError("unknown boundary condition $boundary_condition"))
+    solved = ExtremalRadial.solve_extremal_gsn(
+        s, m, a, omega, lambda_value, branch, rsin, rsout;
+        method=method_symbol,
+        horizon_order=max(horizon_expansion_order, 48),
+        infinity_order=max(infinity_expansion_order,
+            isreal(omega) ? 12 : 18),
+        series_order=36,
+        data_type, ode_algorithm=ODE_algorithm, tolerance)
+    mode = Mode(s, l, m, a, omega, lambda_value)
+    return GSNRadialFunction(
+        mode, boundary_condition, rsin, rsout, missing,
+        max(horizon_expansion_order, 48),
+        max(infinity_expansion_order, isreal(omega) ? 12 : 18),
+        solved.transmission, solved.incidence, solved.reflection,
+        solved.numerical, solved.riccati, solved.solution,
+        UNIT_GSN_TRANS, method_label)
+end
+
 function _teukolsky_from_direct_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
     if boundary_condition == DOWN || boundary_condition == OUT
         Rin = _teukolsky_from_direct_isem(s, l, m, a, omega, IN;
@@ -471,131 +579,6 @@ function _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
     end
 end
 
-function _auto_try_isem_then_legacy(context, isem_build, riccati_build, linear_build)
-    saw_warn = Ref(false)
-    logger = EarlyFilteredLogger(
-        log -> begin
-            if log.level == Logging.Warn
-                saw_warn[] = true
-            end
-            return log.level >= Logging.Error
-        end,
-        current_logger(),
-    )
-
-    try
-        sol = with_logger(logger) do
-            isem_build()
-        end
-        if saw_warn[]
-            @info "method = \"auto\" tried ISEM, received an ISEM warning, and switched to legacy auto (Riccati, then linear). Use method = \"ISEM\" to force ISEM." context=context
-            return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-        end
-        return sol
-    catch err
-        @info "method = \"auto\" tried ISEM, received an ISEM error, and switched to legacy auto (Riccati, then linear). Use method = \"ISEM\" to force ISEM." context=context error=sprint(showerror, err)
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-end
-
-function _radial_compare_values!(vals::Vector, f)
-    for name in (:transmission_amplitude, :incidence_amplitude, :reflection_amplitude)
-        value = getfield(f, name)
-        value === missing || push!(vals, value)
-    end
-    return vals
-end
-
-function _radial_relative_difference(a, b)
-    av = _radial_compare_values!(Any[], a)
-    bv = _radial_compare_values!(Any[], b)
-    n = min(length(av), length(bv))
-    n == 0 && return Inf
-    diffs = Float64[]
-    for i in 1:n
-        ai = av[i]
-        bi = bv[i]
-        (ai === missing || bi === missing) && continue
-        denom = max(abs(ai), abs(bi), 1e-300)
-        push!(diffs, abs(ai - bi) / denom)
-    end
-    return isempty(diffs) ? Inf : maximum(diffs)
-end
-
-function _try_high_spin_isem_sanity_then_legacy(
-    context,
-    selector_build,
-    low_n_build,
-    mid_n_build,
-    riccati_build,
-    linear_build;
-    sanity_tol = 1e-8,
-)
-    function try_build_with_warning_flag(build)
-        saw_warn = Ref(false)
-        logger = EarlyFilteredLogger(
-            log -> begin
-                if log.level == Logging.Warn
-                    saw_warn[] = true
-                end
-                return log.level >= Logging.Error
-            end,
-            current_logger(),
-        )
-        sol = with_logger(logger) do
-            build()
-        end
-        return sol, saw_warn[]
-    end
-
-    selector_sol, selector_warn = try
-        try_build_with_warning_flag(selector_build)
-    catch err
-        @info "method = \"auto\" high-spin ISEM selector build failed and switched to legacy auto (Riccati, then linear)." context=context error=sprint(showerror, err)
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-    if selector_warn
-        @info "method = \"auto\" high-spin ISEM selector build warned and switched to legacy auto (Riccati, then linear)." context=context
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-
-    low_sol, low_warn = try
-        try_build_with_warning_flag(low_n_build)
-    catch err
-        @info "method = \"auto\" high-spin low-N ISEM sanity build failed and switched to legacy auto (Riccati, then linear)." context=context error=sprint(showerror, err)
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-    if low_warn
-        @debug "method = \"auto\" high-spin low-N ISEM sanity build warned and switched to legacy auto (Riccati, then linear)." context=context low_N=12
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-
-    selector_low_diff = _radial_relative_difference(selector_sol, low_sol)
-    if selector_low_diff <= sanity_tol
-        return selector_sol
-    end
-
-    mid_sol, mid_warn = try
-        try_build_with_warning_flag(mid_n_build)
-    catch err
-        @info "method = \"auto\" high-spin mid-N ISEM sanity build failed and switched to legacy auto (Riccati, then linear)." context=context selector_low_diff=selector_low_diff error=sprint(showerror, err)
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-    if mid_warn
-        @debug "method = \"auto\" high-spin mid-N ISEM sanity build warned and switched to legacy auto (Riccati, then linear)." context=context selector_low_diff=selector_low_diff mid_N=20
-        return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-    end
-
-    low_mid_diff = _radial_relative_difference(low_sol, mid_sol)
-    if low_mid_diff <= sanity_tol
-        @debug "method = \"auto\" high-spin ISEM selector/low-N sanity check selected low-N result." context=context selector_low_diff=selector_low_diff low_mid_diff=low_mid_diff low_N=12 mid_N=20
-        return low_sol
-    end
-
-    @debug "method = \"auto\" high-spin ISEM sanity check failed and switched to legacy auto (Riccati, then linear)." context=context selector_low_diff=selector_low_diff low_mid_diff=low_mid_diff low_N=12 mid_N=20
-    return _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
-end
-
 @doc raw"""
     GSN_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition, rsin, rsout; horizon_expansion_order::Int=_DEFAULT_horizon_expansion_order, infinity_expansion_order::Int=_DEFAULT_infinity_expansion_order, method="auto", data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=nothing, rsmp=nothing)
 
@@ -611,7 +594,7 @@ Note that the `OUT` and `DOWN` solutions are constructed by linearly combining t
 
 The GSN function is numerically solved, for real values of `omega`, in the interval of *tortoise coordinates* $r_{*} \in$ `[rsin, rsout]` using the ODE solver (from `DifferentialEquations.jl`) specified by `ODE_algorithm` (default: `Vern9()`) 
 with tolerance specified by `tolerance` (default: `1e-12`). The solution method is determined by the keyword `method` (default: `auto`).
-The default `auto` uses `direct_ISEM`; the previous `ISEM` implementation and the legacy ODE paths remain available explicitly.
+The default `auto` tries `GSN-ISEM` first and falls back to the legacy automatic radial route only if direct construction fails. Explicit `GSN-ISEM` is strict; the previous `ISEM` implementation and the legacy ODE paths remain available explicitly. The former `direct_ISEM` spelling is accepted as a strict compatibility alias.
 By default the data type used is `ComplexF64` (i.e. double-precision floating-point number) but it can be changed by
 specifying `data_type` (e.g. `Complex{BigFloat}` for complex arbitrary precision number).
 
@@ -640,9 +623,24 @@ function GSN_radial(
     requested_tolerance = tol === nothing ? tolerance : tol
     tolerance = requested_tolerance === nothing ?
         Solutions._DEFAULTTOLERANCE : requested_tolerance
+    if _is_auto_method(method) && !_is_static_frequency(omega) &&
+            !ExtremalRadial.is_exact_extremal_spin(a)
+        try
+            return _gsn_from_direct_isem(
+                s, l, m, a, omega, boundary_condition;
+                xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
+        catch err
+            @warn "GSN-ISEM failed under method=\"auto\"; falling back to the legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err)
+        end
+    end
     if _is_static_frequency(omega)
         return GSN_radial(s, l, m, a, zero(omega), boundary_condition)
-    elseif _is_auto_method(method) || _is_direct_isem_method(method)
+    elseif ExtremalRadial.is_exact_extremal_spin(a)
+        return _gsn_from_extremal(
+            s, l, m, a, omega, boundary_condition, rsin, rsout;
+            horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tolerance, lambda)
+    elseif _is_direct_isem_method(method)
         return _gsn_from_direct_isem(s, l, m, a, omega, boundary_condition;
             xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
     elseif _is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP
@@ -693,7 +691,7 @@ function GSN_radial(
                         _warn_solve_failure(method, Xinsoln.retcode)
                     end
                 else
-                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'direct_ISEM'")
+                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'GSN-ISEM'")
                 end
 
                 # Extract the incidence and reflection amplitudes (NOTE: transmisson amplitude is *always* 1)
@@ -779,7 +777,7 @@ function GSN_radial(
                     _warn_complex_solve_failures(
                         method, (Xinsoln_pos, Xinsoln_neg))
                 else
-                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'direct_ISEM'")
+                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'GSN-ISEM'")
                 end
 
                 # Extract the incidence and reflection amplitudes (NOTE: transmisson amplitude is *always* 1)
@@ -838,7 +836,7 @@ function GSN_radial(
                         _warn_solve_failure(method, Xupsoln.retcode)
                     end
                 else
-                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'direct_ISEM'")
+                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'GSN-ISEM'")
                 end
 
                 # Extract the incidence and reflection amplitudes (NOTE: transmisson amplitude is *always* 1)
@@ -924,7 +922,7 @@ function GSN_radial(
                     _warn_complex_solve_failures(
                         method, (Xupsoln_pos, Xupsoln_neg))
                 else
-                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'direct_ISEM'")
+                    error("Method must be 'Riccati', 'linear', 'ISEM', or 'GSN-ISEM'")
                 end
 
                 # Extract the incidence and reflection amplitudes (NOTE: transmisson amplitude is *always* 1)
@@ -1036,9 +1034,20 @@ function GSN_radial(
     method="auto", tolerance=nothing, tol=nothing,
     xm=nothing, rhom=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, N=nothing, use_gsn_asymptotic_patches=true, gsn_horizon_delta_r_max=ISEM._GSN_HORIZON_DELTA_R_MAX, gsn_infinity_phase_min=ISEM._GSN_INFINITY_PHASE_MIN
 )
+    if a < zero(a)
+        positive = GSN_radial(
+            s, l, -m, -a, omega, boundary_condition;
+            method, tolerance, tol, xm, rhom, sfe, lfe,
+            TSinInf, TSoutInf, TSinHor, TSoutHor, N,
+            use_gsn_asymptotic_patches, gsn_horizon_delta_r_max,
+            gsn_infinity_phase_min)
+        return ISEM._spin_reflect_gsn_radial_function(positive, m, a)
+    end
     requested_tolerance = tol === nothing ? tolerance : tol
     if !_is_static_frequency(omega)
-        return GSN_radial(s, l, m, a, omega, boundary_condition, _DEFAULT_rsin, _DEFAULT_rsout;
+        rsin, rsout = ExtremalRadial.is_exact_extremal_spin(a) ?
+            _extremal_default_bounds(omega) : (_DEFAULT_rsin, _DEFAULT_rsout)
+        return GSN_radial(s, l, m, a, omega, boundary_condition, rsin, rsout;
             method=method, tolerance=requested_tolerance, xm=xm, rhom=rhom, sfe=sfe, lfe=lfe,
             TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, N=N, use_gsn_asymptotic_patches=use_gsn_asymptotic_patches, gsn_horizon_delta_r_max=gsn_horizon_delta_r_max, gsn_infinity_phase_min=gsn_infinity_phase_min)
     else
@@ -1078,6 +1087,16 @@ As for _complex_ frequencies, the numerical inner and the outer boundaries are d
 while the order of the asymptotic expansion at the horizon and infinity are set to `_DEFAULT_horizon_expansion_order_for_cplx_freq` and `_DEFAULT_infinity_expansion_order_for_cplx_freq`, respectively.
 """
 function GSN_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=nothing, tol=nothing, method="auto", xm=nothing, rhom=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, N=nothing, use_gsn_asymptotic_patches=true, gsn_horizon_delta_r_max=ISEM._GSN_HORIZON_DELTA_R_MAX, gsn_infinity_phase_min=ISEM._GSN_INFINITY_PHASE_MIN)
+    if a < zero(a)
+        positive = GSN_radial(
+            s, l, -m, -a, omega;
+            data_type, ODE_algorithm, tolerance, tol, method, xm, rhom,
+            sfe, lfe, TSinInf, TSoutInf, TSinHor, TSoutHor, N,
+            use_gsn_asymptotic_patches, gsn_horizon_delta_r_max,
+            gsn_infinity_phase_min)
+        return map(f -> ISEM._spin_reflect_gsn_radial_function(f, m, a),
+            positive)
+    end
     requested_tolerance = tol === nothing ? tolerance : tol
     tolerance = requested_tolerance === nothing ?
         Solutions._DEFAULTTOLERANCE : requested_tolerance
@@ -1085,10 +1104,31 @@ function GSN_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAU
         omega0 = zero(omega)
         Xin = GSN_radial(s, l, m, a, omega0, IN)
         Xup = GSN_radial(s, l, m, a, omega0, UP)
+    elseif ExtremalRadial.is_exact_extremal_spin(a)
+        rsin, rsout = _extremal_default_bounds(omega)
+        Xin = GSN_radial(s, l, m, a, omega, IN, rsin, rsout;
+            method, data_type, ODE_algorithm, tolerance)
+        Xup = GSN_radial(s, l, m, a, omega, UP, rsin, rsout;
+            method, data_type, ODE_algorithm, tolerance)
     elseif _is_horizon_superradiance_frequency(a, m, omega)
         Xin = GSN_radial(s, l, m, a, omega, IN; method=method, tolerance=requested_tolerance, xm=xm, rhom=rhom, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, N=N, use_gsn_asymptotic_patches=use_gsn_asymptotic_patches, gsn_horizon_delta_r_max=gsn_horizon_delta_r_max, gsn_infinity_phase_min=gsn_infinity_phase_min)
         Xup = GSN_radial(s, l, m, a, omega, UP; method=method, tolerance=requested_tolerance, xm=xm, rhom=rhom, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, N=N, use_gsn_asymptotic_patches=use_gsn_asymptotic_patches, gsn_horizon_delta_r_max=gsn_horizon_delta_r_max, gsn_infinity_phase_min=gsn_infinity_phase_min)
-    elseif _is_auto_method(method) || _is_direct_isem_method(method)
+    elseif _is_auto_method(method)
+        Xin = GSN_radial(s, l, m, a, omega, IN;
+            method=method, tolerance=requested_tolerance, xm=xm, rhom=rhom,
+            sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf,
+            TSinHor=TSinHor, TSoutHor=TSoutHor, N=N,
+            use_gsn_asymptotic_patches=use_gsn_asymptotic_patches,
+            gsn_horizon_delta_r_max=gsn_horizon_delta_r_max,
+            gsn_infinity_phase_min=gsn_infinity_phase_min)
+        Xup = GSN_radial(s, l, m, a, omega, UP;
+            method=method, tolerance=requested_tolerance, xm=xm, rhom=rhom,
+            sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf,
+            TSinHor=TSinHor, TSoutHor=TSoutHor, N=N,
+            use_gsn_asymptotic_patches=use_gsn_asymptotic_patches,
+            gsn_horizon_delta_r_max=gsn_horizon_delta_r_max,
+            gsn_infinity_phase_min=gsn_infinity_phase_min)
+    elseif _is_direct_isem_method(method)
         Xin = _gsn_from_direct_isem(s, l, m, a, omega, IN;
             xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
         Xup = _gsn_from_direct_isem(s, l, m, a, omega, UP;
@@ -1206,8 +1246,10 @@ Note that the `OUT` and `DOWN` solutions are constructed by linearly combining t
 The full GSN solution is converted to the corresponding Teukolsky solution $(R(r), dR/dr)$ and 
 the incidence, reflection and transmission amplitude are converted from the GSN formalism to the Teukolsky formalism 
 with the normalization convention that the transmission amplitude is normalized to 1 (i.e. `normalization_convention=UNIT_TEUKOLSKY_TRANS`).
-When `method` is `"auto"`, the homogeneous Teukolsky solution is obtained from
-`direct_ISEM`; `method="ISEM"` retains the previous implementation.
+When `method` is `"auto"`, the homogeneous Teukolsky solution tries
+`GSN-ISEM` first and falls back to the legacy automatic radial route only if
+direct construction fails. Explicit `method="GSN-ISEM"` is strict;
+`method="ISEM"` retains the previous implementation.
 
 Note, however, when `omega = 0`, the exact Teukolsky function expressed using Gauss hypergeometric functions will be returned (i.e., instead of using the GSN formalism). 
 In this case, only `s`, `l`, `m`, `a`, `omega`, `boundary_condition` will be parsed.
@@ -1224,7 +1266,10 @@ function Teukolsky_radial(
     tolerance = tol === nothing ? tolerance : tol
     if _is_static_frequency(omega)
         return Teukolsky_radial(s, l, m, a, zero(omega), boundary_condition; method="static")
-    elseif _is_auto_method(method) || _is_direct_isem_method(method)
+    elseif ExtremalRadial.is_exact_extremal_spin(a)
+        # Continue below through the common GSN-to-Teukolsky conversion.
+        nothing
+    elseif _is_direct_isem_method(method)
         return _teukolsky_from_direct_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=tolerance, sfe=sfe, lfe=lfe)
     elseif _is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, rhom=rhom, N=N, tol=tolerance, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor)
@@ -1288,7 +1333,19 @@ end
 function Teukolsky_radial(
     s::Int, l::Int, m::Int, a, omega, boundary_condition; method="auto", xm=nothing, rhom=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, N=nothing, tol=nothing
 )
-    if (_is_auto_method(method) || _is_direct_isem_method(method)) && !_is_static_frequency(omega)
+    if a < zero(a)
+        positive = Teukolsky_radial(
+            s, l, -m, -a, omega, boundary_condition;
+            method, xm, rhom, sfe, lfe, TSinInf, TSoutInf,
+            TSinHor, TSoutHor, N, tol)
+        return ISEM._spin_reflect_teukolsky_radial_function(positive, m, a)
+    end
+    if ExtremalRadial.is_exact_extremal_spin(a) && !_is_static_frequency(omega)
+        rsin, rsout = _extremal_default_bounds(omega)
+        return Teukolsky_radial(
+            s, l, m, a, omega, boundary_condition, rsin, rsout;
+            method, tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol)
+    elseif _is_direct_isem_method(method) && !_is_static_frequency(omega)
         return _teukolsky_from_direct_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
     elseif _is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, rhom=rhom, N=N, tol=tol, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor)
@@ -1328,7 +1385,7 @@ end
 
 Compute the Teukolsky function for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `a` the Kerr spin parameter, and `omega` the frequency)
 with the purely-ingoing boundary condition at the horizon (`IN`) and the purely-outgoing boundary condition at infinity (`UP`).
-When `method` is `"auto"`, this overload uses `direct_ISEM`; `method="ISEM"` retains the previous implementation.
+When `method` is `"auto"`, this overload tries `GSN-ISEM` first and falls back to the legacy automatic radial route only if direct construction fails. Explicit `method="GSN-ISEM"` is strict; `method="ISEM"` retains the previous implementation.
 
 Note that for _real_ frequencies, the numerical inner boundary (rsin) and outer boundary (rsout) are set to the default values `_DEFAULT_rsin` and `_DEFAULT_rsout`, respectively,
 while the order of the asymptotic expansion at the horizon and infinity are determined automatically.
@@ -1336,6 +1393,15 @@ As for _complex_ frequencies, the numerical inner and the outer boundaries are d
 while the order of the asymptotic expansion at the horizon and infinity are set to `_DEFAULT_horizon_expansion_order_for_cplx_freq` and `_DEFAULT_infinity_expansion_order_for_cplx_freq`, respectively.
 """
 function Teukolsky_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=Solutions._DEFAULTTOLERANCE, tol=nothing, method="auto", xm=nothing, rhom=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, N=nothing)
+    if a < zero(a)
+        positive = Teukolsky_radial(
+            s, l, -m, -a, omega;
+            data_type, ODE_algorithm, tolerance, tol, method, xm, rhom,
+            sfe, lfe, TSinInf, TSoutInf, TSinHor, TSoutHor, N)
+        return map(
+            f -> ISEM._spin_reflect_teukolsky_radial_function(f, m, a),
+            positive)
+    end
     tolerance = tol === nothing ? tolerance : tol
     if _is_static_frequency(omega) || _is_horizon_superradiance_frequency(a, m, omega) || _use_isem_method(method)
         Rin = Teukolsky_radial(s, l, m, a, omega, IN; method=method, xm=xm, rhom=rhom, sfe=sfe, lfe=lfe, TSinInf=TSinInf, TSoutInf=TSoutInf, TSinHor=TSinHor, TSoutHor=TSoutHor, N=N, tol=tolerance)
@@ -1791,7 +1857,7 @@ In addition, we compute also the energy, angular momentum and Carter constant fl
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`).
 Use `method = "isem_trapezoidal"` for the ISEM trapezoidal path and `method = "isem_levin"` for the ISEM Levin path.
 Legacy non-ISEM paths remain available as `method = "trapezoidal"` and `method = "levin"`.
-Both ISEM convolution paths use `direct_ISEM` for their homogeneous radial input.
+Both ISEM convolution paths use `GSN-ISEM` for their homogeneous radial input.
 For adaptive ISEM Levin, `levin_max_depth` controls the maximum bisection depth; `Nmax` and `Kmax` are fixed-grid caps used by trapezoidal and non-adaptive paths.
 """
 @inline _pointparticle_fast_grid(l, n, k, a, e) =
@@ -1845,7 +1911,7 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
             output["Trajectory"],
             output["YSolution"],
             output["SWSH"],
-            (method=method, radial_method="direct_ISEM",
+            (method=method, radial_method="GSN-ISEM",
                 radial_sfe=ConvolutionIntegrals._inhomogeneous_sfe_control(
                     l, a, output["omega"]), N=N, K=K,
                 truncation_floor=mode_abs_floor)
@@ -1885,7 +1951,7 @@ In addition, we compute also the energy, angular momentum and Carter constant fl
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`).
 Use `method = "isem_trapezoidal"` for the ISEM trapezoidal path and `method = "isem_levin"` for the ISEM Levin path.
 Legacy non-ISEM paths remain available as `method = "trapezoidal"` and `method = "levin"`.
-Both ISEM convolution paths use `direct_ISEM` for their homogeneous radial input.
+Both ISEM convolution paths use `GSN-ISEM` for their homogeneous radial input.
 We sample the trajectory over a grid of size N x K, where N and K are the number of Chebyshev nodes in the radial and the polar direction, respectively.
 Note that they must be powers of 2.
 """
@@ -1908,5 +1974,16 @@ function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e,
         Teukolsky_mode.method
     )
 end
+
+include("QNM/QNM.jl")
+using .QNM
+export QNMMode, QNMBranch, QNMResult, QNMEstimate, QNMFailure,
+    QNMEndpointResult,
+    QNMPairResult
+export ordinary, mirror, Ordinary, Mirror
+export LeaverResult, ISEMValidationResult, ExcitationFactorResult
+export qnm_frequency, qnm_sequence, validate_qnm_with_isem
+export qnm_excitation_factor, qnm, qnm_pair
+export angular_A_to_lambda, lambda_to_angular_A
 
 end
