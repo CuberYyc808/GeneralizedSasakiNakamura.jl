@@ -83,7 +83,7 @@ Static/zero-frequency solutions are solved analytically with Gauss hypergeometri
 
 Superradiance-threshold solutions with $\omega = m a / (2 r_+)$ are handled by a dedicated horizon-threshold GSN-ISEM branch.
 
-### Quasinormal modes
+### QNM interface
 
 The native QNM interface computes a Leaver root and validates its scattering
 data with the GSN-ISEM radial route:

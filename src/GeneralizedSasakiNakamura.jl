@@ -579,6 +579,9 @@ function _try_legacy_riccati_then_linear(context, riccati_build, linear_build)
     end
 end
 
+@inline _pointparticle_fast_grid(l, n, k, a, e) =
+    l <= 4 && abs(n) <= 4 && abs(k) <= 4 && abs(a) <= 0.95 && e <= 0.35
+
 @doc raw"""
     GSN_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition, rsin, rsout; horizon_expansion_order::Int=_DEFAULT_horizon_expansion_order, infinity_expansion_order::Int=_DEFAULT_infinity_expansion_order, method="auto", data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=nothing, rsmp=nothing)
 
@@ -1860,9 +1863,6 @@ Legacy non-ISEM paths remain available as `method = "trapezoidal"` and `method =
 Both ISEM convolution paths use `GSN-ISEM` for their homogeneous radial input.
 For adaptive ISEM Levin, `levin_max_depth` controls the maximum bisection depth; `Nmax` and `Kmax` are fixed-grid caps used by trapezoidal and non-adaptive paths.
 """
-@inline _pointparticle_fast_grid(l, n, k, a, e) =
-    l <= 4 && abs(n) <= 4 && abs(k) <= 4 && abs(a) <= 0.95 && e <= 0.35
-
 function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N::Int=-1, K::Int=-1, Nmax::Int = -1, Kmax::Int = -1, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8)
     method = lowercase(String(method))
     if method == "auto"
