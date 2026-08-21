@@ -31,5 +31,10 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v1
+      - name: Use Fast-eigenvalue angular backend
+        run: >-
+          julia --project=. -e 'using Pkg;
+          Pkg.develop(PackageSpec(url="https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git",
+          rev="Fast-eigenvalue"))'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1

@@ -1375,15 +1375,6 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
     )
 end
 
-"""
-    qnm_frequency(mode::QNMMode, a; guess=nothing, kwargs...)
-
-Solve the coupled angular/radial Leaver equations in `M=1` units. Without an
-explicit guess, the labeled Schwarzschild mode is continued in spin. The final
-root is independently re-polished with a higher angular truncation and deeper
-continued fraction. Failed scientific gates return `status=:failed` and an
-explicit `stop_reason`.
-"""
 function _spin_reflected_result(
         requested_mode::QNMMode, requested_a, source::LeaverResult;
         angular_order::Int, sheet_id::Symbol)
@@ -1430,6 +1421,15 @@ function _spin_reflected_result(
     )
 end
 
+"""
+    qnm_frequency(mode::QNMMode, a; guess=nothing, kwargs...)
+
+Solve the coupled angular/radial Leaver equations in `M=1` units. Without an
+explicit guess, the labeled Schwarzschild mode is continued in spin. The final
+root is independently re-polished with a higher angular truncation and deeper
+continued fraction. Failed scientific gates return `status=:failed` and an
+explicit `stop_reason`.
+"""
 function qnm_frequency(mode::QNMMode, a; guess=nothing,
         convention=:overtone,
         inversion_index=:auto,
