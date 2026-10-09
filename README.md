@@ -402,7 +402,7 @@ This high-eccentricity generic run averaged about `3.667 ms` per computed mode.
 
 Each mode amplitude is a convolution integral of the radial solution over the orbit. At large radial index $n$ the integrand oscillates rapidly, so uniform trapezoidal sampling needs dense grids. For modes with large $n$, eccentric and generic summations can instead use adaptive Levin quadrature in the radial direction, which bisects the radial interval until the mode amplitude converges or a depth limit is reached; generic two-dimensional convolutions pair it with a fixed Clenshaw–Curtis rule in the polar direction. This choice concerns the convolution quadrature only; the radial solutions themselves come from the solver methods above.
 
-The switch is automatic (`tail_levin`, by default automatic). Users set the target accuracy with `tol`: single modes refine their grids until the mode converges to that target, up to the grid caps `Nmax` and `Kmax`, and the summation stops adding shells once they fall below the target. These are convergence controls, not strict global error bounds for every parameter. See the [API reference](docs/src/APIs.md) for the keywords.
+The switch is controlled by `tail_levin` and is automatic by default. Users set the target accuracy with `tol`: single modes refine their grids until the mode converges to that target, up to the grid caps `Nmax` and `Kmax`, and a summation stops once `minimum_consecutive` consecutive shells fall below the target (5 for circular equatorial orbits, 2 otherwise). These are convergence controls, not strict global error bounds for every parameter. See the [API reference](docs/src/APIs.md) for the keywords.
 
 ### Parallel execution and cache sharing
 
