@@ -28,7 +28,11 @@ using ..DirectIteration:
     direct_logscaled_basis_state,
     direct_materialize_logscaled_state,
     _SFE_BRIDGE_TARGET_Y,
-    _endpoint_state
+    _endpoint_pair,
+    _endpoint_state,
+    _ENDPOINT_SEED_TARGET,
+    _scaled_y_infinity_selection,
+    _INFINITY_ENDPOINT_TARGET
 using ..DirectEikonal: DirectEikonalPatch, eikonal_preflight
 using ..DirectNearExtreme: near_extreme_prepare, near_extreme_selected
 using ..DirectMSTInfinity: MSTCertificateError, direct_abel_denominator
@@ -36,7 +40,7 @@ using ..DirectMSTInfinity: direct_mst_eval_plan, direct_mst_infinity_basis
 using ..DirectMSTInfinity: direct_mst_infinity_pair, direct_mst_plan, direct_mst_state
 using ..DirectMSTInfinity: direct_mst_logscaled_seed, direct_mst_pin_state
 using ..DirectMSTInfinity: direct_mst_scaled_state
-using ..DirectMSTInfinity: mst_principal_amplitudes
+using ..DirectMSTInfinity: _pin_unit_scale
 using ..DirectParameters:
     DirectGSNControls,
     DirectGSNParameters,
@@ -65,8 +69,6 @@ const PUBLIC_EVALUATION_ENDPOINT_X = 0.999995
 const MATCHING_SCALE_LOG_MARGIN = 32.0
 const SFE_ENDPOINT_HANDOFF_TOLERANCE = 1.0e-10
 const SFE_UP_TRIAL_STEPS = 128
-const REAL_MST_CONDITION_MAX = 1.0e3
-const REAL_MST_NEAR_STATIC_MAX = 1.0e-5
 
 struct DirectEndpointPlan{S}
     selection::S
@@ -394,19 +396,20 @@ function _build_bridge(
     end
 end
 
-function _endpoint_branch_state(coefficients, selection, branch, x)
+function _endpoint_branch_state(coefficients, selection, branch, x; radius=nothing)
     kind = branch == :in ? :infinity_in : :infinity_out
     coeffs = branch == :in ? selection.in_coeffs : selection.out_coeffs
     order = branch == :in ? selection.in_order : selection.out_order
     rho, sigma = direct_infinity_exponents(coefficients.params, branch)
-    value, derivative = _endpoint_state(
-        kind,
-        @view(coeffs[1:(order + 1)]),
-        rho,
-        sigma / selection.variable_scale,
-        x,
-        selection.variable_scale,
-    )
+    value, derivative = if radius === nothing
+        _endpoint_state(kind, @view(coeffs[1:(order + 1)]), rho,
+            sigma / selection.variable_scale, x, selection.variable_scale)
+    else
+        kappa = coefficients.params.kappa
+        y = 2kappa / (radius - 1 + kappa)
+        _endpoint_pair(kind, @view(coeffs[1:(order + 1)]), rho,
+            sigma / selection.variable_scale, y, selection.variable_scale)
+    end
     scale = direct_endpoint_scale(kind, coefficients.params)
     return (X=scale * value, dXdx=scale * derivative)
 end
@@ -419,16 +422,17 @@ function _physical_endpoint_state(
     incidence,
     reflection,
     solution_scale,
-    scale=1.0 + 0.0im,
+    scale=1.0 + 0.0im;
+    radius=nothing,
 )
-    outgoing = _endpoint_branch_state(coefficients, selection, :out, x)
+    outgoing = _endpoint_branch_state(coefficients, selection, :out, x; radius)
     if route_branch == :UP
         return (
             X=scale * solution_scale * outgoing.X,
             dXdx=scale * solution_scale * outgoing.dXdx,
         )
     end
-    incoming = _endpoint_branch_state(coefficients, selection, :in, x)
+    incoming = _endpoint_branch_state(coefficients, selection, :in, x; radius)
     return (
         X=scale * (incidence * incoming.X + reflection * outgoing.X),
         dXdx=scale * (incidence * incoming.dXdx +
@@ -536,13 +540,20 @@ end
 
 function _sfe_up_basis(coefficients, ctrl, scratch, match_x, target)
     omega = abs(getproperty(coefficients.params, :omega))
-    omega > 0 || return nothing
+    omega > 0 || return nothing, nothing
     target_y = (1.0 - PUBLIC_EVALUATION_ENDPOINT_X) / omega
     extended = target_y > _SFE_BRIDGE_TARGET_Y
-    extended && eikonal_preflight(coefficients.params, :sfe).candidate &&
-        return nothing
     selection = _sfe_endpoint_selection(coefficients, ctrl, match_x)
-    selection === nothing && return nothing
+    selection === nothing && return nothing, nothing
+    # The UP boundary fixes this normalization, even when inward propagation
+    # cannot reach the matching point. Use it only in the certified endpoint domain.
+    order = max(ctrl.infinity_order, ctrl.ordinary_order)
+    boundary = order > selection.requested_order ?
+        _scaled_y_infinity_selection(coefficients, order) : selection
+    plan = boundary !== nothing && boundary.score <= _INFINITY_ENDPOINT_TARGET ?
+        DirectEndpointPlan(boundary, 1.0 + 0.0im, 1.0-boundary.endpoint_y) : nothing
+    extended && eikonal_preflight(coefficients.params, :sfe).candidate &&
+        return nothing, plan
     basis = try
         direct_iterate_from_infinity(
             coefficients,
@@ -556,15 +567,15 @@ function _sfe_up_basis(coefficients, ctrl, scratch, match_x, target)
         )
     catch err
         startswith(sprint(showerror, err), "direct GSN") || rethrow()
-        return nothing
+        return nothing, plan
     end
-    basis === nothing && return nothing
+    basis === nothing && return nothing, plan
     scale = _fit_state_scale(target, _basis_tuple(basis))
-    scale === nothing && return nothing
+    scale === nothing && return nothing, plan
     aligned = _scaled_state(_basis_tuple(basis), scale)
     _state_error(target, aligned) <= SFE_ENDPOINT_HANDOFF_TOLERANCE ||
-        return nothing
-    return DirectScaledBasis(basis, scale)
+        return nothing, plan
+    return DirectScaledBasis(basis, scale), plan
 end
 
 function _scaled_det_ratio(a, b, c, d, det)
@@ -966,8 +977,21 @@ function _direct_match_impl(
         route_branch,
     )
     coefficients = near_extreme_prepare(coefficients, ctrl)
+    # The SFE/MST machinery is large; with sfe as a type parameter an ordinary
+    # solve compiles only the branches it can reach.
+    return _direct_match_body(
+        coefficients, route_branch, base_ctrl, ctrl, Val(ctrl.sfe))
+end
+
+function _direct_match_body(
+    coefficients::DirectCoefficientSet,
+    route_branch,
+    base_ctrl,
+    ctrl,
+    ::Val{SFE},
+) where {SFE}
     match_x = ctrl.match_x
-    selection = ctrl.sfe ? nothing : direct_select_infinity_endpoint(
+    selection = SFE ? nothing : direct_select_infinity_endpoint(
         coefficients,
         match_x;
         controls=ctrl,
@@ -975,10 +999,10 @@ function _direct_match_impl(
     )
     scratch = DirectIterationScratch(coefficients,
         getproperty(ctrl, :ordinary_order);
-        force_eikonal=ctrl.lfe, lfe=ctrl.lfe, sfe=ctrl.sfe,
+        force_eikonal=ctrl.lfe, lfe=ctrl.lfe, sfe=SFE,
         route_branch=route_branch)
     mst_branches = route_branch == :IN ? (:in, :out) : (:out,)
-    mst_plan = if ctrl.sfe
+    mst_plan = if SFE
         try
             direct_mst_plan(coefficients, match_x; branches=mst_branches)
         catch err
@@ -1002,7 +1026,7 @@ function _direct_match_impl(
 
     if route_branch == :IN
         h_in = direct_iterate_from_zero(coefficients, :in; controls=ctrl, match_x=match_x, scratch=scratch)
-        i_in, i_out, logscaled_mst = if ctrl.sfe
+        i_in, i_out, logscaled_mst = if SFE
             try
                 incoming, outgoing = direct_mst_infinity_pair(
                     coefficients,
@@ -1061,7 +1085,7 @@ function _direct_match_impl(
             )
         end
         target = _scaled_state(_basis_tuple(h_in), solution_scale)
-        bridge, endpoint_plan = if ctrl.sfe
+        bridge, endpoint_plan = if SFE
             _build_sfe_endpoint_bridge(
                 coefficients,
                 ctrl,
@@ -1142,7 +1166,7 @@ function _direct_match_impl(
         )
     end
 
-    i_out, logscaled_mst = if ctrl.sfe
+    i_out, logscaled_mst = if SFE
         try
             (_infinity_basis(
                 coefficients, :out, selection, match_x, ctrl, scratch, mst_plan),
@@ -1171,8 +1195,8 @@ function _direct_match_impl(
             end
         end
     else
-        (_infinity_basis(
-            coefficients, :out, selection, match_x, ctrl, scratch, mst_plan),
+        (direct_iterate_from_infinity(coefficients, :out;
+            controls=ctrl, match_x, selection, scratch),
             false,
         )
     end
@@ -1225,9 +1249,11 @@ function _direct_match_impl(
         incidence,
         _basis_tuple(h_out),
     )
-    endpoint_basis = ctrl.sfe && !logscaled_mst ?
-        _sfe_up_basis(coefficients, ctrl, scratch, match_x, target) : nothing
-    endpoint_bridge, endpoint_plan = if endpoint_basis === nothing
+    endpoint_basis, boundary_plan = SFE && !logscaled_mst ?
+        _sfe_up_basis(coefficients, ctrl, scratch, match_x, target) : (nothing,nothing)
+    endpoint_bridge, endpoint_plan = if !SFE
+        (nothing, nothing)
+    elseif endpoint_basis === nothing && boundary_plan === nothing
         _build_sfe_endpoint_bridge(
             coefficients,
             ctrl,
@@ -1240,7 +1266,7 @@ function _direct_match_impl(
             solution_scale,
         )
     else
-        (endpoint_basis, nothing)
+        (endpoint_basis, boundary_plan)
     end
     mst_eval_plan = if mst_plan === nothing
         nothing
@@ -1296,48 +1322,6 @@ function _direct_match_impl(
     )
 end
 
-function _certified_mst_pair(
-    route::DirectRoute,
-    _target_params::DirectGSNParameters,
-    _controls::DirectGSNControls,
-)
-    result = try
-        mst_principal_amplitudes(route.params, route.branch)
-    catch
-        return route
-    end
-    result.max_condition <= REAL_MST_CONDITION_MAX || return route
-    target_pair = result.gsn
-    all(value -> isfinite(real(value)) && isfinite(imag(value)), target_pair) ||
-        return route
-    scale = route.solution_scale
-    incidence = ComplexF64(scale * target_pair[1])
-    reflection = ComplexF64(scale * target_pair[2])
-    all(value -> isfinite(real(value)) && isfinite(imag(value)),
-        (incidence, reflection)) || return route
-    return DirectRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.coefficients,
-        route.match_x,
-        route.infinity_endpoint_y,
-        route.infinity_out_order,
-        route.infinity_in_order,
-        incidence,
-        reflection,
-        route.solution_scale,
-        route.horizon_in,
-        route.horizon_out,
-        route.infinity_out,
-        route.infinity_in,
-        route.bridge,
-        route.endpoint_bridge,
-        route.endpoint_plan,
-        route.mst_plan,
-    )
-end
-
 function direct_gsn_radial(
     s::Integer,
     l::Integer,
@@ -1350,11 +1334,6 @@ function direct_gsn_radial(
     controls=nothing,
     kwargs...,
 )
-    default_request = controls === nothing && lambda === nothing &&
-        nu === nothing && all(
-            value -> value === nothing || value === :auto,
-            values(kwargs),
-        )
     params = direct_gsn_parameters(s, l, m, a, omega; lambda=lambda, nu=nu)
     ctrl = controls === nothing ? direct_gsn_controls(params; kwargs...) : controls
     if isreal(params.omega) && params.omega < 0
@@ -1368,19 +1347,13 @@ function direct_gsn_radial(
             params.nu,
             params.kappa,
         )
+        # The reflected route is the positive-frequency route itself, so the
+        # two signs agree by construction.
         positive_route = direct_gsn_radial(
             positive_params,
             branch;
             controls=ctrl,
         )
-        use_mst_pair = default_request &&
-            positive_route.branch == :IN &&
-            (
-                abs(params.omega) <= REAL_MST_NEAR_STATIC_MAX ||
-                direct_horizon_tail(params)
-            )
-        use_mst_pair && (positive_route =
-            _certified_mst_pair(positive_route, params, ctrl))
         return DirectConjugatedRoute(positive_route, params)
     end
     coefficients = direct_gsn_coefficients(params; controls=ctrl)
@@ -1445,7 +1418,7 @@ _route_basis(basis::DirectLogScaledBasis) = basis
 _endpoint_plan_covers(plan::DirectEndpointPlan, x) =
     x >= plan.seed_x - 20eps(Float64)
 
-function _endpoint_plan_state(route::DirectRoute, x)
+function _endpoint_plan_state(route::DirectRoute, x; radius=nothing)
     plan = route.endpoint_plan
     plan === nothing && error("missing direct GSN endpoint evaluation plan")
     return _physical_endpoint_state(
@@ -1456,14 +1429,15 @@ function _endpoint_plan_state(route::DirectRoute, x)
         route.incidence,
         route.reflection,
         route.solution_scale,
-        plan.scale,
+        plan.scale;
+        radius,
     )
 end
 
 @inline _logscaled_mst_eval(plan) = plan !== nothing &&
     hasproperty(plan, :logscaled) && plan.logscaled
 
-function _physical_mst_out_state(route::DirectRoute, x)
+function _physical_mst_out_state(route::DirectRoute, x; radius=nothing)
     if _logscaled_mst_eval(route.mst_plan)
         route.mst_plan.out_scale === nothing &&
             error("missing direct GSN log-scaled outgoing normalization")
@@ -1473,15 +1447,64 @@ function _physical_mst_out_state(route::DirectRoute, x)
             :out,
             x;
             scale=route.mst_plan.out_scale,
+            radius,
         )
     end
     state = direct_mst_state(
-        route.coefficients, route.mst_plan, :out, x)
+        route.coefficients, route.mst_plan, :out, x; radius)
     return (
         X=route.solution_scale * state.X,
         dXdx=route.solution_scale * state.dXdx,
         estimated_relerr=state.estimated_relerr,
     )
+end
+
+function _mst_combined_in_state(route::DirectRoute, x; radius=nothing)
+    if x <= route.mst_plan.seed_x
+        return direct_mst_pin_state(route.coefficients, route.mst_plan, x;
+            scale=route.solution_scale * _pin_unit_scale(route.params), radius)
+    end
+    incoming = direct_mst_state(route.coefficients, route.mst_plan, :in, x; radius)
+    outgoing = direct_mst_state(route.coefficients, route.mst_plan, :out, x; radius)
+    xi, xo = route.incidence * incoming.X, route.reflection * outgoing.X
+    di, do_ = route.incidence * incoming.dXdx, route.reflection * outgoing.dXdx
+    value, derivative = xi + xo, di + do_
+    # A near-zone IN solution must not be recovered by subtracting two
+    # much larger infinity solutions when that subtraction loses precision.
+    if eps(Float64) * (abs(xi) + abs(xo)) > route.controls.tolerance * abs(value) ||
+            eps(Float64) * (abs(di) + abs(do_)) > route.controls.tolerance * abs(derivative)
+        return direct_mst_pin_state(route.coefficients, route.mst_plan, x;
+            scale=route.solution_scale * _pin_unit_scale(route.params), radius)
+    end
+    return (X=value, dXdx=derivative)
+end
+
+function _mst_evaluation_region(route::DirectRoute, x)
+    route.mst_plan === nothing && return false
+    if route.branch == :UP
+        if x > route.match_x
+            # Outward propagation of the subdominant UP solution amplifies
+            # its growing companion. An inward asymptotic basis is stable.
+            route.endpoint_bridge isa DirectScaledBasis &&
+                _bridge_covers(route.endpoint_bridge, x) && return false
+            return !(route.endpoint_plan !== nothing && _endpoint_plan_covers(route.endpoint_plan, x))
+        end
+        x <= min(route.horizon_in.seed_x, route.horizon_out.seed_x) && return false
+        if _bridge_covers(route.horizon_in, x) && _bridge_covers(route.horizon_out, x)
+            vin, din = direct_basis_state(route.horizon_in, x)
+            vout, dout = direct_basis_state(route.horizon_out, x)
+            xi, xo = route.reflection * vin, route.incidence * vout
+            di, do_ = route.reflection * din, route.incidence * dout
+            eps(Float64) * (abs(xi) + abs(xo)) <=
+                route.controls.tolerance * abs(xi + xo) &&
+                eps(Float64) * (abs(di) + abs(do_)) <=
+                route.controls.tolerance * abs(di + do_) && return false
+        end
+        return !(route.bridge !== nothing && _bridge_covers(route.bridge, x))
+    end
+    return x > route.match_x &&
+        !(route.bridge !== nothing && _bridge_covers(route.bridge, x)) &&
+        !(route.endpoint_plan !== nothing && _endpoint_plan_covers(route.endpoint_plan, x))
 end
 
 function direct_evaluate(route::DirectRoute, x)
@@ -1497,19 +1520,18 @@ function direct_evaluate(route::DirectRoute, x)
                 _endpoint_plan_covers(route.endpoint_plan, x)
             return _endpoint_plan_state(route, x).X
         end
-        if route.mst_plan !== nothing && x > route.mst_plan.seed_x
+        if route.mst_plan !== nothing
             if _logscaled_mst_eval(route.mst_plan)
                 return direct_mst_pin_state(
                     route.coefficients, route.mst_plan, x).X
             end
-            incoming = direct_mst_state(
-                route.coefficients, route.mst_plan, :in, x)
-            outgoing = direct_mst_state(
-                route.coefficients, route.mst_plan, :out, x)
-            return route.incidence * incoming.X + route.reflection * outgoing.X
+            return _mst_combined_in_state(route, x).X
         end
         return route.incidence * direct_basis_value(_required_basis(route.infinity_in, "infinity_in"), x) +
             route.reflection * direct_basis_value(_required_basis(route.infinity_out, "infinity_out"), x)
+    end
+    if _mst_evaluation_region(route, x)
+        return _physical_mst_out_state(route, x).X
     end
     if x <= route.match_x
         route.bridge !== nothing && _bridge_covers(route.bridge, x) &&
@@ -1517,20 +1539,17 @@ function direct_evaluate(route::DirectRoute, x)
         return route.reflection * direct_basis_value(_required_basis(route.horizon_in, "horizon_in"), x) +
             route.incidence * direct_basis_value(_required_basis(route.horizon_out, "horizon_out"), x)
     end
-    route.endpoint_bridge !== nothing &&
-        _bridge_covers(route.endpoint_bridge, x) &&
-        return _bridge_value(route.endpoint_bridge, x)
     if route.endpoint_plan !== nothing &&
             _endpoint_plan_covers(route.endpoint_plan, x)
         return _endpoint_plan_state(route, x).X
     end
+    route.endpoint_bridge !== nothing &&
+        _bridge_covers(route.endpoint_bridge, x) &&
+        return _bridge_value(route.endpoint_bridge, x)
     if route.infinity_out isa DirectLogScaledBasis &&
             _bridge_covers(route.infinity_out, x)
         return _physical_logscaled_basis_state(
             route.infinity_out, x, route.solution_scale).X
-    end
-    if route.mst_plan !== nothing && x > route.mst_plan.seed_x
-        return _physical_mst_out_state(route, x).X
     end
     return route.solution_scale *
         direct_basis_value(_required_basis(route.infinity_out, "infinity_out"), x)
@@ -1539,7 +1558,7 @@ end
 direct_evaluate(route::DirectConjugatedRoute, x) =
     conj(direct_evaluate(route.route, x))
 
-function direct_state(route::DirectRoute, x)
+function direct_state(route::DirectRoute, x; radius=nothing)
     x = Float64(x)
     if route.branch == :IN
         if x <= route.match_x
@@ -1555,23 +1574,15 @@ function direct_state(route::DirectRoute, x)
         end
         if route.endpoint_plan !== nothing &&
                 _endpoint_plan_covers(route.endpoint_plan, x)
-            return _endpoint_plan_state(route, x)
+            return _endpoint_plan_state(route, x; radius)
         end
-        if route.mst_plan !== nothing && x > route.mst_plan.seed_x
+        if route.mst_plan !== nothing
             if _logscaled_mst_eval(route.mst_plan)
                 state = direct_mst_pin_state(
-                    route.coefficients, route.mst_plan, x)
+                    route.coefficients, route.mst_plan, x; radius)
                 return (X=state.X, dXdx=state.dXdx)
             end
-            incoming = direct_mst_state(
-                route.coefficients, route.mst_plan, :in, x)
-            outgoing = direct_mst_state(
-                route.coefficients, route.mst_plan, :out, x)
-            return (
-                X=route.incidence * incoming.X + route.reflection * outgoing.X,
-                dXdx=route.incidence * incoming.dXdx +
-                    route.reflection * outgoing.dXdx,
-            )
+            return _mst_combined_in_state(route, x; radius)
         end
         vin, din = direct_basis_state(_required_basis(route.infinity_in, "infinity_in"), x)
         vout, dout = direct_basis_state(_required_basis(route.infinity_out, "infinity_out"), x)
@@ -1579,6 +1590,9 @@ function direct_state(route::DirectRoute, x)
             X=route.incidence * vin + route.reflection * vout,
             dXdx=route.incidence * din + route.reflection * dout,
         )
+    end
+    if _mst_evaluation_region(route, x)
+        return _physical_mst_out_state(route, x; radius)
     end
     if x <= route.match_x
         if route.bridge !== nothing && _bridge_covers(route.bridge, x)
@@ -1592,23 +1606,27 @@ function direct_state(route::DirectRoute, x)
             dXdx=route.reflection * din + route.incidence * dout,
         )
     end
-    if route.endpoint_bridge !== nothing &&
-            _bridge_covers(route.endpoint_bridge, x)
-        value, derivative = _bridge_state(route.endpoint_bridge, x)
-        return (X=value, dXdx=derivative)
-    end
     if route.endpoint_plan !== nothing &&
             _endpoint_plan_covers(route.endpoint_plan, x)
-        return _endpoint_plan_state(route, x)
+        return _endpoint_plan_state(route, x; radius)
+    end
+    if route.endpoint_bridge !== nothing &&
+            _bridge_covers(route.endpoint_bridge, x)
+        basis = route.endpoint_bridge
+        value, derivative = if radius !== nothing &&
+                basis isa DirectScaledBasis{<:DirectBasis{DirectPatch}}
+            kappa = route.params.kappa
+            y = 2kappa / (radius - 1 + kappa)
+            direct_basis_state(basis.basis, x, y) .* basis.scale
+        else
+            _bridge_state(basis, x)
+        end
+        return (X=value, dXdx=derivative)
     end
     if route.infinity_out isa DirectLogScaledBasis &&
             _bridge_covers(route.infinity_out, x)
         return _physical_logscaled_basis_state(
             route.infinity_out, x, route.solution_scale)
-    end
-    if route.mst_plan !== nothing && x > route.mst_plan.seed_x
-        state = _physical_mst_out_state(route, x)
-        return (X=state.X, dXdx=state.dXdx)
     end
     value, derivative = direct_basis_state(_required_basis(route.infinity_out, "infinity_out"), x)
     return (
@@ -1710,6 +1728,45 @@ end
 
 direct_route_plan(route::DirectConjugatedRoute) =
     direct_route_plan(route.route)
+
+# Relative errors (incidence, reflection) of a real-frequency route. Each basis
+# is propagated with local errors below the route tolerance per step from a
+# seed certified to max(tolerance, the endpoint seed target); a local relative
+# error e perturbs both terms of the matched state by about e times the larger
+# one, so the smaller term c_j g_j loses e |larger| / |c_j g_j|. On the real
+# axis both solutions keep their size along the path, so the term ratio at the
+# match holds along it. The rounding of the 2x2 solve adds eps times the
+# cancellation of each coefficient's numerator.
+function direct_amplitude_errors(route::DirectRoute)
+    target, first, second = route.branch == :IN ?
+        (route.horizon_in, route.infinity_in, route.infinity_out) :
+        (route.infinity_out, route.horizon_in, route.horizon_out)
+    c1, c2 = route.branch == :IN ? (route.incidence, route.reflection) :
+        (route.reflection, route.incidence)
+    tolerance = route.controls.tolerance
+    seed = max(tolerance, _ENDPOINT_SEED_TARGET)
+    local_error = sum(basis -> basis.step_count * tolerance + seed,
+        (target, first, second))
+    t = _logscaled_match_state(target)
+    b1 = _logscaled_match_state(first)
+    b2 = _logscaled_match_state(second)
+    log1 = _logabs(c1) + _logabs(b1.X) + b1.log_scale
+    log2 = _logabs(c2) + _logabs(b2.X) + b2.log_scale
+    larger = max(log1, log2)
+    # Numerators t.X b2' - b2.X t' and b1.X t' - t.X b1': cancellation from the
+    # ratio of their two products (scales cancel).
+    cancellation(ratio) = (1 + abs(ratio)) / abs(1 - ratio)
+    cancel1 = cancellation((b2.X * t.dXdx) / (t.X * b2.dXdx))
+    cancel2 = cancellation((t.X * b1.dXdx) / (b1.X * t.dXdx))
+    e1 = local_error * exp(larger - log1) + eps(Float64) * cancel1
+    e2 = local_error * exp(larger - log2) + eps(Float64) * cancel2
+    finite(value) = isfinite(value) ? Float64(value) : Inf
+    return route.branch == :IN ? (finite(e1), finite(e2)) :
+        (finite(e2), finite(e1))
+end
+
+direct_amplitude_errors(route::DirectConjugatedRoute) =
+    direct_amplitude_errors(route.route)
 
 function direct_route_truncations(route::DirectRoute)
     records = DirectTruncation[]

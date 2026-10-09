@@ -1,6 +1,8 @@
 module DirectComplexRational
 
+using LinearAlgebra: eigvals
 using ....Coordinates: r_from_rstar, rstar_from_r
+using ....Transformation: eta_coefficient
 using ..DirectParameters:
     direct_gsn_controls,
     direct_gsn_parameters
@@ -23,6 +25,7 @@ using ..DirectOrdinaryPointExpansion:
     direct_shifted_infinity_ab!
 using ..DirectLocalSolutionAtZero:
     direct_horizon_exponent,
+    direct_horizon_frequency,
     direct_zero_local_solution
 using ..DirectLFE:
     DDComplex,
@@ -55,6 +58,9 @@ export direct_complex_up_initial_match_candidates
 export direct_complex_offpole_match_plateau_candidate
 
 const _DEFAULT_ORDER = 40
+# The horizon Frobenius series converges; its terms are kept until they lose
+# Float64 credibility instead of being cut at the route order.
+_horizon_series_order(order) = max(order, 128)
 const _NEAR_REAL_MATCH_X = 0.7
 const _NEAR_REAL_MAX_ABS_RE = 1.0
 const _NEAR_REAL_MAX_RATIO = 1.0e-3
@@ -88,6 +94,7 @@ const _HORIZON_STOKES_SEPARATION_RATIO_MIN = 8.0
 const _PATH_DISK_SAFETY = 0.1
 const _STEP_SAFETY = 0.4
 const _MAX_PATCHES = 2048
+const _PATCH_LIMIT_ERROR = "complex rational patch limit reached"
 const _EVALUATION_CHAIN_MAX = 256
 const _PURE_IMAG_LATERAL_ANGLE = 3pi / 8
 const _PURE_IMAG_LATERAL_RATIO = 1.0e-3
@@ -110,6 +117,7 @@ struct DirectComplexRationalSettings
     real_horizon_target::Float64
     infinity_target::Float64
     step_target::Float64
+    tolerance::Float64
 end
 
 @inline function _use_near_real_match(omega)
@@ -132,6 +140,7 @@ function DirectComplexRationalSettings(order::Integer, tolerance::Real)
         max(1.0e-11, 1000 * resolved_tolerance),
         max(1.0e-10, 10_000 * resolved_tolerance),
         max(2.0e-13, 20 * resolved_tolerance),
+        resolved_tolerance,
     )
 end
 
@@ -146,9 +155,14 @@ struct DirectComplexRationalScratch
     bvec::Vector{ComplexF64}
     coeffs1::Vector{ComplexF64}
     coeffs2::Vector{ComplexF64}
+    # Sum of the local relative errors of the accepted steps.
+    local_error::Base.RefValue{Float64}
+    # Optional record of the pair at the path nodes reached (x-derivatives).
+    nodes::Union{Nothing,Vector{NTuple{3,Any}}}
 end
 
-function DirectComplexRationalScratch(coefficients, order::Integer)
+function DirectComplexRationalScratch(coefficients, order::Integer,
+        nodes=nothing)
     size = Int(order) + 1
     return DirectComplexRationalScratch(
         Vector{ComplexF64}(undef, coefficients.ordinary.value_count),
@@ -156,8 +170,67 @@ function DirectComplexRationalScratch(coefficients, order::Integer)
         Vector{ComplexF64}(undef, size),
         Vector{ComplexF64}(undef, size),
         Vector{ComplexF64}(undef, size),
+        Ref(0.0),
+        nodes,
     )
 end
+
+@inline _record_node!(scratch, x, state1, state2) =
+    scratch.nodes === nothing ? nothing :
+        (push!(scratch.nodes, (x, state1, state2)); nothing)
+
+# Local relative error of an accepted step: the truncation score accepts the
+# step; series rounding and the shifted ODE coefficients add their own error.
+@inline _local_error(step) =
+    step.score + step.roundoff + step.coefficient_condition + eps(Float64)
+
+# Real-axis evaluation steps from the junction towards the target; every step
+# but the last is a full step (safety times the distance to the nearest
+# singular point, direction +-1) and does not depend on the target, so each
+# side keeps the full steps already taken and an evaluation only adds the
+# remaining ones. Results are identical to walking from the junction.
+# First-order estimate of the relative X error of a walked state. A local error
+# of relative size e at a node perturbs X by a solution Z with
+# |W(X,Z)| <= 2e|X||X'|, and Z/X then changes by W(X,Z) * integral(W/X^2), W given
+# by Abel's formula. With J = integral of W/X^2 from the junction, the estimate is
+# sum e_k (1 + c_k |J(x) - J_k|) <= T + |J(x)| S1 + S2, c_k = 2|X_k||X'_k|/|W_k|.
+# It is not a certified bound: e_k is the step score, J uses the trapezoid rule,
+# the error at the junction is not included and X' is not covered.
+struct _WalkError
+    J::ComplexF64
+    T::Float64
+    S1::Float64
+    S2::Float64
+end
+
+_WalkError() = _WalkError(0.0im, 0.0, 0.0, 0.0)
+
+mutable struct _RealAxisWalk
+    x::Vector{ComplexF64}
+    state1::Vector{DirectComplexRationalState}
+    state2::Vector{DirectComplexRationalState}
+    patches::Vector{Int}
+    error::Vector{_WalkError}
+end
+
+_walk_error_estimate(e::_WalkError) = e.T + abs(e.J) * e.S1 + e.S2
+
+function _walk_error_step(e::_WalkError, coefficients, x0, state0, x1, state1,
+        score)
+    abel(x) = (d = direct_abel_denominator(coefficients, :horizon, real(x));
+        d.status == "OK" ? ComplexF64(d.denominator) : ComplexF64(NaN))
+    w0 = abel(x0)
+    w1 = abel(x1)
+    J = e.J + (x1 - x0) / 2 * (w0 / state0.X^2 + w1 / state1.X^2)
+    c = 2 * abs(state1.X) * abs(state1.dXdx) / abs(w1)
+    isfinite(J) && isfinite(c) ||
+        return _WalkError(complex(Inf), Inf, Inf, Inf)
+    return _WalkError(J, e.T + score, e.S1 + score * c,
+        e.S2 + score * c * abs(J))
+end
+
+_RealAxisWalk(x, state) = _RealAxisWalk(
+    ComplexF64[x], [state], [state], [0], [_WalkError()])
 
 struct DirectComplexRationalEvaluator{P,C,S}
     params::P
@@ -165,7 +238,22 @@ struct DirectComplexRationalEvaluator{P,C,S}
     settings::S
     match_x::Float64
     match_state::DirectComplexRationalState
+    walks::NTuple{2,_RealAxisWalk}
+    walk_lock::ReentrantLock
+    horizon::Base.RefValue{Any}
+    # Horizon coefficients (A, B, |dA|, |dB|) of the solution in the horizon
+    # basis, when the route resolved them; the horizon anchor uses them
+    # instead of decomposing the walked state.
+    amplitudes::Base.RefValue{Any}
 end
+
+DirectComplexRationalEvaluator(params, coefficients, settings, match_x,
+        match_state) =
+    DirectComplexRationalEvaluator(params, coefficients, settings,
+        Float64(match_x), match_state,
+        (_RealAxisWalk(match_x, match_state),
+            _RealAxisWalk(match_x, match_state)),
+        ReentrantLock(), Ref{Any}(nothing), Ref{Any}(nothing))
 
 @inline _finite_complex(value) = isfinite(real(value)) && isfinite(imag(value))
 @inline _rplus(params) = 1.0 + params.kappa
@@ -177,6 +265,44 @@ end
 
 @inline function _compact_x(params, r)
     return (r - _rplus(params)) / (r - _rminus(params))
+end
+
+# Finite singular points of the x-form radial equation other than the horizon
+# (x = 0) and infinity (x = 1): r = +-ia, r = 0 and the zeros of the GSN eta.
+function _extra_singular_points(params)
+    points = ComplexF64[]
+    for r in (im * params.a, -im * params.a, zero(ComplexF64))
+        x = _compact_x(params, r)
+        isfinite(x) && push!(points, x)
+    end
+    c = [ComplexF64(eta_coefficient(params.s, params.m, params.a,
+        params.omega, params.lambda, -k)) for k in 0:4]
+    degree = findlast(!iszero, c) - 1
+    if degree > 0
+        companion = zeros(ComplexF64, degree, degree)
+        for j in 1:degree
+            companion[1, j] = -c[j + 1] / c[1]
+        end
+        for i in 2:degree
+            companion[i, i - 1] = 1
+        end
+        for r in eigvals(companion)
+            x = _compact_x(params, r)
+            isfinite(x) && push!(points, x)
+        end
+    end
+    return points
+end
+
+# Turns of a path around `point`, relative to the straight chord between its
+# ends (the principal real-axis continuation).
+function _path_winding(nodes, point)
+    total = 0.0
+    for i in 2:length(nodes)
+        total += angle((nodes[i] - point) / (nodes[i - 1] - point))
+    end
+    return round(Int, (total - angle((last(nodes) - point) /
+        (first(nodes) - point))) / (2pi))
 end
 
 @inline _ray_sign(q) = real(q) >= 0 ? 1.0 : -1.0
@@ -949,7 +1075,7 @@ function _horizon_check_from_ab(
     path,
     settings,
 )
-    full_order = min(settings.order, solution.effective_order)
+    full_order = solution.effective_order
     reduced_order = max(2, full_order - 8)
     full = _horizon_state(
         coefficients, solution, kind, path.x, path.logx, full_order)
@@ -965,20 +1091,20 @@ function _horizon_check_from_ab(
 end
 
 function _horizon_check_from_endpoint(
+    A,
+    B,
     coefficients,
     solution,
     kind,
     path,
     settings,
 )
-    full_order = min(settings.order, solution.effective_order)
+    full_order = solution.effective_order
     reduced_order = max(2, full_order - 8)
     full = _horizon_state(
         coefficients, solution, kind, path.x, path.logx, full_order)
     reduced = _horizon_state(
         coefficients, solution, kind, path.x, path.logx, reduced_order)
-    A = direct_poly_value(solution.A, path.x) / path.x
-    B = direct_poly_value(solution.B, path.x) / path.x^2
     score, adjacent, residual = _state_score_from_ab(
         A, B, full, reduced, full.second)
     coeffs = @view solution.coefficients[1:(full_order + 1)]
@@ -1070,12 +1196,14 @@ function _horizon_candidate!(
     settings,
     endpoint_rational=false,
 )
+    # Residuals use the exact ODE coefficients: the horizon-centred A/B series
+    # that generate the Frobenius solution would only check it against itself.
+    A, B = _ode_ab!(scratch, coefficients, path.x)
     checks = if endpoint_rational
         map((solution, kind) -> _horizon_check_from_endpoint(
-            coefficients, solution, kind, path, settings),
+            A, B, coefficients, solution, kind, path, settings),
             solutions, kinds)
     else
-        A, B = _ode_ab!(scratch, coefficients, path.x)
         map((solution, kind) -> _horizon_check_from_ab(
             A, B, coefficients, solution, kind, path, settings),
             solutions, kinds)
@@ -1155,7 +1283,7 @@ function _select_real_horizon_path(
             best = candidate
         end
         structural_ok = all(check ->
-            check.effective_order == settings.order &&
+            check.effective_order == _horizon_series_order(settings.order) &&
             check.truncation_reason == :none &&
             check.adjacent <= settings.horizon_target &&
             check.tail <= settings.horizon_target &&
@@ -1270,6 +1398,10 @@ function _select_horizon_path(
         expected || rethrow()
         real_failure === nothing || error(
             real_failure * " Rotated-path failure: " * message)
+        # The real-axis leg is valid only where prefer_real holds: elsewhere
+        # the horizon solutions' ratio changes along real x by
+        # (x_match/x_seed)^(mu_out - mu_in), which its checks do not see.
+        prefer_real || rethrow()
         try
             return _select_real_horizon_path(
                 coefficients, solutions, kinds, match_x, settings;
@@ -1705,8 +1837,12 @@ function _scaled_horizon_endpoint(endpoint, variable_scale)
     return DirectEndpointCoefficientSet(A, B, endpoint.basis)
 end
 
-function _scaled_y_step!(
+# Scaled endpoint charts: `:y` is x = 1 - s*Y near infinity and `:x` is
+# x = s*Z near the horizon. Both propagate the pair in the chart variable
+# with the endpoint series shifted to each step center.
+function _scaled_step!(
     scratch,
+    chart::Symbol,
     endpoint,
     variable,
     state1,
@@ -1714,53 +1850,9 @@ function _scaled_y_step!(
     h,
     settings,
 )
-    accepted, a_terms, b_terms, coefficient_condition =
-        direct_shifted_infinity_ab!(
-            scratch.avec,
-            scratch.bvec,
-            scratch.pq,
-            endpoint,
-            variable,
-            settings.order;
-            eps_limit=10settings.step_target,
-        )
-    if !accepted && !isfinite(coefficient_condition)
-        return (;
-            state1,
-            state2,
-            score=Inf,
-            adjacent=Inf,
-            residual=Inf,
-            tail=Inf,
-            roundoff=Inf,
-            representation=:scaled_y_shift,
-            target_representation=:scaled_y_shift,
-            coefficient_condition,
-        )
-    end
-    return _local_step_from_ab!(
-        scratch,
-        state1,
-        state2,
-        h,
-        settings,
-        a_terms,
-        b_terms,
-        :scaled_y_shift,
-        coefficient_condition,
-    )
-end
-
-function _scaled_x_step!(
-    scratch,
-    endpoint,
-    variable,
-    state1,
-    state2,
-    h,
-    settings,
-)
-    accepted, a_terms, b_terms, coefficient_condition = direct_shifted_ab!(
+    shift! = chart === :y ? direct_shifted_infinity_ab! : direct_shifted_ab!
+    representation = chart === :y ? :scaled_y_shift : :scaled_x_shift
+    accepted, a_terms, b_terms, coefficient_condition = shift!(
         scratch.avec,
         scratch.bvec,
         scratch.pq,
@@ -1778,8 +1870,8 @@ function _scaled_x_step!(
             residual=Inf,
             tail=Inf,
             roundoff=Inf,
-            representation=:scaled_x_shift,
-            target_representation=:scaled_x_shift,
+            representation,
+            target_representation=representation,
             coefficient_condition,
         )
     end
@@ -1791,13 +1883,14 @@ function _scaled_x_step!(
         settings,
         a_terms,
         b_terms,
-        :scaled_x_shift,
+        representation,
         coefficient_condition,
     )
 end
 
-function _propagate_scaled_y_pair!(
+function _propagate_scaled_pair!(
     scratch,
+    chart::Symbol,
     endpoint,
     variable_scale,
     variable0,
@@ -1806,18 +1899,20 @@ function _propagate_scaled_y_pair!(
     target,
     settings,
 )
+    label, name = chart === :y ? ("scaled-y", "Y") : ("scaled-x", "Z")
     variable = ComplexF64(variable0)
     target_variable = ComplexF64(target)
-    endpoint_zero = inv(ComplexF64(variable_scale))
+    # The opposite singular point in the chart variable.
+    far_endpoint = inv(ComplexF64(variable_scale))
     patches = 0
     rejected = 0
     max_score = 0.0
     while abs(target_variable - variable) >
             100eps(Float64) * max(1.0, abs(variable))
         patches < _MAX_PATCHES ||
-            error("complex rational scaled-y patch limit reached.")
+            error("complex rational $label patch limit reached.")
         remaining = target_variable - variable
-        radius = min(abs(variable), abs(endpoint_zero - variable))
+        radius = min(abs(variable), abs(far_endpoint - variable))
         h = abs(remaining) <= _STEP_SAFETY * radius ? remaining :
             _STEP_SAFETY * radius * remaining / abs(remaining)
         accepted = nothing
@@ -1825,8 +1920,9 @@ function _propagate_scaled_y_pair!(
         best_candidate = nothing
         best_h = h
         for _ in 1:32
-            candidate = _scaled_y_step!(
+            candidate = _scaled_step!(
                 scratch,
+                chart,
                 endpoint,
                 variable,
                 state1,
@@ -1848,7 +1944,7 @@ function _propagate_scaled_y_pair!(
             rejected += 1
         end
         accepted === nothing && error(
-            "complex rational scaled-y step did not certify; Y=$variable, " *
+            "complex rational $label step did not certify; $name=$variable, " *
             "target=$target_variable, best_h=$best_h, best_score=$best_score, " *
             "adjacent=$(best_candidate === nothing ? Inf : best_candidate.adjacent), " *
             "residual=$(best_candidate === nothing ? Inf : best_candidate.residual), " *
@@ -1858,73 +1954,7 @@ function _propagate_scaled_y_pair!(
         state1 = accepted.state1
         state2 = accepted.state2
         max_score = max(max_score, accepted.score)
-        patches += 1
-    end
-    return (; variable, state1, state2, patches, rejected, max_score)
-end
-
-function _propagate_scaled_x_pair!(
-    scratch,
-    endpoint,
-    variable_scale,
-    variable0,
-    state1,
-    state2,
-    target,
-    settings,
-)
-    variable = ComplexF64(variable0)
-    target_variable = ComplexF64(target)
-    infinity = inv(ComplexF64(variable_scale))
-    patches = 0
-    rejected = 0
-    max_score = 0.0
-    while abs(target_variable - variable) >
-            100eps(Float64) * max(1.0, abs(variable))
-        patches < _MAX_PATCHES ||
-            error("complex rational scaled-x patch limit reached.")
-        remaining = target_variable - variable
-        radius = min(abs(variable), abs(infinity - variable))
-        h = abs(remaining) <= _STEP_SAFETY * radius ? remaining :
-            _STEP_SAFETY * radius * remaining / abs(remaining)
-        accepted = nothing
-        best_score = Inf
-        best_candidate = nothing
-        best_h = h
-        for _ in 1:32
-            candidate = _scaled_x_step!(
-                scratch,
-                endpoint,
-                variable,
-                state1,
-                state2,
-                h,
-                settings,
-            )
-            if isfinite(candidate.score) && candidate.score < best_score
-                best_score = candidate.score
-                best_candidate = candidate
-                best_h = h
-            end
-            if isfinite(candidate.score) &&
-                    candidate.score <= settings.step_target
-                accepted = candidate
-                break
-            end
-            h *= 0.5
-            rejected += 1
-        end
-        accepted === nothing && error(
-            "complex rational scaled-x step did not certify; Z=$variable, " *
-            "target=$target_variable, best_h=$best_h, best_score=$best_score, " *
-            "adjacent=$(best_candidate === nothing ? Inf : best_candidate.adjacent), " *
-            "residual=$(best_candidate === nothing ? Inf : best_candidate.residual), " *
-            "tail=$(best_candidate === nothing ? Inf : best_candidate.tail), " *
-            "coefficient_condition=$(best_candidate === nothing ? Inf : best_candidate.coefficient_condition).")
-        variable += h
-        state1 = accepted.state1
-        state2 = accepted.state2
-        max_score = max(max_score, accepted.score)
+        scratch.local_error[] += _local_error(accepted)
         patches += 1
     end
     return (; variable, state1, state2, patches, rejected, max_score)
@@ -1953,71 +1983,107 @@ function _propagate_pair!(
     rejected = 0
     max_score = 0.0
     while abs(target_x - x) > 100eps(Float64) * max(1.0, abs(x))
-        patches < _MAX_PATCHES || error("complex rational patch limit reached.")
-        remaining = target_x - x
-        radius = min(abs(x), abs(1 - x))
-        h = abs(remaining) <= _STEP_SAFETY * radius ? remaining :
-            _STEP_SAFETY * radius * remaining / abs(remaining)
-        initial_h = h
-        accepted = nothing
-        best_score = Inf
-        best_candidate = nothing
-        best_h = h
-        for shifted in (false, true)
-            h = initial_h
-            plateau_candidate = nothing
-            plateau_h = h
-            for _ in 1:32
-                candidate = _local_step!(
-                    scratch, coefficients, x, state1, state2, h, settings,
-                    shifted)
-                if isfinite(candidate.score) && candidate.score < best_score
-                    best_score = candidate.score
-                    best_candidate = candidate
-                    best_h = h
-                end
-                if plateau_candidate === nothing &&
-                        _residual_plateau_step(candidate, settings.step_target)
-                    plateau_candidate = candidate
-                    plateau_h = h
-                end
-                if isfinite(candidate.score) &&
-                        candidate.score <= settings.step_target
-                    accepted = candidate
-                    break
-                end
-                h *= 0.5
-                rejected += 1
-            end
-            if accepted === nothing && plateau_candidate !== nothing
-                accepted = plateau_candidate
-                h = plateau_h
-            end
-            accepted === nothing || break
-        end
-        accepted === nothing && error(
-            "complex rational local step did not certify; x=$x, " *
-            "target=$target_x, best_h=$best_h, best_score=$best_score, " *
-            "adjacent=$(best_candidate === nothing ? Inf : best_candidate.adjacent), " *
-            "residual=$(best_candidate === nothing ? Inf : best_candidate.residual), " *
-            "tail=$(best_candidate === nothing ? Inf : best_candidate.tail), " *
-            "roundoff=$(best_candidate === nothing ? Inf : best_candidate.roundoff), " *
-            "representation=$(best_candidate === nothing ? :none : best_candidate.representation), " *
-            "target_representation=$(best_candidate === nothing ? :none : best_candidate.target_representation), " *
-            "coefficient_condition=$(best_candidate === nothing ? Inf : best_candidate.coefficient_condition).")
-        x += h
-        state1 = accepted.state1
-        state2 = accepted.state2
-        max_score = max(max_score, accepted.score)
+        patches < _MAX_PATCHES || error(
+            "$_PATCH_LIMIT_ERROR at x=$x, target=$target_x.")
+        step = _propagate_step!(
+            scratch, coefficients, x, state1, state2, target_x, settings)
+        x += step.h
+        state1 = step.accepted.state1
+        state2 = step.accepted.state2
+        max_score = max(max_score, step.accepted.score)
+        scratch.local_error[] += _local_error(step.accepted)
         patches += 1
+        rejected += step.rejected
     end
     return (; x, state1, state2, patches, rejected, max_score)
 end
 
+# One accepted step of `_propagate_pair!` from x towards target_x.
+function _propagate_step!(
+    scratch,
+    coefficients,
+    x,
+    state1,
+    state2,
+    target_x,
+    settings,
+)
+    rejected = 0
+    remaining = target_x - x
+    radius = min(abs(x), abs(1 - x))
+    # The direction is formed first, so on a real path a full step is
+    # exactly +-_STEP_SAFETY * radius for every target beyond it.
+    h = abs(remaining) <= _STEP_SAFETY * radius ? remaining :
+        _STEP_SAFETY * radius * (remaining / abs(remaining))
+    initial_h = h
+    accepted = nothing
+    best_score = Inf
+    best_candidate = nothing
+    best_h = h
+    # On complex paths the expanded ordinary P/Q polynomials can lose
+    # digits and force tiny steps; try the endpoint-shifted form first.
+    representations = iszero(imag(x)) ? (false, true) : (true, false)
+    for shifted in representations
+        h = initial_h
+        plateau_candidate = nothing
+        plateau_h = h
+        for _ in 1:32
+            candidate = _local_step!(
+                scratch, coefficients, x, state1, state2, h, settings,
+                shifted)
+            shifted && candidate.representation ==
+                :ordinary_shift_fallback && break
+            if isfinite(candidate.score) && candidate.score < best_score
+                best_score = candidate.score
+                best_candidate = candidate
+                best_h = h
+            end
+            if plateau_candidate === nothing &&
+                    _residual_plateau_step(candidate, settings.step_target)
+                plateau_candidate = candidate
+                plateau_h = h
+            end
+            if isfinite(candidate.score) &&
+                    candidate.score <= settings.step_target
+                accepted = candidate
+                break
+            end
+            h *= 0.5
+            rejected += 1
+        end
+        if accepted === nothing && plateau_candidate !== nothing
+            accepted = plateau_candidate
+            h = plateau_h
+        end
+        accepted === nothing || break
+    end
+    accepted === nothing && error(
+        "complex rational local step did not certify; x=$x, " *
+        "target=$target_x, best_h=$best_h, best_score=$best_score, " *
+        "adjacent=$(best_candidate === nothing ? Inf : best_candidate.adjacent), " *
+        "residual=$(best_candidate === nothing ? Inf : best_candidate.residual), " *
+        "tail=$(best_candidate === nothing ? Inf : best_candidate.tail), " *
+        "roundoff=$(best_candidate === nothing ? Inf : best_candidate.roundoff), " *
+        "representation=$(best_candidate === nothing ? :none : best_candidate.representation), " *
+        "target_representation=$(best_candidate === nothing ? :none : best_candidate.target_representation), " *
+        "coefficient_condition=$(best_candidate === nothing ? Inf : best_candidate.coefficient_condition).")
+    return (; h, accepted, rejected)
+end
+
 function _propagate_pair(coefficients, x0, state1, state2, target, settings)
+    settings = _local_propagation_settings(settings)
     scratch = DirectComplexRationalScratch(coefficients, settings.order)
     return _propagate_pair!(
         scratch, coefficients, x0, state1, state2, target, settings)
+end
+
+function _local_propagation_settings(settings)
+    # Endpoint order need not be used for unscaled local Taylor coefficients:
+    # high orders overflow near x=1 before the small step is multiplied in.
+    order = min(settings.order, 48)
+    return DirectComplexRationalSettings(order, max(2, order - 8),
+        settings.horizon_target, settings.real_horizon_target,
+        settings.infinity_target, settings.step_target, settings.tolerance)
 end
 
 @inline function _seed_bundle(seed)
@@ -2029,7 +2095,109 @@ end
         rejected=0,
         max_score=seed.score,
         scaled_y_patches=0,
+        local_error=0.0,
     )
+end
+
+@inline _chart_variable(chart::Symbol, x) = chart === :y ? 1 - x : x
+
+# Largest |chart variable| ratio of one chart step. A chord that spans a factor
+# g in the chart variable leaves the path by about |nu| ln g in the phase of the
+# local solutions (nu = omega near infinity, the horizon exponent near the
+# horizon), which scales the two solutions against each other by up to
+# g^(2|nu|); like a burial at the junction, that factor may cost at most the
+# tolerance: eps g^(2|nu|) <= tolerance.
+function _chart_growth(chart, params, settings)
+    nu = chart === :y ? params.omega : direct_horizon_frequency(params)
+    return min(_SCALED_Y_CHART_GROWTH,
+        exp(log(settings.tolerance / eps(Float64)) / (2 * abs(nu))))
+end
+
+# Propagate a pair from chart variable `source` to `target` (u = 1 - x for
+# `:y`, u = x for `:x`) with the chart scale `scale`, returning x-derivatives.
+function _scaled_chart_segment(
+    scratch,
+    chart::Symbol,
+    coefficients,
+    scale,
+    source,
+    target,
+    state1,
+    state2,
+    settings,
+)
+    endpoint = chart === :y ?
+        _scaled_infinity_endpoint(coefficients.infinity, scale) :
+        _scaled_horizon_endpoint(coefficients.horizon, scale)
+    to_chart(state) = DirectComplexRationalState(state.X, ComplexF64(
+        chart === :y ? -scale * state.dXdx : scale * state.dXdx))
+    from_chart(state) = DirectComplexRationalState(state.X, ComplexF64(
+        chart === :y ? -state.dXdx / scale : state.dXdx / scale))
+    segment = _propagate_scaled_pair!(
+        scratch,
+        chart,
+        endpoint,
+        scale,
+        source / scale,
+        to_chart(state1),
+        to_chart(state2),
+        target / scale,
+        settings,
+    )
+    return (;
+        state1=from_chart(segment.state1),
+        state2=from_chart(segment.state2),
+        segment.patches,
+        segment.rejected,
+        segment.max_score,
+    )
+end
+
+# Ordinary-point steps along path nodes from `index` towards `last_index`
+# (`step` = +1 or -1), grouping nodes inside the local disk-safety radius.
+# With a chart, stop before nodes inside its physical handoff radius.
+function _ordinary_path_hops(
+    scratch,
+    coefficients,
+    path,
+    x,
+    index,
+    step,
+    last_index,
+    chart,
+    state1,
+    state2,
+    settings,
+)
+    ordinary(node) = chart === nothing ||
+        (chart === :y ? abs(1 - node) >= _SCALED_Y_PHYSICAL_HANDOFF :
+            abs(node) >= _SCALED_X_PHYSICAL_HANDOFF)
+    patches = 0
+    rejected = 0
+    max_score = 0.0
+    while index != last_index && ordinary(path.nodes[index + step])
+        target_index = index + step
+        radius = _PATH_DISK_SAFETY * min(abs(x), abs(1 - x))
+        for candidate_index in (index + 2step):step:last_index
+            candidate = path.nodes[candidate_index]
+            ordinary(candidate) || break
+            abs(candidate - x) <= radius || break
+            target_index = candidate_index
+        end
+        target = path.nodes[target_index]
+        index = target_index
+        abs(target - x) <= 100eps(Float64) * max(1.0, abs(x)) && continue
+        segment = _propagate_pair!(
+            scratch, coefficients, x, state1, state2, target, settings)
+        x = segment.x
+        state1 = segment.state1
+        state2 = segment.state2
+        _record_node!(scratch, x, state1, state2)
+        patches += segment.patches
+        rejected += segment.rejected
+        max_score = max(max_score, segment.max_score)
+    end
+    return (; x, index, state1, state2, patches, rejected, max_score)
 end
 
 function _propagate_on_path(
@@ -2040,23 +2208,25 @@ function _propagate_on_path(
     settings,
     ;
     variable_scale=1.0 + 0.0im,
+    nodes=nothing,
 )
-    scratch = DirectComplexRationalScratch(coefficients, settings.order)
+    settings = _local_propagation_settings(settings)
+    scratch = DirectComplexRationalScratch(coefficients, settings.order, nodes)
     patches = 0
     rejected = 0
     max_score = 0.0
     x = path.x
     source_index = length(path.nodes)
     scaled_y_patches = 0
-    solution_scale = ComplexF64(variable_scale)
-    if !isone(solution_scale)
+    if !isone(ComplexF64(variable_scale))
+        growth = _chart_growth(:y, coefficients.params, settings)
         while source_index > 1 &&
                 abs(1 - x) < _SCALED_Y_PHYSICAL_HANDOFF
             source_y = 1 - x
             propagation_scale = source_y / _SCALED_Y_CHART_SOURCE
             target_magnitude = min(
                 _SCALED_Y_PHYSICAL_HANDOFF,
-                _SCALED_Y_CHART_GROWTH * abs(source_y),
+                growth * abs(source_y),
             )
             target_index = source_index - 1
             for candidate_index in (source_index - 1):-1:1
@@ -2064,34 +2234,13 @@ function _propagate_on_path(
                 abs(candidate_y) <= target_magnitude || break
                 target_index = candidate_index
             end
-            target_y = 1 - path.nodes[target_index]
-            source_variable = source_y / propagation_scale
-            target_variable = target_y / propagation_scale
-            endpoint = _scaled_infinity_endpoint(
-                coefficients.infinity, propagation_scale)
-            state1_y = DirectComplexRationalState(
-                state1.X, ComplexF64(-propagation_scale * state1.dXdx))
-            state2_y = DirectComplexRationalState(
-                state2.X, ComplexF64(-propagation_scale * state2.dXdx))
-            segment = _propagate_scaled_y_pair!(
-                scratch,
-                endpoint,
-                propagation_scale,
-                source_variable,
-                state1_y,
-                state2_y,
-                target_variable,
-                settings,
-            )
+            segment = _scaled_chart_segment(
+                scratch, :y, coefficients, propagation_scale, source_y,
+                1 - path.nodes[target_index], state1, state2, settings)
             x = path.nodes[target_index]
-            state1 = DirectComplexRationalState(
-                segment.state1.X,
-                ComplexF64(-segment.state1.dXdx / propagation_scale),
-            )
-            state2 = DirectComplexRationalState(
-                segment.state2.X,
-                ComplexF64(-segment.state2.dXdx / propagation_scale),
-            )
+            state1 = segment.state1
+            state2 = segment.state2
+            _record_node!(scratch, x, state1, state2)
             source_index = target_index
             patches += segment.patches
             scaled_y_patches += segment.patches
@@ -2099,34 +2248,75 @@ function _propagate_on_path(
             max_score = max(max_score, segment.max_score)
         end
     end
-    while source_index > 1
-        target_index = source_index - 1
-        radius = _PATH_DISK_SAFETY * min(abs(x), abs(1 - x))
-        for candidate_index in (source_index - 2):-1:1
-            abs(path.nodes[candidate_index] - x) <= radius || break
+    ordinary = _ordinary_path_hops(
+        scratch, coefficients, path, x, source_index, -1, 1, nothing,
+        state1, state2, settings)
+    return (;
+        ordinary.x,
+        ordinary.state1,
+        ordinary.state2,
+        patches=patches + ordinary.patches,
+        rejected=rejected + ordinary.rejected,
+        max_score=max(max_score, ordinary.max_score),
+        scaled_y_patches,
+        local_error=scratch.local_error[],
+    )
+end
+
+# Forward propagation from the first path node: ordinary steps until the
+# chart handoff radius, then scaled-chart steps to the last node.
+function _propagate_forward_chart_path(
+    coefficients,
+    path,
+    state1,
+    state2,
+    settings,
+    chart;
+    nodes=nothing,
+)
+    settings = _local_propagation_settings(settings)
+    scratch = DirectComplexRationalScratch(coefficients, settings.order, nodes)
+    last_index = length(path.nodes)
+    ordinary = _ordinary_path_hops(
+        scratch, coefficients, path, first(path.nodes), 1, 1, last_index,
+        chart, state1, state2, settings)
+    (; x, state1, state2, patches, rejected, max_score) = ordinary
+    source_index = ordinary.index
+    scaled_patches = 0
+    chart === nothing && return (;
+        x, state1, state2, patches, rejected, max_score, scaled_patches,
+        local_error=scratch.local_error[])
+    last_variable = _chart_variable(chart, path.nodes[last_index])
+    growth = _chart_growth(chart, coefficients.params, settings)
+    while source_index < last_index
+        source = _chart_variable(chart, x)
+        propagation_scale = source / 0.5
+        target_magnitude = max(
+            abs(last_variable),
+            abs(source) / growth,
+        )
+        target_index = source_index + 1
+        for candidate_index in (source_index + 1):last_index
+            candidate = _chart_variable(chart, path.nodes[candidate_index])
+            abs(candidate) >= target_magnitude || break
             target_index = candidate_index
         end
-        target = path.nodes[target_index]
-        source_index = target_index
-        abs(target - x) <= 100eps(Float64) * max(1.0, abs(x)) && continue
-        segment = _propagate_pair!(
-            scratch, coefficients, x, state1, state2, target, settings)
-        x = segment.x
+        segment = _scaled_chart_segment(
+            scratch, chart, coefficients, propagation_scale, source,
+            _chart_variable(chart, path.nodes[target_index]),
+            state1, state2, settings)
+        x = path.nodes[target_index]
         state1 = segment.state1
         state2 = segment.state2
+        _record_node!(scratch, x, state1, state2)
+        source_index = target_index
         patches += segment.patches
+        scaled_patches += segment.patches
         rejected += segment.rejected
         max_score = max(max_score, segment.max_score)
     end
-    return (;
-        x,
-        state1,
-        state2,
-        patches,
-        rejected,
-        max_score,
-        scaled_y_patches,
-    )
+    return (; x, state1, state2, patches, rejected, max_score, scaled_patches,
+        local_error=scratch.local_error[])
 end
 
 function _propagate_forward_on_path(
@@ -2137,100 +2327,20 @@ function _propagate_forward_on_path(
     settings,
     ;
     variable_scale=1.0 + 0.0im,
+    nodes=nothing,
 )
-    scratch = DirectComplexRationalScratch(coefficients, settings.order)
-    patches = 0
-    rejected = 0
-    max_score = 0.0
-    x = first(path.nodes)
-    source_index = 1
-    last_index = length(path.nodes)
-    scaled_y_patches = 0
-    solution_scale = ComplexF64(variable_scale)
-
-    while source_index < last_index &&
-            (isone(solution_scale) ||
-             abs(1 - path.nodes[source_index + 1]) >=
-                _SCALED_Y_PHYSICAL_HANDOFF)
-        target_index = source_index + 1
-        radius = _PATH_DISK_SAFETY * min(abs(x), abs(1 - x))
-        for candidate_index in (source_index + 2):last_index
-            candidate = path.nodes[candidate_index]
-            if !isone(solution_scale) &&
-                    abs(1 - candidate) < _SCALED_Y_PHYSICAL_HANDOFF
-                break
-            end
-            abs(candidate - x) <= radius || break
-            target_index = candidate_index
-        end
-        target = path.nodes[target_index]
-        source_index = target_index
-        abs(target - x) <= 100eps(Float64) * max(1.0, abs(x)) && continue
-        segment = _propagate_pair!(
-            scratch, coefficients, x, state1, state2, target, settings)
-        x = segment.x
-        state1 = segment.state1
-        state2 = segment.state2
-        patches += segment.patches
-        rejected += segment.rejected
-        max_score = max(max_score, segment.max_score)
-    end
-
-    if !isone(solution_scale)
-        while source_index < last_index
-            source_y = 1 - x
-            propagation_scale = source_y / 0.5
-            target_magnitude = max(
-                abs(1 - path.nodes[last_index]),
-                abs(source_y) / _SCALED_Y_CHART_GROWTH,
-            )
-            target_index = source_index + 1
-            for candidate_index in (source_index + 1):last_index
-                candidate_y = 1 - path.nodes[candidate_index]
-                abs(candidate_y) >= target_magnitude || break
-                target_index = candidate_index
-            end
-            target_y = 1 - path.nodes[target_index]
-            endpoint = _scaled_infinity_endpoint(
-                coefficients.infinity, propagation_scale)
-            state1_y = DirectComplexRationalState(
-                state1.X, ComplexF64(-propagation_scale * state1.dXdx))
-            state2_y = DirectComplexRationalState(
-                state2.X, ComplexF64(-propagation_scale * state2.dXdx))
-            segment = _propagate_scaled_y_pair!(
-                scratch,
-                endpoint,
-                propagation_scale,
-                source_y / propagation_scale,
-                state1_y,
-                state2_y,
-                target_y / propagation_scale,
-                settings,
-            )
-            x = path.nodes[target_index]
-            state1 = DirectComplexRationalState(
-                segment.state1.X,
-                ComplexF64(-segment.state1.dXdx / propagation_scale),
-            )
-            state2 = DirectComplexRationalState(
-                segment.state2.X,
-                ComplexF64(-segment.state2.dXdx / propagation_scale),
-            )
-            source_index = target_index
-            patches += segment.patches
-            scaled_y_patches += segment.patches
-            rejected += segment.rejected
-            max_score = max(max_score, segment.max_score)
-        end
-    end
+    chart = isone(ComplexF64(variable_scale)) ? nothing : :y
+    result = _propagate_forward_chart_path(
+        coefficients, path, state1, state2, settings, chart; nodes)
     return (;
-        x,
-        state1,
-        state2,
-        patches,
-        rejected,
-        max_score,
-        scaled_y_patches,
+        result.x,
+        result.state1,
+        result.state2,
+        result.patches,
+        result.rejected,
+        result.max_score,
+        scaled_y_patches=result.scaled_patches,
+        result.local_error,
     )
 end
 
@@ -2239,94 +2349,20 @@ function _propagate_forward_horizon_path(
     path,
     state1,
     state2,
-    settings,
+    settings;
+    nodes=nothing,
 )
-    scratch = DirectComplexRationalScratch(coefficients, settings.order)
-    patches = 0
-    rejected = 0
-    max_score = 0.0
-    x = first(path.nodes)
-    source_index = 1
-    last_index = length(path.nodes)
-    scaled_x_patches = 0
-
-    while source_index < last_index &&
-            abs(path.nodes[source_index + 1]) >=
-                _SCALED_X_PHYSICAL_HANDOFF
-        target_index = source_index + 1
-        radius = _PATH_DISK_SAFETY * min(abs(x), abs(1 - x))
-        for candidate_index in (source_index + 2):last_index
-            candidate = path.nodes[candidate_index]
-            abs(candidate) >= _SCALED_X_PHYSICAL_HANDOFF || break
-            abs(candidate - x) <= radius || break
-            target_index = candidate_index
-        end
-        target = path.nodes[target_index]
-        source_index = target_index
-        abs(target - x) <= 100eps(Float64) * max(1.0, abs(x)) && continue
-        segment = _propagate_pair!(
-            scratch, coefficients, x, state1, state2, target, settings)
-        x = segment.x
-        state1 = segment.state1
-        state2 = segment.state2
-        patches += segment.patches
-        rejected += segment.rejected
-        max_score = max(max_score, segment.max_score)
-    end
-
-    while source_index < last_index
-        source_x = x
-        propagation_scale = source_x / 0.5
-        target_magnitude = max(
-            abs(path.nodes[last_index]),
-            abs(source_x) / _SCALED_Y_CHART_GROWTH,
-        )
-        target_index = source_index + 1
-        for candidate_index in (source_index + 1):last_index
-            candidate_x = path.nodes[candidate_index]
-            abs(candidate_x) >= target_magnitude || break
-            target_index = candidate_index
-        end
-        target_x = path.nodes[target_index]
-        endpoint = _scaled_horizon_endpoint(
-            coefficients.horizon, propagation_scale)
-        state1_z = DirectComplexRationalState(
-            state1.X, ComplexF64(propagation_scale * state1.dXdx))
-        state2_z = DirectComplexRationalState(
-            state2.X, ComplexF64(propagation_scale * state2.dXdx))
-        segment = _propagate_scaled_x_pair!(
-            scratch,
-            endpoint,
-            propagation_scale,
-            source_x / propagation_scale,
-            state1_z,
-            state2_z,
-            target_x / propagation_scale,
-            settings,
-        )
-        x = target_x
-        state1 = DirectComplexRationalState(
-            segment.state1.X,
-            ComplexF64(segment.state1.dXdx / propagation_scale),
-        )
-        state2 = DirectComplexRationalState(
-            segment.state2.X,
-            ComplexF64(segment.state2.dXdx / propagation_scale),
-        )
-        source_index = target_index
-        patches += segment.patches
-        scaled_x_patches += segment.patches
-        rejected += segment.rejected
-        max_score = max(max_score, segment.max_score)
-    end
+    result = _propagate_forward_chart_path(
+        coefficients, path, state1, state2, settings, :x; nodes)
     return (;
-        x,
-        state1,
-        state2,
-        patches,
-        rejected,
-        max_score,
-        scaled_x_patches,
+        result.x,
+        result.state1,
+        result.state2,
+        result.patches,
+        result.rejected,
+        result.max_score,
+        scaled_x_patches=result.scaled_patches,
+        result.local_error,
     )
 end
 
@@ -2491,6 +2527,24 @@ end
     return ComplexF64(incidence), ComplexF64(reflection)
 end
 
+# Relative errors of the two connection coefficients. A local relative error e
+# of the propagated or seeded states perturbs both terms by about e times the
+# larger one; the term that is smaller by the burial q loses e/q. The rounding
+# of the final 2x2 solve and the Abel normalization of basis2 add to that.
+# The raw Abel mismatch checks propagation before rescaling the second solution.
+function _amplitude_errors(terms, local_error, diagnostics, abel_error,
+        pair_error)
+    largest = max(terms...)
+    e1 = local_error * largest / terms[1] +
+        eps(Float64) * diagnostics.coefficient1_cancellation + pair_error
+    e2 = local_error * largest / terms[2] +
+        eps(Float64) * diagnostics.coefficient2_cancellation + abel_error +
+        pair_error
+    return (_finite_or_inf(e1), _finite_or_inf(e2))
+end
+
+@inline _finite_or_inf(value) = isfinite(value) ? Float64(value) : Inf
+
 function _matching_diagnostics(target, basis1, basis2)
     xscale = max(abs(target.X), abs(basis1.X), abs(basis2.X),
         floatmin(Float64))
@@ -2591,6 +2645,10 @@ function _solve_horizon_angle_at_match(
         diagnostics = _matching_diagnostics(
             horizon.state1, infinity_in, infinity_out)
     end
+    terms = (abs(incidence * infinity_in.X), abs(reflection * infinity_out.X))
+    incidence_error, reflection_error = _amplitude_errors(terms,
+        horizon_seed.score + horizon.local_error + selected.basis_error,
+        diagnostics, selected.abel_error, selected.abel_raw_error)
     endpoint_states = (;
         horizon_in=horizon.state1,
         horizon_out=missing,
@@ -2608,6 +2666,9 @@ function _solve_horizon_angle_at_match(
         matching_condition=diagnostics.condition,
         coefficient1_cancellation=diagnostics.coefficient1_cancellation,
         coefficient2_cancellation=diagnostics.coefficient2_cancellation,
+        burial_ratio=terms[2] / terms[1],
+        incidence_error,
+        reflection_error,
         endpoint_us=1.0e6 * endpoint_seconds,
         propagation_us=1.0e6 * propagation_seconds,
         matching_us=1.0e6 * matching_seconds,
@@ -2622,6 +2683,9 @@ function _horizon_stokes_consensus_retry(
     p,
     settings,
 )
+    # The match result's type depends on branch and endpoint-match route;
+    # one compiled retry serves all of them.
+    Base.@nospecialize selected
     _horizon_stokes_pretrigger(selected, branch, coefficients.params) ||
         return (;
             selected,
@@ -2742,6 +2806,7 @@ function _matching_consensus_retry(
     selected,
     settings,
 )
+    Base.@nospecialize selected
     params = coefficients.params
     candidate_records =
         NamedTuple{(:fraction, :candidate),Tuple{Float64,typeof(selected)}}[]
@@ -2939,7 +3004,7 @@ function _local_solutions(coefficients, branch::Symbol, order::Int)
     if branch == :IN
         return (;
             horizon_in=_complex_horizon_solution(
-                coefficients, :in, order),
+                coefficients, :in, _horizon_series_order(order)),
             horizon_out=nothing,
             infinity_in=_complex_infinity_solution(
                 coefficients, :in, order),
@@ -2949,9 +3014,9 @@ function _local_solutions(coefficients, branch::Symbol, order::Int)
     elseif branch == :UP
         return (;
             horizon_in=_complex_horizon_solution(
-                coefficients, :in, order),
+                coefficients, :in, _horizon_series_order(order)),
             horizon_out=_complex_horizon_solution(
-                coefficients, :out, order),
+                coefficients, :out, _horizon_series_order(order)),
             infinity_in=nothing,
             infinity_out=_complex_infinity_solution(
                 coefficients, :out, order),
@@ -3132,6 +3197,33 @@ function _solve_at_match(
     match_state = nothing
     amplitude_match_policy = :interior
     amplitude_match_x = match_x
+    terms = (1.0, 1.0)
+    infinity_horizon_winding = round(Int, imag(
+        infinity_seed.path.logx - log(infinity_seed.path.x)) / (2pi))
+    horizon_monodromy = exp(2pi * im * infinity_horizon_winding *
+        locals.horizon_in.exponent)
+    # Winding is undone only when the ray encircles the horizon alone:
+    # around any other singular point the monodromy mixes the horizon
+    # solutions. Each turn also scales one horizon solution against the other
+    # by exp(4 pi |Re nu_H|), which the matching cannot recover.
+    for point in _extra_singular_points(params)
+        iszero(_path_winding(infinity_seed.path.nodes, point)) || error(
+            "two-ray coordinate path encircles a singular point of the " *
+            "radial equation at x=$(point).")
+    end
+    # Single turns are verified against winding-free junctions; with more
+    # turns the matched amplitudes disagree although neither test above fires.
+    abs(infinity_horizon_winding) <= 1 || error(
+        "two-ray coordinate path winds $(infinity_horizon_winding) times " *
+        "around the horizon; only single turns are supported.")
+    if !iszero(infinity_horizon_winding)
+        amplification = 4pi * abs(infinity_horizon_winding) *
+            abs(real(direct_horizon_frequency(params)))
+        amplification <= log(settings.infinity_target / eps(Float64)) ||
+            error("two-ray coordinate path winds " *
+                "$(infinity_horizon_winding) times around the horizon; " *
+                "the horizon solutions separate by exp($(amplification)).")
+    end
     matching_seconds = @elapsed begin
         endpoint = branch == :IN ? :infinity : :horizon
         denominator_x = infinity_endpoint_match !== nothing ?
@@ -3177,6 +3269,13 @@ function _solve_at_match(
             incidence, reflection = _connection_coefficients(
                 target_state, basis1, normalization.corrected,
                 denominator_result.denominator)
+            terms = (abs(incidence * basis1.X),
+                abs(reflection * normalization.corrected.X))
+            # IN is an eigenfunction of outer-horizon monodromy. Undo any
+            # extra turns of the infinity ray to retain the real-axis
+            # unit-horizon normalization of the scattering amplitudes.
+            incidence /= horizon_monodromy
+            reflection /= horizon_monodromy
             diagnostics = _matching_diagnostics(
                 target_state, basis1, normalization.corrected)
             if infinity_endpoint_match !== nothing
@@ -3229,6 +3328,8 @@ function _solve_at_match(
             reflection, incidence = _connection_coefficients(
                 target_state, basis1, normalization.corrected,
                 denominator_result.denominator)
+            terms = (abs(reflection * basis1.X),
+                abs(incidence * normalization.corrected.X))
             diagnostics = _matching_diagnostics(
                 target_state, basis1, normalization.corrected)
             if horizon_endpoint_match !== nothing
@@ -3236,6 +3337,24 @@ function _solve_at_match(
                 amplitude_match_x = real(horizon_endpoint_match.x)
             end
             match_state = infinity.state1
+            if !iszero(infinity_horizon_winding)
+                # UP arrives along an infinity ray that winds around the
+                # horizon, where each horizon solution picks up its own
+                # monodromy; restore both coefficients and the principal-
+                # sheet state that the real-axis evaluator starts from.
+                reflection *= horizon_monodromy
+                incidence *= exp(2pi * im * infinity_horizon_winding *
+                    locals.horizon_out.exponent)
+                target_state = DirectComplexRationalState(
+                    reflection * basis1.X +
+                        incidence * normalization.corrected.X,
+                    reflection * basis1.dXdx +
+                        incidence * normalization.corrected.dXdx)
+                match_state = horizon_endpoint_match === nothing ?
+                    target_state :
+                    _propagate_on_path(coefficients, horizon_seed.path,
+                        target_state, target_state, settings).state1
+            end
             endpoint_states = (;
                 horizon_in=basis1,
                 horizon_out=normalization.corrected,
@@ -3249,6 +3368,29 @@ function _solve_at_match(
             0 : infinity_endpoint_match.patches) +
         (horizon_endpoint_match === nothing ?
             0 : horizon_endpoint_match.patches)
+    # Local errors along the target's propagation and the basis' (seed scores
+    # when the basis is matched at its endpoint).
+    leg_error(leg) = leg === nothing ? 0.0 :
+        (hasproperty(leg, :local_error) ? leg.local_error : Inf)
+    target_error, basis_error = if branch == :IN
+        horizon_seed.score + leg_error(horizon) +
+            leg_error(infinity_endpoint_match),
+        infinity_seed.score + (infinity_endpoint_match === nothing ?
+            leg_error(infinity) : 0.0)
+    else
+        infinity_seed.score + leg_error(infinity) +
+            leg_error(horizon_endpoint_match),
+        horizon_seed.score + (horizon_endpoint_match === nothing ?
+            leg_error(horizon) : 0.0)
+    end
+    pair_error = branch == :IN ? normalization.raw_error :
+        max(normalization.raw_error,
+            _infinity_target_error(coefficients, locals.infinity_out,
+                infinity_seed, infinity, settings))
+    errors = _amplitude_errors(terms, target_error + basis_error,
+        diagnostics, normalization.corrected_error, pair_error)
+    incidence_error, reflection_error = branch == :IN ?
+        errors : (errors[2], errors[1])
     return (;
         incidence,
         reflection,
@@ -3256,6 +3398,8 @@ function _solve_at_match(
         match_x,
         amplitude_match_policy,
         amplitude_match_x,
+        infinity_horizon_winding,
+        horizon_monodromy,
         match_state,
         endpoint_states,
         horizon_seed,
@@ -3268,13 +3412,237 @@ function _solve_at_match(
         matching_condition=diagnostics.condition,
         coefficient1_cancellation=diagnostics.coefficient1_cancellation,
         coefficient2_cancellation=diagnostics.coefficient2_cancellation,
+        burial_ratio=terms[2] / terms[1],
+        incidence_error,
+        reflection_error,
+        basis_error,
+        local_error=target_error + basis_error,
         abel_ratio=normalization.ratio,
-        abel_raw_error=normalization.raw_error,
+        abel_raw_error=pair_error,
         abel_error=normalization.corrected_error,
         endpoint_us=1.0e6 * endpoint_seconds,
         propagation_us=1.0e6 * propagation_seconds,
         matching_us=1.0e6 * matching_seconds,
     )
+end
+
+# UP's horizon matching pair does not check propagation from infinity.
+function _infinity_target_error(coefficients, outgoing, seed, target, settings)
+    try
+        incoming = _complex_infinity_solution(
+            coefficients, :in, outgoing.requested_order)
+        scratch = DirectComplexRationalScratch(coefficients, settings.order)
+        A, B = _ode_ab!(scratch, coefficients, seed.path.x)
+        check = _infinity_check_from_ab(A, B, coefficients, incoming,
+            :infinity_in, seed.path, settings)
+        companion_seed = if check.score <= settings.infinity_target
+            (;path=seed.path,checks=(check,))
+        else
+            _select_infinity_path(coefficients,(incoming,),(:infinity_in,),
+                coefficients.params.omega,real(first(seed.path.nodes)),settings)
+        end
+        companion = _propagate_on_path(coefficients, companion_seed.path,
+            companion_seed.checks[1].state, companion_seed.checks[1].state, settings;
+            variable_scale=incoming.variable_scale)
+        denominator = direct_abel_denominator(
+            coefficients, :infinity, companion.x)
+        denominator.status == "OK" || return Inf
+        ratio = _scaled_abel_ratio(
+            companion.state1, target.state1, denominator.denominator)
+        return abs(ratio - 1)
+    catch exception
+        exception isa ErrorException || rethrow()
+        return Inf
+    end
+end
+
+# Real junctions tried when the rays from the default junction cannot reach
+# their endpoint regions (a ray can run into the inner-horizon end of r*).
+# A usable window can be narrow near |a| = 1 (a=.99: x in .85-.87), so the
+# junctions are spaced finely; the search only runs when the default fails.
+const _JUNCTION_SEARCH_X = Tuple(0.02:0.02:0.98)
+
+# Junctions are tried in order of distance from the default one, so the rays
+# stay in the homotopy class of the real-frequency continuation (junctions on
+# the far side of the x(r = +-ia) singular points match another branch). A
+# junction is accepted when its rays do not wind around the horizon and the
+# matching conditioning leaves the route's accuracy target.
+@inline _certified_pair(result, settings) =
+    result.abel_raw_error <= settings.infinity_target
+
+function _junction_search(coefficients, locals, branch, params, settings,
+        default_x)
+    for x in sort(collect(_JUNCTION_SEARCH_X); by=x -> abs(x - default_x))
+        candidate = try
+            _solve_at_match(coefficients, locals, branch,
+                _match_rstar_from_x(params, x), settings)
+        catch exception
+            exception isa ErrorException || rethrow()
+            continue
+        end
+        # A condition number below one means the matching diagnostics
+        # underflowed; such a match is not certified.
+        iszero(candidate.infinity_horizon_winding) &&
+            candidate.matching_condition >= 1 &&
+            eps(Float64) * candidate.matching_condition <=
+                settings.infinity_target &&
+            _certified_pair(candidate, settings) && return candidate
+    end
+    return nothing
+end
+
+# Largest burial of each term along the path of a match: the matching basis is
+# propagated back along the target's path (the infinity pair over the infinity
+# then the horizon path for IN, the horizon pair over the horizon then the
+# infinity path for UP) and, at every node reached, each term c_j g_j is compared
+# with the larger one. Returns (w1, w2) >= 1; Inf when the basis cannot be
+# propagated.
+function _burial_profile(coefficients, locals, branch, result, settings)
+    nodes = NTuple{3,Any}[]
+    try
+        if branch == :IN
+            seed = result.infinity_seed
+            first_state, second_state = seed.checks[1].state, seed.checks[2].state
+            push!(nodes, (seed.path.x, first_state, second_state))
+            back = _propagate_on_path(coefficients, seed.path, first_state,
+                second_state, settings;
+                variable_scale=locals.infinity_in.variable_scale, nodes)
+            _propagate_forward_horizon_path(coefficients,
+                result.horizon_seed.path, back.state1, back.state2, settings;
+                nodes)
+        else
+            seed = result.horizon_seed
+            first_state, second_state = seed.checks[1].state, seed.checks[2].state
+            push!(nodes, (seed.path.x, first_state, second_state))
+            back = _propagate_on_path(coefficients, seed.path, first_state,
+                second_state, settings; nodes)
+            _propagate_forward_on_path(coefficients, result.infinity_seed.path,
+                back.state1, back.state2, settings;
+                variable_scale=locals.infinity_out.variable_scale, nodes)
+        end
+    catch exception
+        exception isa ErrorException || rethrow()
+        return (Inf, Inf)
+    end
+    c1, c2 = branch == :IN ? (result.incidence, result.reflection) :
+        (result.reflection, result.incidence)
+    w1 = 1.0
+    w2 = 1.0
+    for (_, first_state, second_state) in nodes
+        t1 = abs(c1 * first_state.X)
+        t2 = abs(c2 * second_state.X)
+        w1 = max(w1, max(t1, t2) / t1)
+        w2 = max(w2, max(t1, t2) / t2)
+    end
+    return (_finite_or_inf(w1), _finite_or_inf(w2))
+end
+
+# Errors of (incidence, reflection) from a burial profile (w1, w2), coefficient
+# 1 being the basis1 term (IN incidence, UP reflection).
+function _profile_errors(branch, result, profile)
+    e1 = result.local_error * profile[1] +
+        eps(Float64) * result.coefficient1_cancellation + result.abel_raw_error
+    e2 = result.local_error * profile[2] +
+        eps(Float64) * result.coefficient2_cancellation + result.abel_error +
+        result.abel_raw_error
+    e1 = _finite_or_inf(e1)
+    e2 = _finite_or_inf(e2)
+    return branch == :IN ? (e1, e2) : (e2, e1)
+end
+
+# A term smaller than the other by q at the amplitude match loses eps/q of its
+# coefficient's accuracy. Each ray of the two-ray path keeps q r* real (q =
+# omega on the infinity ray, the horizon frequency p on the horizon ray), so
+# the ratio of the outgoing to the ingoing term, terms[2] / terms[1], varies with
+# the junction as exp(-2 Im(q) r*) for q of the branch's matching basis (omega
+# for IN, p for UP). When eps/q exceeds the tolerance and the balance point of
+# the two terms (within the junction search range) is predicted to meet it, the
+# smaller coefficient is solved again there (halfway back while no two-ray path
+# exists). The larger coefficient always comes from the original junction; the
+# smaller one from whichever match has the smaller error from the burial along
+# its whole path (`_burial_profile`), the new one charged with the difference of
+# the two larger coefficients as an independent error check. Where the balance
+# point cannot meet the tolerance (e.g. the suppressed amplitude at a mode
+# frequency), nothing moves and the reported error of the smaller coefficient
+# says that only its size relative to the larger one is resolved.
+function _balance_junction(coefficients, locals, branch, selected, settings,
+        tolerance)
+    params = coefficients.params
+    q = branch == :IN ? params.omega :
+        params.omega - params.m * params.a / (2 * _rplus(params))
+    rate = -2 * imag(q)
+    burial = max(selected.burial_ratio, inv(selected.burial_ratio))
+    (iszero(rate) || eps(Float64) * burial <= tolerance) && return selected, 0
+    base_errors = _profile_errors(branch, selected,
+        _burial_profile(coefficients, locals, branch, selected, settings))
+    base = merge(selected, (;
+        incidence_error=base_errors[1], reflection_error=base_errors[2]))
+    lower, upper = extrema(_match_rstar_from_x(params, x)
+        for x in (first(_JUNCTION_SEARCH_X), last(_JUNCTION_SEARCH_X)))
+    target = clamp(selected.match_rstar - log(selected.burial_ratio) / rate,
+        lower, upper)
+    predicted = selected.burial_ratio * exp(rate * (target - selected.match_rstar))
+    eps(Float64) * max(predicted, inv(predicted)) <= tolerance || return base, 0
+    # The ingoing term is the larger one when terms[2] / terms[1] < 1.
+    inc_larger = (branch == :IN) == (selected.burial_ratio < 1)
+    base_error = inc_larger ? base.reflection_error : base.incidence_error
+    # Error of the smaller coefficient re-solved at the junction a fraction f of
+    # the way to the target; nothing when no match exists there; :unresolved
+    # when the re-solved smaller coefficient differs from the original by more
+    # than one e-fold times both their uncertainties (the original was not
+    # resolved, as at a mode frequency, so no move can be judged). The
+    # coefficients are global, so this holds on any path; the term ratio at the
+    # junction follows exp(rate r*) only on neutral rays.
+    function trial(f)
+        rstar = selected.match_rstar + f * (target - selected.match_rstar)
+        candidate = try
+            _solve_at_match(coefficients, locals, branch, rstar, settings)
+        catch exception
+            exception isa ErrorException || rethrow()
+            return nothing
+        end
+        balance = selected.burial_ratio *
+            exp(rate * (rstar - selected.match_rstar))
+        small, original = inc_larger ?
+            (candidate.reflection, selected.reflection) :
+            (candidate.incidence, selected.incidence)
+        errors = _profile_errors(branch, candidate,
+            _burial_profile(coefficients, locals, branch, candidate, settings))
+        mismatch = max(abs(small / original), abs(original / small))
+        mismatch > exp(1) * (1 + base_error) *
+            (1 + errors[inc_larger ? 2 : 1]) && return :unresolved
+        spread = max(balance, inv(balance))
+        if inc_larger
+            check = abs(candidate.incidence / selected.incidence - 1)
+            return (; error=errors[2] + check * spread,
+                value=candidate.reflection)
+        else
+            check = abs(candidate.reflection / selected.reflection - 1)
+            return (; error=errors[1] + check * spread,
+                value=candidate.incidence)
+        end
+    end
+    # Paths stop existing (or lose their neutral horizon leg) beyond some
+    # distance; bisect the move between the original junction and the target
+    # for the match with the smallest error, to one e-folding length 1/|rate|.
+    best = nothing
+    lo, hi = 0.0, 1.0
+    f = 1.0
+    span = abs(target - selected.match_rstar) * abs(rate)
+    while f * span >= 1
+        result = trial(f)
+        result === :unresolved && return base, 0
+        improved = result !== nothing && result.error < base_error &&
+            (best === nothing || result.error < best.error)
+        improved && (best = result)
+        improved ? (lo = f) : (hi = f)
+        (hi - lo) * span < 1 && break
+        f = (lo + hi) / 2
+    end
+    best === nothing && return base, 0
+    return inc_larger ?
+        (merge(base, (; reflection=best.value, reflection_error=best.error)), 1) :
+        (merge(base, (; incidence=best.value, incidence_error=best.error)), 1)
 end
 
 function direct_complex_rational_build(
@@ -3319,10 +3687,30 @@ function direct_complex_rational_build(
     local_seconds = @elapsed locals = _local_solutions(
         coefficients, branch, order)
 
-    initial = _solve_at_match(
-        coefficients, locals, branch, initial_match_rstar, settings)
+    junction_search = false
+    initial = try
+        _solve_at_match(
+            coefficients, locals, branch, initial_match_rstar, settings)
+    catch exception
+        xm === nothing && occursin("two-ray coordinate path",
+            sprint(showerror, exception)) || rethrow()
+        searched = _junction_search(
+            coefficients, locals, branch, params, settings, initial_match_x)
+        searched === nothing && rethrow()
+        junction_search = true
+        searched
+    end
+    if xm === nothing && !_certified_pair(initial, settings)
+        searched = _junction_search(
+            coefficients, locals, branch, params, settings, initial_match_x)
+        if searched !== nothing
+            initial = searched
+            junction_search = true
+        end
+    end
     selected = initial
-    match_policy = xm !== nothing ? :explicit_x :
+    match_policy = junction_search ? :junction_search :
+        xm !== nothing ? :explicit_x :
         auto_near_real_match ? :near_real_x07 : :rstar_zero
     retry_seconds = 0.0
     if xm === nothing && branch == :UP &&
@@ -3379,12 +3767,25 @@ function direct_complex_rational_build(
         selected = horizon_stokes.selected
         match_policy = :horizon_stokes_consensus
     end
+    balance_iterations = 0
+    balance_seconds = @elapsed if xm === nothing
+        selected, balance_iterations = _balance_junction(
+            coefficients, locals, branch, selected, settings, tolerance)
+        balance_iterations > 0 && (match_policy = :balanced_junction)
+    end
     controls = direct_gsn_controls(
         params; N=order, xm=selected.match_x, tol=tolerance,
         sfe=false, lfe=false)
     evaluator = DirectComplexRationalEvaluator(
         params, coefficients, settings, selected.match_x,
         selected.match_state)
+    # IN is the horizon ingoing solution itself; UP is reflection h_in +
+    # incidence h_out in the same horizon basis.
+    evaluator.amplitudes[] = branch == :IN ?
+        (one(ComplexF64), zero(ComplexF64), 0.0, 0.0) :
+        (selected.reflection, selected.incidence,
+            abs(selected.reflection) * selected.reflection_error,
+            abs(selected.incidence) * selected.incidence_error)
     metadata = (;
         backend=:direct_gsn_two_ray_rational,
         horizon_in_representation=
@@ -3407,10 +3808,17 @@ function direct_complex_rational_build(
         match_x=selected.match_x,
         amplitude_match_policy=selected.amplitude_match_policy,
         amplitude_match_x=selected.amplitude_match_x,
+        infinity_horizon_winding=selected.infinity_horizon_winding,
+        horizon_monodromy=selected.horizon_monodromy,
         initial_matching_condition=initial.matching_condition,
         matching_condition=selected.matching_condition,
         coefficient1_cancellation=selected.coefficient1_cancellation,
         coefficient2_cancellation=selected.coefficient2_cancellation,
+        burial_ratio=selected.burial_ratio,
+        incidence_error=selected.incidence_error,
+        reflection_error=selected.reflection_error,
+        balance_iterations,
+        balance_us=1.0e6 * balance_seconds,
         horizon_path_kind=selected.horizon_seed.path.kind,
         horizon_direction=selected.horizon_seed.path.direction,
         horizon_angle_offset=selected.horizon_seed.path.angle_offset,
@@ -3481,7 +3889,7 @@ function direct_complex_up_horizon_in_candidate(evaluator, metadata)
     settings = evaluator.settings
     match_x = evaluator.match_x
     horizon_in = direct_zero_local_solution(
-        coefficients, :in, settings.order)
+        coefficients, :in, _horizon_series_order(settings.order))
     p = params.omega - params.m * params.a / (2 * _rplus(params))
     seed = _select_rotated_horizon_path(
         coefficients,
@@ -3554,6 +3962,98 @@ function direct_complex_up_initial_match_candidates(evaluator)
     return (; scale, far_rstar, mid_rstar, far, mid, initial)
 end
 
+# Near the horizon a state is A*X_in + B*X_out in the horizon Frobenius basis.
+# A and B are fixed once, at the first full-step node of the horizon-side walk
+# where both series pass the exact-ODE certificate used for route seeds; below
+# that node states come from the series, so they do not depend on the order of
+# evaluation and need none of the small steps that lose certification as
+# x -> 0 at strong damping. Without a certified node the walk is used as before.
+function _horizon_anchor!(evaluator::DirectComplexRationalEvaluator)
+    return lock(evaluator.walk_lock) do
+        cached = evaluator.horizon[]
+        if cached === nothing
+            cached = something(_build_horizon_anchor!(evaluator), false)
+            evaluator.horizon[] = cached
+        end
+        cached === false ? nothing : cached
+    end
+end
+
+function _build_horizon_anchor!(evaluator::DirectComplexRationalEvaluator)
+    coefficients = evaluator.coefficients
+    settings = _local_propagation_settings(evaluator.settings)
+    order = _horizon_series_order(evaluator.settings.order)
+    solutions = (_complex_horizon_solution(coefficients, :in, order),
+        _complex_horizon_solution(coefficients, :out, order))
+    kinds = (:horizon_in, :horizon_out)
+    scratch = DirectComplexRationalScratch(coefficients, settings.order)
+    walk = evaluator.walks[1]
+    k = 1
+    while true
+        x = real(walk.x[k])
+        path = (; x=ComplexF64(x), logx=ComplexF64(log(x)))
+        candidate = _horizon_candidate!(scratch, coefficients, solutions,
+            kinds, path, evaluator.settings, true)
+        candidate.score <= evaluator.settings.real_horizon_target &&
+            return _horizon_anchor(candidate, solutions, walk, k, x,
+                evaluator.amplitudes[])
+        walk.patches[k] < _MAX_PATCHES || return nothing
+        if k == length(walk.x)
+            step = try
+                _propagate_step!(scratch, coefficients, walk.x[k],
+                    walk.state1[k], walk.state2[k], zero(ComplexF64), settings)
+            catch err
+                err isa ErrorException || rethrow()
+                return nothing
+            end
+            push!(walk.x, walk.x[k] + step.h)
+            push!(walk.state1, step.accepted.state1)
+            push!(walk.state2, step.accepted.state2)
+            push!(walk.patches, walk.patches[k] + 1)
+            push!(walk.error, _walk_error_step(walk.error[k], coefficients,
+                walk.x[k], walk.state1[k], walk.x[k] + step.h,
+                step.accepted.state1, step.accepted.score))
+        end
+        k += 1
+    end
+end
+
+function _horizon_anchor(candidate, solutions, walk, k, x, amplitudes)
+    if amplitudes !== nothing
+        A, B, dA, dB = amplitudes
+        e = candidate.score
+        return (; x, solutions, A, B, dA=dA + e * abs(A), dB=dB + e * abs(B),
+            patches=walk.patches[k])
+    end
+    state = walk.state1[k]
+    inn = candidate.checks[1].state
+    out = candidate.checks[2].state
+    det = inn.X * out.dXdx - out.X * inn.dXdx
+    A = (state.X * out.dXdx - out.X * state.dXdx) / det
+    B = (inn.X * state.dXdx - state.X * inn.dXdx) / det
+    # First-order sensitivity of A and B to a relative error e of the walked
+    # state; e is the first-order walk estimate (no seed or junction error), so
+    # dA and dB are estimates, not certified bounds.
+    e = _walk_error_estimate(walk.error[k]) + candidate.score
+    dA = e * (abs(state.X) * abs(out.dXdx) + abs(out.X) * abs(state.dXdx)) /
+        abs(det)
+    dB = e * (abs(inn.X) * abs(state.dXdx) + abs(state.X) * abs(inn.dXdx)) /
+        abs(det)
+    return (; x, solutions, A, B, dA, dB, patches=walk.patches[k])
+end
+
+function _horizon_anchor_state(anchor, coefficients, x::Float64)
+    logx = ComplexF64(log(x))
+    inn = _horizon_state(coefficients, anchor.solutions[1], :horizon_in,
+        ComplexF64(x), logx, anchor.solutions[1].effective_order)
+    out = _horizon_state(coefficients, anchor.solutions[2], :horizon_out,
+        ComplexF64(x), logx, anchor.solutions[2].effective_order)
+    X = anchor.A * inn.X + anchor.B * out.X
+    dXdx = anchor.A * inn.dXdx + anchor.B * out.dXdx
+    error = (anchor.dA * abs(inn.X) + anchor.dB * abs(out.X)) / abs(X)
+    return (; X, dXdx, error, patches=anchor.patches)
+end
+
 function _state_x(evaluator::DirectComplexRationalEvaluator, x::Real)
     target = Float64(x)
     0 < target < 1 ||
@@ -3567,19 +4067,66 @@ function _state_x(evaluator::DirectComplexRationalEvaluator, x::Real)
             patches=0,
         )
     end
-    propagated = _propagate_pair(
-        evaluator.coefficients,
-        evaluator.match_x,
-        evaluator.match_state,
-        evaluator.match_state,
-        target,
-        evaluator.settings,
-    )
+    if target < evaluator.match_x
+        anchor = _horizon_anchor!(evaluator)
+        anchor !== nothing && target <= anchor.x && return _horizon_anchor_state(
+            anchor, evaluator.coefficients, target)
+    end
+    settings = _local_propagation_settings(evaluator.settings)
+    coefficients = evaluator.coefficients
+    target_x = ComplexF64(target)
+    walk = evaluator.walks[target > evaluator.match_x ? 2 : 1]
+    start = lock(evaluator.walk_lock) do
+        k = 1
+        while true
+            x = walk.x[k]
+            abs(target_x - x) <= _STEP_SAFETY * min(abs(x), abs(1 - x)) &&
+                break
+            if k == length(walk.x)
+                walk.patches[k] < _MAX_PATCHES || error(
+                    "$_PATCH_LIMIT_ERROR at x=$x, " *
+                    "target=$target_x.")
+                step = _propagate_step!(
+                    DirectComplexRationalScratch(coefficients, settings.order),
+                    coefficients, x, walk.state1[k], walk.state2[k],
+                    target_x, settings)
+                push!(walk.x, x + step.h)
+                push!(walk.state1, step.accepted.state1)
+                push!(walk.state2, step.accepted.state2)
+                push!(walk.patches, walk.patches[k] + 1)
+                push!(walk.error, _walk_error_step(walk.error[k], coefficients,
+                    x, walk.state1[k], x + step.h, step.accepted.state1,
+                    step.accepted.score))
+            end
+            k += 1
+        end
+        (; x=walk.x[k], state1=walk.state1[k], state2=walk.state2[k],
+            patches=walk.patches[k], error=walk.error[k])
+    end
+    # The remaining steps, as `_propagate_pair!` takes them.
+    scratch = DirectComplexRationalScratch(coefficients, settings.order)
+    x = start.x
+    state1 = start.state1
+    state2 = start.state2
+    walk_error = start.error
+    patches = 0
+    while abs(target_x - x) > 100eps(Float64) * max(1.0, abs(x))
+        patches < _MAX_PATCHES || error(
+            "$_PATCH_LIMIT_ERROR at x=$x, target=$target_x.")
+        step = _propagate_step!(
+            scratch, coefficients, x, state1, state2, target_x, settings)
+        walk_error = _walk_error_step(walk_error, coefficients, x, state1,
+            x + step.h, step.accepted.state1, step.accepted.score)
+        x += step.h
+        state1 = step.accepted.state1
+        state2 = step.accepted.state2
+        patches += 1
+    end
     return (;
-        X=propagated.state1.X,
-        dXdx=propagated.state1.dXdx,
-        error=propagated.max_score,
-        patches=propagated.patches,
+        X=state1.X,
+        dXdx=state1.dXdx,
+        error=_walk_error_estimate(walk_error),
+        patches=start.patches + patches,
     )
 end
 
@@ -3648,7 +4195,7 @@ function _states_x(
             )
         catch error
             if !(error isa ErrorException &&
-                    error.msg == "complex rational patch limit reached.")
+                    startswith(error.msg, _PATCH_LIMIT_ERROR))
                 rethrow()
             end
             base_scale = match_scale
@@ -3682,9 +4229,16 @@ function _states_x(
     current_actual = evaluator.match_state
     current_error = 0.0
     chain_length = 0
+    anchor = split > 0 ? _horizon_anchor!(evaluator) : nothing
     for position in split:-1:1
         index = order[position]
         target = xs[index]
+        if anchor !== nothing && target <= anchor.x
+            state = _horizon_anchor_state(anchor, evaluator.coefficients, target)
+            states[index] = DirectComplexRationalState(state.X, state.dXdx)
+            errors[index] = state.error
+            continue
+        end
         if abs(target - current_x) >
                 100eps(Float64) * max(1.0, abs(current_x))
             if chain_length >= chain_max

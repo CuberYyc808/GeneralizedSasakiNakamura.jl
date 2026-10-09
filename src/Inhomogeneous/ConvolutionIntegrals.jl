@@ -3,7 +3,6 @@ module ConvolutionIntegrals
 using LinearAlgebra
 using SpinWeightedSpheroidalHarmonics
 using KerrGeodesics
-import KerrGeodesics.KerrGeoOrbit: kerr_geo_orbit
 
 using ..ISEM
 using ..Coordinates
@@ -23,13 +22,11 @@ function horizon_factor(ω, a, m)
     return ω / (κ * (2 * rp)^3 * (κ^2 + 4 * ϵ0^2) * 64pi)
 end
 
-const _INHOMOGENEOUS_RESONANCE_TOL = 1e-12
-
 @inline _omega_horizon(a, m) = m * a / (2 * (1 + sqrt(1 - a^2)))
-@inline _skip_infinity_mode(ω; tol = _INHOMOGENEOUS_RESONANCE_TOL) = abs(ω) < tol
-@inline _skip_horizon_mode(a, m, ω; tol = _INHOMOGENEOUS_RESONANCE_TOL) = abs(ω - _omega_horizon(a, m)) < tol
-@inline _skip_radiative_mode(s, a, m, ω; tol = _INHOMOGENEOUS_RESONANCE_TOL) =
-    (s == -2 && _skip_infinity_mode(ω; tol = tol)) || (s == 2 && _skip_horizon_mode(a, m, ω; tol = tol))
+@inline _skip_infinity_mode(ω) = iszero(ω)
+@inline _skip_horizon_mode(a, m, ω) = iszero(ω - _omega_horizon(a, m))
+@inline _skip_radiative_mode(s, a, m, ω) =
+    (s == -2 && _skip_infinity_mode(ω)) || (s == 2 && _skip_horizon_mode(a, m, ω))
 
 function _zero_radiative_mode(ω, trajectory; reason = "")
     return Dict(
@@ -46,51 +43,12 @@ function _zero_radiative_mode(ω, trajectory; reason = "")
     )
 end
 
-const _generic_trapezoidal_cache = Dict{Tuple, Any}()
-const _eccentric_trapezoidal_cache = Dict{Tuple, Any}()
-const _inclined_trapezoidal_cache = Dict{Tuple, Any}()
-const _generic_trapezoidal_last_key = Ref{Any}(nothing)
-const _generic_trapezoidal_last_result = Ref{Any}(nothing)
-const _generic_levin_last_key = Ref{Any}(nothing)
-const _generic_levin_last_result = Ref{Any}(nothing)
-const _eccentric_levin_last_key = Ref{Any}(nothing)
-const _eccentric_levin_last_result = Ref{Any}(nothing)
-const _inclined_levin_last_key = Ref{Any}(nothing)
-const _inclined_levin_last_result = Ref{Any}(nothing)
-const _Y_RADIAL_INFO = Ref(false)
-
-mutable struct OrbitMasterCache
-    lock::ReentrantLock
-    key::Any
-    value::Any
-end
-
-OrbitMasterCache() = OrbitMasterCache(ReentrantLock(), nothing, nothing)
-
-const _eccentric_master_cache = OrbitMasterCache()
-const _generic_master_cache = OrbitMasterCache()
-
-function _cached_orbit_master!(builder, cache::OrbitMasterCache, key)
-    lock(cache.lock) do
-        if isequal(cache.key, key)
-            return cache.value
-        end
-        value = builder()
-        cache.key = key
-        cache.value = value
-        return value
-    end
-end
 
 function with_y_radial_info(f, info::Bool)
-    old_info = _Y_RADIAL_INFO[]
-    _Y_RADIAL_INFO[] = info
-    try
-        return f()
-    finally
-        _Y_RADIAL_INFO[] = old_info
-    end
+    return task_local_storage(f, :GSN_Y_RADIAL_INFO, info)
 end
+
+include("SubmissionGeometry.jl")
 
 mutable struct EccentricFluxCache
     samples::Dict{Int, Dict}
@@ -99,19 +57,63 @@ mutable struct EccentricFluxCache
     phase_vectors::Dict{Tuple{Int, Int, Int, UInt64}, Any}
     levin_phase_factors::Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}
     levin_factored_phase_factors::Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}
+    geometry_owner::Union{Nothing, EccentricGeometryOwner}
 end
 
 mutable struct InclinedFluxCache
     samples::Dict{Int, Dict}
+    geometry_owner::Union{Nothing, InclinedGeometryOwner}
 end
+
+# Preserve existing cache constructor signatures; new submission-aware caches
+# own only their private dictionaries and borrow read-only owner data.
+EccentricFluxCache(samples, levin_samples, adaptive_segments, phase_vectors, phase_factors, factored_factors) =
+    EccentricFluxCache(samples, levin_samples, adaptive_segments, phase_vectors, phase_factors, factored_factors, nothing)
+InclinedFluxCache(samples::Dict{Int, Dict}) = InclinedFluxCache(samples, nothing)
+function EccentricFluxCache(owner::EccentricGeometryOwner)
+    check_submission_geometry(owner, owner.master)
+    cache = EccentricFluxCache()
+    cache.geometry_owner = owner
+    return cache
+end
+function InclinedFluxCache(owner::InclinedGeometryOwner)
+    check_submission_geometry(owner, owner.master)
+    cache = InclinedFluxCache()
+    cache.geometry_owner = owner
+    return cache
+end
+
+function _check_mode_geometry(cache, master::Dict)
+    cache === nothing && return nothing
+    hasproperty(cache, :geometry_owner) || return nothing
+    owner = cache.geometry_owner
+    owner === nothing || check_submission_geometry(owner, master)
+    return nothing
+end
+
+function _clear_private_mode_cache!(cache)
+    for field in fieldnames(typeof(cache))
+        value = getfield(cache, field)
+        value isa AbstractDict && empty!(value)
+    end
+    cache.geometry_owner = nothing
+    return nothing
+end
+clear_eccentric_mode_cache!(cache::EccentricFluxCache) = _clear_private_mode_cache!(cache)
+clear_inclined_mode_cache!(cache::InclinedFluxCache) = _clear_private_mode_cache!(cache)
 
 EccentricFluxCache() = EccentricFluxCache(Dict{Int, Dict}(), Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Int, Int, Int, UInt64}, Any}(), Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}(), Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}())
 EccentricFluxCache(samples::Dict{Int, Dict}) = EccentricFluxCache(samples, Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Int, Int, Int, UInt64}, Any}(), Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}(), Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}())
 InclinedFluxCache() = InclinedFluxCache(Dict{Int, Dict}())
 
 function _cached_eccentric_sample!(cache::EccentricFluxCache, KG_master::Dict, N::Int)
+    _check_mode_geometry(cache, KG_master)
     return get!(cache.samples, N) do
-        subsample_eccentric_sample(KG_master, N)
+        owner = cache.geometry_owner
+        owner === nothing && return subsample_eccentric_sample(KG_master, N)
+        _submission_geometry_lookup!(owner, :samples, N, KG_master) do
+            subsample_eccentric_sample(KG_master, N)
+        end
     end
 end
 
@@ -133,13 +135,18 @@ function _kg_from_presampled_master(KG_sample::Dict)
         "InitialPhases" => KG_sample["InitialPhases"],
     )
     haskey(KG_sample, "e") && (kg["e"] = KG_sample["e"])
-    haskey(KG_sample, "x") && (kg["x"] = KG_sample["x"])
+    haskey(KG_sample, "x") && (kg["Cosθ_inc"] = KG_sample["x"])
     return kg
 end
 
 function _cached_eccentric_cheby_sample!(cache::EccentricFluxCache, KG_master::Dict, N::Int)
+    _check_mode_geometry(cache, KG_master)
     return get!(cache.levin_samples, N) do
-        kerr_geo_eccentric_sample_cheby(_kg_from_presampled_master(KG_master), N)
+        owner = cache.geometry_owner
+        owner === nothing && return kerr_geo_eccentric_sample_cheby(_kg_from_presampled_master(KG_master), N)
+        _submission_geometry_lookup!(owner, :cheby_samples, N, KG_master) do
+            kerr_geo_eccentric_sample_cheby(_kg_from_presampled_master(KG_master), N)
+        end
     end
 end
 
@@ -164,76 +171,56 @@ function prewarm_eccentric_levin_samples!(cache::EccentricFluxCache, KG_master::
 end
 
 function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::Int)
+    _check_mode_geometry(cache, KG_master)
     return get!(cache.samples, K) do
-        subsample_inclined_sample(KG_master, K)
+        owner = cache.geometry_owner
+        owner === nothing && return subsample_inclined_sample(KG_master, K)
+        _submission_geometry_lookup!(owner, :samples, K, KG_master) do
+            subsample_inclined_sample(KG_master, K)
+        end
     end
 end
 
 function _generic_trapezoidal_context(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    key = (a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    return get!(_generic_trapezoidal_cache, key) do
-        KG = kerr_geo_orbit(a, p, e, x)
-        Frequencies = KG["Frequencies"]
-        Γ = Frequencies["ϒt"]
-        ϒr = Frequencies["ϒr"]
-        ϒθ = Frequencies["ϒθ"]
-        ϒφ = Frequencies["ϒϕ"]
-        omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
-        KG_samp = kerr_geo_generic_sample(KG, N_sample, K_sample)
-        SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
-        Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
-        SHsamp = swsh_sample(SH, KG_samp)
-        carter_samp = carter_ingredients_sample(KG_samp, a, m, omega)
-        carter_factor = trapezoidal_1d_integral(carter_samp)
-        return (KG = KG, KG_samp = KG_samp, omega = omega, Γ = Γ, ϒθ = ϒθ,
-                Ysol = Ysol, Ysamp = Ysamp, SH = SH, SHsamp = SHsamp,
-                carter_factor = carter_factor)
-    end
-end
-
-function _eccentric_trapezoidal_context(a, p, e, s, l, m, n, N_sample)
-    key = (a, p, e, s, l, m, n, N_sample)
-    return get!(_eccentric_trapezoidal_cache, key) do
-        KG = kerr_geo_orbit(a, p, e, 1.0)
-        Frequencies = KG["Frequencies"]
-        Γ = Frequencies["ϒt"]
-        ϒθ = Frequencies["ϒθ"]
-        ϒφ = Frequencies["ϒϕ"]
-        ϒr = Frequencies["ϒr"]
-        omega = (m * ϒφ + n * ϒr) / Γ
-        KG_samp = kerr_geo_eccentric_sample(KG, N_sample)
-        SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
-        Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
-        SHsamp = swsh_sample(SH, KG_samp)
-        return (KG = KG, KG_samp = KG_samp, omega = omega, Γ = Γ, ϒθ = ϒθ, Ysol = Ysol, Ysamp = Ysamp, SH = SH, SHsamp = SHsamp)
-    end
+    KG = kerr_geo_orbit(a, p, e, x)
+    Frequencies = KG["Frequencies"]
+    Γ = Frequencies["ϒt"]
+    ϒr = Frequencies["ϒr"]
+    ϒθ = Frequencies["ϒθ"]
+    ϒφ = Frequencies["ϒϕ"]
+    omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
+    KG_samp = kerr_geo_generic_sample(KG, N_sample, K_sample)
+    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+    Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
+    Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
+    SHsamp = swsh_sample(SH, KG_samp)
+    carter_samp = carter_ingredients_sample(KG_samp, a, m, omega)
+    carter_factor = trapezoidal_1d_integral(carter_samp)
+    return (KG = KG, KG_samp = KG_samp, omega = omega, Γ = Γ, ϒθ = ϒθ,
+            Ysol = Ysol, Ysamp = Ysamp, SH = SH, SHsamp = SHsamp,
+            carter_factor = carter_factor)
 end
 
 function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, k::Int, K_interval::Int64, cache = nothing)
-    key = (KG_sample["a"], KG_sample["p"], KG_sample["x"], s, l, m, k, K_interval)
-    return get!(_inclined_trapezoidal_cache, key) do
-        Frequencies = KG_sample["Frequencies"]
-        Γ = Frequencies["ϒt"]
-        ϒθ = Frequencies["ϒθ"]
-        ϒφ = Frequencies["ϒϕ"]
-        a = KG_sample["a"]
-        ω = (m * ϒφ + k * ϒθ) / Γ
-        KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
-        SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-        Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
-        Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
-        Ydic = Dict(
-            "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
-            (s == 2 ? "Cinc" : "Binc") => GridSampling._isem_gsn_incidence_amplitude(Ysol),
-            "Y" => Y,
-            "Yp" => Yp,
-            "X" => X,
-        )
-        SHsamp = swsh_sample(SH, KG_samp)
-        return (KG_samp = KG_samp, Ysol = Ysol, Ydic = Ydic, SH = SH, SHsamp = SHsamp, omega = ω, a = a, m = m, Trajectory = KG_sample["Trajectory"])
-    end
+    Frequencies = KG_sample["Frequencies"]
+    Γ = Frequencies["ϒt"]
+    ϒθ = Frequencies["ϒθ"]
+    ϒφ = Frequencies["ϒϕ"]
+    a = KG_sample["a"]
+    ω = (m * ϒφ + k * ϒθ) / Γ
+    KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
+    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
+    Ydic = Dict(
+        "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
+        (s == 2 ? "Cinc" : "Binc") => GridSampling._isem_gsn_incidence_amplitude(Ysol),
+        "Y" => Y,
+        "Yp" => Yp,
+        "X" => X,
+    )
+    SHsamp = swsh_sample(SH, KG_samp)
+    return (KG_samp = KG_samp, Ysol = Ysol, Ydic = Ydic, SH = SH, SHsamp = SHsamp, omega = ω, a = a, m = m, Trajectory = KG_sample["Trajectory"])
 end
 
 function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Dict, s::Int, a, ω, m, k::Int)
@@ -271,18 +258,12 @@ function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Di
 end
 
 function convolution_integral_generic_trapezoidal_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    key = (a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    if _generic_trapezoidal_last_key[] === key
-        return _generic_trapezoidal_last_result[]
-    end
     KG = kerr_geo_orbit(a, p, e, x)
     Frequencies = KG["Frequencies"]
     Γ = Frequencies["ϒt"]
     omega = (m * Frequencies["ϒϕ"] + n * Frequencies["ϒr"] + k * Frequencies["ϒθ"]) / Γ
     if _skip_radiative_mode(s, a, m, omega)
         result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        _generic_trapezoidal_last_key[] = key
-        _generic_trapezoidal_last_result[] = result
         return result
     end
     ctx = _generic_trapezoidal_context(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
@@ -317,16 +298,10 @@ function convolution_integral_generic_trapezoidal_isem(a, p, e, x, s, l, m, n, k
     else
         error("Spin weight s must be either 2 or -2.")
     end
-    _generic_trapezoidal_last_key[] = key
-    _generic_trapezoidal_last_result[] = result
     return result
 end
 
 function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    key = (a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    if _generic_levin_last_key[] === key
-        return _generic_levin_last_result[]
-    end
     KG = kerr_geo_orbit(a, p, e, x)
     Frequencies = KG["Frequencies"]
     Γ = Frequencies["ϒt"]
@@ -336,8 +311,6 @@ function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sa
     omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
     if _skip_radiative_mode(s, a, m, omega)
         result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        _generic_levin_last_key[] = key
-        _generic_levin_last_result[] = result
         return result
     end
     KG_samp = kerr_geo_generic_sample_cheby(KG, N_sample, K_sample)
@@ -397,8 +370,6 @@ function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sa
     else
         error("Spin weight s must be either 2 or -2.")
     end
-    _generic_levin_last_key[] = key
-    _generic_levin_last_result[] = result
     return result
 end
 
@@ -466,7 +437,7 @@ function _generic_flux_from_cheby_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::D
     K_sample = KG_samp["K_sample"]::Int
     phase_key = (s, N_sample, K_sample, m, n, k)
     if s == 2
-        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n, k)
+        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
         basis_plus = _glevin_basis!(cache, KG_samp, s, Float64(a), 1)
         basis_minus = _glevin_basis!(cache, KG_samp, s, Float64(a), -1)
         radial_factor_vec = _cached_generic_levin_phase_factor!(cache, (:internal_radial_factor, phase_key)) do
@@ -503,7 +474,7 @@ function _generic_flux_from_cheby_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::D
             "SWSH" => SH_samp,
         )
     elseif s == -2
-        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n, k)
+        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
         basis_plus = _glevin_basis!(cache, KG_samp, s, Float64(a), 1)
         basis_minus = _glevin_basis!(cache, KG_samp, s, Float64(a), -1)
         radial_factor_vec = _cached_generic_levin_phase_factor!(cache, (:internal_radial_factor, phase_key)) do
@@ -552,7 +523,19 @@ mutable struct GenericM2FluxCache
     adaptive_levin_segments::Dict{Tuple, Dict}
     adaptive_levin_phase_bases::Dict{Tuple, Any}
     adaptive_levin_weights::Dict{Tuple, Vector{Float64}}
+    geometry_owner::Union{Nothing, GenericGeometryOwner}
 end
+
+GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights) =
+    GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights, nothing)
+function GenericM2FluxCache(owner::GenericGeometryOwner)
+    check_submission_geometry(owner, owner.master)
+    cache = GenericM2FluxCache()
+    cache.geometry_owner = owner
+    return cache
+end
+GenericFluxCache(owner::GenericGeometryOwner) = GenericM2FluxCache(owner)
+clear_generic_mode_cache!(cache::GenericM2FluxCache) = _clear_private_mode_cache!(cache)
 
 GenericM2FluxCache() = GenericM2FluxCache(
     Dict{Tuple{Int, Int}, Dict}(),
@@ -646,16 +629,26 @@ function _trap_weights_1d(N::Int, dq::Float64)
 end
 
 function _cached_generic_sample!(cache::GenericM2FluxCache, KG_master::Dict, N::Int, K::Int)
+    _check_mode_geometry(cache, KG_master)
     key = (N, K)
     return get!(cache.samples, key) do
-        GridSampling.subsample_generic_sample(KG_master, N, K)
+        owner = cache.geometry_owner
+        owner === nothing && return GridSampling.subsample_generic_sample(KG_master, N, K)
+        _submission_geometry_lookup!(owner, :trap_samples, key, KG_master) do
+            GridSampling.subsample_generic_sample(KG_master, N, K)
+        end
     end
 end
 
 function _cached_generic_cheby_sample!(cache::GenericM2FluxCache, KG_master::Dict, N::Int, K::Int)
+    _check_mode_geometry(cache, KG_master)
     key = (N, K)
     return get!(cache.levin_samples, key) do
-        kerr_geo_generic_sample_cheby(_kg_from_presampled_master(KG_master), N, K)
+        owner = cache.geometry_owner
+        owner === nothing && return kerr_geo_generic_sample_cheby(_kg_from_presampled_master(KG_master), N, K)
+        _submission_geometry_lookup!(owner, :cheby_samples, key, KG_master) do
+            kerr_geo_generic_sample_cheby(_kg_from_presampled_master(KG_master), N, K)
+        end
     end
 end
 
@@ -829,18 +822,15 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
 
     qr_vals = _generic_adaptive_cheby_nodes(nr, qr_lo, qr_hi)
     qθ_vals = _generic_adaptive_cheby_nodes(nt, qθ_lo, qθ_hi)
-    rq(qr) = r((qr - qr0) / ϒr)
-    θq(qθ) = θ((qθ - qθ0) / ϒθ)
-    urq(qr) = (r((qr - qr0) / ϒr)^2 + a^2 * cos(θ((qr - qr0) / ϒr))^2) * ur((qr - qr0) / ϒr)
-    uθq(qθ) = (r((qθ - qθ0) / ϒθ)^2 + a^2 * cos(θ((qθ - qθ0) / ϒθ))^2) * uθ((qθ - qθ0) / ϒθ)
     theta_odd(f, q) = q >= π / 2 ? f(q) : -f(π - q)
     theta_odd_derivative(f, q) = q >= π / 2 ? f(q) : f(π - q)
-    theta_even(f, q) = q >= π / 2 ? f(q) : f(π - q)
 
-    r_vals = [rq(q) for q in qr_vals]
-    θ_vals = [θq(q) for q in qθ_vals]
-    ur_fwd = [urq(q) for q in qr_vals]
-    uθ_fwd = [theta_even(uθq, q) for q in qθ_vals]
+    r_vals = GridSampling._phase_values(r, qr_vals, qr0, ϒr)
+    θ_vals = GridSampling._phase_values(θ, qθ_vals, qθ0, ϒθ)
+    ur_fwd = GridSampling._radial_phase_rates(ur, θ, qr_vals, r_vals, a, qr0, ϒr)
+    qθ_rates = map(q -> q >= π / 2 ? q : π - q, qθ_vals)
+    θ_rates = GridSampling._phase_values(θ, qθ_rates, qθ0, ϒθ)
+    uθ_fwd = GridSampling._polar_phase_rates(uθ, r, qθ_rates, θ_rates, a, qθ0, ϒθ)
 
     return Dict{String, Any}(
         "qr" => qr_vals,
@@ -848,13 +838,13 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
         "r" => r_vals,
         "rs" => rstar_from_r.(a, r_vals),
         "θ" => θ_vals,
-        "Δtr" => [Δtr(q) for q in qr_vals],
+        "Δtr" => map(Δtr, qr_vals),
         "Δtθ" => [theta_odd(Δtθ, q) for q in qθ_vals],
-        "Δφr" => [Δφr(q) for q in qr_vals],
+        "Δφr" => map(Δφr, qr_vals),
         "Δφθ" => [theta_odd(Δφθ, q) for q in qθ_vals],
-        "dtr" => [dtr(q) for q in qr_vals],
+        "dtr" => map(dtr, qr_vals),
         "dtθ" => [theta_odd_derivative(dtθ, q) for q in qθ_vals],
-        "dφr" => [dφr(q) for q in qr_vals],
+        "dφr" => map(dφr, qr_vals),
         "dφθ" => [theta_odd_derivative(dφθ, q) for q in qθ_vals],
         "ur_fwd" => ur_fwd,
         "ur_rev" => -ur_fwd,
@@ -865,7 +855,7 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
         "a" => a,
         "p" => get(KG, "p", NaN),
         "e" => get(KG, "e", NaN),
-        "x" => get(KG, "x", NaN),
+        "x" => KG["Cosθ_inc"],
         "E" => KG["Energy"],
         "Lz" => KG["AngularMomentum"],
         "Γ" => Γ,
@@ -881,7 +871,12 @@ end
 
 function _generic_adaptive_segment_sample!(cache::GenericM2FluxCache, KG::Dict, key::GenericAdaptiveLevin2DKey, nr::Int, nt::Int)
     return get!(cache.adaptive_levin_segments, (key.level_r, key.level_theta, key.ib, key.jb, nr, nt)) do
-        _generic_adaptive_segment_sample_cheby(KG, key, nr, nt)
+        owner = cache.geometry_owner
+        owner === nothing && return _generic_adaptive_segment_sample_cheby(KG, key, nr, nt)
+        _submission_geometry_lookup!(owner, :adaptive_segments,
+                (key.level_r, key.level_theta, key.ib, key.jb, nr, nt), KG) do
+            _generic_adaptive_segment_sample_cheby(KG, key, nr, nt)
+        end
     end
 end
 
@@ -927,7 +922,12 @@ end
 function _generic_adaptive_theta_weights!(cache::GenericM2FluxCache, key::GenericAdaptiveLevin2DKey, nt::Int)
     _, _, qθ_lo, qθ_hi = _generic_adaptive_segment_bounds(key)
     return get!(cache.adaptive_levin_weights, (:theta_cc, key.level_theta, key.jb, nt)) do
-        _generic_adaptive_cc_weights(nt, qθ_lo, qθ_hi)
+        owner = cache.geometry_owner
+        owner === nothing && return _generic_adaptive_cc_weights(nt, qθ_lo, qθ_hi)
+        _submission_geometry_lookup!(owner, :adaptive_weights,
+                (:theta_cc, key.level_theta, key.jb, nt), owner.master) do
+            _generic_adaptive_cc_weights(nt, qθ_lo, qθ_hi)
+        end
     end
 end
 
@@ -971,9 +971,9 @@ function _generic_adaptive_segment_amplitude!(cache::GenericM2FluxCache, KG::Dic
     end
     SHsamp = threaded_sampling ? GridSampling.swsh_sample_threaded(SH, KG_samp) : GridSampling.swsh_sample(SH, KG_samp)
     Jpp, Jpm, Jmp, Jmm, _, _, _, _, _, _, prefactor = if s == -2
-        integrand_generic_sample_cheby_m2(KG_samp, Ysamp, SHsamp, n, k)
+        integrand_generic_sample_cheby_m2(KG_samp, Ysamp, SHsamp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
     else
-        integrand_generic_sample_cheby_p2(KG_samp, Ysamp, SHsamp, n, k)
+        integrand_generic_sample_cheby_p2(KG_samp, Ysamp, SHsamp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
     end
 
     basis_plus = _generic_adaptive_phase_basis!(cache, KG_samp, key, s, a, 1)
@@ -1013,106 +1013,59 @@ function prewarm_generic_adaptive_levin_segments!(cache::GenericM2FluxCache, KG_
     return cache
 end
 
-function _generic_m2_m_cache(KG_samp::Dict, m::Int)
-    r = KG_samp["r"]::Vector{Float64}
-    rs = KG_samp["rs"]::Vector{Float64}
-    theta = KG_samp["θ"]::Vector{Float64}
-    N = KG_samp["N_sample"]::Int
-    K = KG_samp["K_sample"]::Int
-    a = KG_samp["a"]::Float64
-    E = KG_samp["E"]::Float64
-    Lz = KG_samp["Lz"]::Float64
-    dqr = pi / (N - 1)
-    dqtheta = pi / (K - 1)
-    wr = _trap_weights_1d(N, dqr)
-    wtheta = _trap_weights_1d(K, dqtheta)
-    qr = [(i - 1) * dqr for i in 1:N]
-    qtheta = [(j - 1) * dqtheta for j in 1:K]
+function _generic_m2_m_cache(KG_samp::Dict, m::Int, geometry::GenericM2Geometry = _generic_m2_geometry(KG_samp))
+    r = geometry.r
+    N = geometry.N
+    K = geometry.K
+    a = geometry.a
     rp = 1.0 + sqrt(1.0 - a^2)
     rm = 1.0 - sqrt(1.0 - a^2)
     inv2kappa = 1.0 / (2.0 * sqrt(1.0 - a^2))
-    dphir = KG_samp["Δφr"]::Vector{Float64}
-    dphitheta = KG_samp["Δφθ"]::Vector{Float64}
+    dphir = geometry.dphir
+    dphitheta = geometry.dphitheta
     m_phase_r = Vector{ComplexF64}(undef, N)
     m_log_phase = Vector{ComplexF64}(undef, N)
-    Np = Vector{Float64}(undef, N)
-    Nm = Vector{Float64}(undef, N)
-    Np2 = Vector{Float64}(undef, N)
-    Nm2 = Vector{Float64}(undef, N)
-    Lp = Vector{Float64}(undef, N)
-    Lm = Vector{Float64}(undef, N)
-    Lp2 = Vector{Float64}(undef, N)
-    Lm2 = Vector{Float64}(undef, N)
-    urp = KG_samp["ur_fwd"]::Vector{Float64}
-    urm = KG_samp["ur_rev"]::Vector{Float64}
     @inbounds for i in 1:N
         ri = r[i]
-        r2 = ri * ri
-        Delta = r2 - 2.0 * ri + a^2
         m_phase_r[i] = exp(-im * m * dphir[i])
         m_log_phase[i] = exp(-im * a * m * log((ri - rp) / (ri - rm)) * inv2kappa)
-        numer = E * (r2 + a^2) - a * Lz
-        Np[i] = (numer + urp[i]) / Delta
-        Nm[i] = (numer + urm[i]) / Delta
-        Np2[i] = Np[i] * Np[i]
-        Nm2[i] = Nm[i] * Nm[i]
-        Lp[i] = (numer - urp[i]) / Delta
-        Lm[i] = (numer - urm[i]) / Delta
-        Lp2[i] = Lp[i] * Lp[i]
-        Lm2[i] = Lm[i] * Lm[i]
     end
     m_phase_theta = Vector{ComplexF64}(undef, K)
-    st = Vector{Float64}(undef, K)
-    ct = Vector{Float64}(undef, K)
-    invst = Vector{Float64}(undef, K)
-    invst2 = Vector{Float64}(undef, K)
-    termM = Vector{ComplexF64}(undef, K)
-    uthetap = KG_samp["uθ_fwd"]::Vector{Float64}
-    uthetam = KG_samp["uθ_rev"]::Vector{Float64}
     @inbounds for j in 1:K
-        stj = sin(theta[j])
-        ctj = cos(theta[j])
-        invstj = 1.0 / stj
-        invst2j = invstj * invstj
         m_phase_theta[j] = exp(-im * m * dphitheta[j])
-        st[j] = stj
-        ct[j] = ctj
-        invst[j] = invstj
-        invst2[j] = invst2j
-        termM[j] = im * stj * (a * E - Lz * invst2j)
-    end
-    rho = Matrix{ComplexF64}(undef, N, K)
-    rhobar = Matrix{ComplexF64}(undef, N, K)
-    invrho = Matrix{ComplexF64}(undef, N, K)
-    rho_minus = Matrix{ComplexF64}(undef, N, K)
-    rho_plus = Matrix{ComplexF64}(undef, N, K)
-    @inbounds for j in 1:K
-        ctj = ct[j]
-        for i in 1:N
-            rhoij = -1.0 / (r[i] - im * a * ctj)
-            rhobarij = -1.0 / (r[i] + im * a * ctj)
-            rho[i, j] = rhoij
-            rhobar[i, j] = rhobarij
-            invrho[i, j] = 1.0 / rhoij
-            rho_minus[i, j] = rhoij - rhobarij
-            rho_plus[i, j] = rhoij + rhobarij
-        end
     end
     radial_phase = Vector{ComplexF64}(undef, N)
     radial_tortoise = Vector{ComplexF64}(undef, N)
     theta_phase = Vector{ComplexF64}(undef, K)
     partial = Vector{ComplexF64}(undef, Threads.maxthreadid())
-    return GenericM2MCache(r, rs, theta, KG_samp["Δtr"], KG_samp["Δtθ"], dphir, dphitheta,
-        KG_samp["CrossFunction"], KG_samp["initialPhases"], wr, wtheta, qr, qtheta,
-        m_phase_r, m_phase_theta, m_log_phase, Np, Nm, Np2, Nm2, Lp, Lm, Lp2, Lm2, st, ct, invst, invst2,
-        termM, uthetap, uthetam, rho, rhobar, invrho, rho_minus, rho_plus,
-        radial_phase, radial_tortoise, theta_phase, partial, N, K, KG_samp["Γ"], E, Lz, a, m)
+    return GenericM2MCache(geometry.r, geometry.rs, geometry.theta, geometry.dtr, geometry.dttheta,
+        geometry.dphir, geometry.dphitheta, geometry.cross, geometry.initial_phases,
+        geometry.wr, geometry.wtheta, geometry.qr, geometry.qtheta,
+        m_phase_r, m_phase_theta, m_log_phase, geometry.Np, geometry.Nm, geometry.Np2, geometry.Nm2,
+        geometry.Lp, geometry.Lm, geometry.Lp2, geometry.Lm2, geometry.st, geometry.ct,
+        geometry.invst, geometry.invst2, geometry.termM, geometry.uthetap, geometry.uthetam,
+        geometry.rho, geometry.rhobar, geometry.invrho, geometry.rho_minus, geometry.rho_plus,
+        radial_phase, radial_tortoise, theta_phase, partial,
+        N, K, geometry.Gamma, geometry.E, geometry.Lz, a, m)
+end
+
+function _generic_geometry_for_sample(cache, KG_samp::Dict)
+    cache isa GenericM2FluxCache || return nothing
+    owner = cache.geometry_owner
+    owner === nothing && return nothing
+    return _submission_geometry_lookup!(owner, :geometries, KG_samp, owner.master) do
+        KG_samp["Trajectory"] === owner.master["Trajectory"] &&
+            KG_samp["Frequencies"] === owner.master["Frequencies"] ||
+            throw(ArgumentError("Geometry sample belongs to another orbit"))
+        _generic_m2_geometry(KG_samp)
+    end
 end
 
 function _cached_m2_mcache!(cache::GenericM2FluxCache, KG_samp::Dict, m::Int)
     key = (m, KG_samp["N_sample"], KG_samp["K_sample"])
     return get!(cache.mcaches, key) do
-        _generic_m2_m_cache(KG_samp, m)
+        geometry = _generic_geometry_for_sample(cache, KG_samp)
+        geometry === nothing ? _generic_m2_m_cache(KG_samp, m) : _generic_m2_m_cache(KG_samp, m, geometry)
     end
 end
 
@@ -1417,6 +1370,7 @@ function _generic_p2_integral_cached!(cache::GenericM2FluxCache, KG_master::Dict
 end
 
 function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
+    _check_mode_geometry(cache, KG_master)
     if !(s == -2 || s == 2)
         error("Spin weight s must be either 2 or -2.")
     end
@@ -1527,6 +1481,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
 end
 
 function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 256, K0::Int = 64, Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, confirm_low_flux::Bool = true)
+    _check_mode_geometry(cache, KG_master)
     if !(s == -2 || s == 2)
         error("Spin weight s must be either 2 or -2.")
     end
@@ -1629,6 +1584,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
         min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH,
         max_depth::Int = 8,
         depth_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
+    _check_mode_geometry(cache, KG_master)
     if !(s == -2 || s == 2)
         error("Spin weight s must be either 2 or -2.")
     end
@@ -1803,6 +1759,7 @@ function _generic_adaptive_levin_result(amp::ComplexF64, KG_master::Dict, Ysol, 
 end
 
 function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing, confirm_low_flux::Bool = true, adaptive::Bool = true, adaptive_local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH, adaptive_max_depth::Int = 8, adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
+    _check_mode_geometry(cache, KG_master)
     levin_cache = cache isa GenericM2FluxCache ? cache : GenericFluxCache()
     if adaptive
         return generic_mode_flux_from_master_cached_adaptive_levin!(
@@ -1858,20 +1815,26 @@ function convolution_integral_generic_adaptive_levin_isem(KG_master::Dict, s, l,
     return convolution_integral_generic_levin_isem(KG_master, s, l, m, n, k, N_sample, K_sample; adaptive = true, kwargs...)
 end
 
-function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, kwargs...)
-    KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
-    KG_master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
-    return convolution_integral_generic_levin_isem(KG_master, s, l, m, n, k, N_sample, K_sample; Nmax = Nmax, Kmax = Kmax, kwargs...)
+function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, cache=nothing, trajectory=nothing, geometry_owner=nothing, kwargs...)
+    route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
+    KG_master = route.master
+    KG_master === nothing && (KG_master = GridSampling.kerr_geo_generic_sample_dense(route.KG, Nmax, Kmax))
+    return convolution_integral_generic_levin_isem(KG_master, s, l, m, n, k, N_sample, K_sample; Nmax = Nmax, Kmax = Kmax, cache=route.cache, kwargs...)
 end
 
 function convolution_integral_generic_adaptive_levin_isem(a, p, e, x, s, l, m, n, k, N_sample::Int64 = 128, K_sample::Int64 = 32; kwargs...)
     return convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample; adaptive = true, kwargs...)
 end
 
-function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
+function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache=nothing, geometry_owner=nothing)
+    if cache !== nothing
+        cache = _submission_public_cache(cache, geometry_owner, :generic)
+        return generic_mode_flux_from_master_cached!(cache, KG_master, s, l, m, n, k;
+            N0=N0, K0=K0, Nmax=Nmax, Kmax=Kmax, sample_tol=sample_tol, tol=tol,
+            max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux,
+            threaded_sampling=threaded_sampling)
+    end
+    geometry_owner === nothing || check_submission_geometry(geometry_owner, KG_master)
     ispow2(N0) || throw(ArgumentError("N0 must be a power of 2"))
     ispow2(K0) || throw(ArgumentError("K0 must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
@@ -1899,7 +1862,7 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
 
     N = N0
     K = K0
-    KG_samp = GridSampling.subsample_generic_sample(KG_master, N, K)
+    KG_samp = _generic_submission_trap_sample(geometry_owner, KG_master, N, K)
     Ysamp = if s == 2
         threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_samp) : GridSampling.y_sample_p2_isem(Ysol, KG_samp)
     else
@@ -1914,7 +1877,7 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
     while N < Nmax || K < Kmax
         N2 = min(2N, Nmax)
         K2 = min(2K, Kmax)
-        next_sample = GridSampling.subsample_generic_sample(KG_master, N2, K2)
+        next_sample = _generic_submission_trap_sample(geometry_owner, KG_master, N2, K2)
         next_Ysamp = threaded_sampling ? GridSampling.refine_generic_y_sample_threaded(Ysol, Ysamp, next_sample) : GridSampling.refine_generic_y_sample(Ysol, Ysamp, next_sample)
         next_SHsamp = threaded_sampling ? GridSampling.refine_generic_swsh_sample_threaded(SH, SHsamp, next_sample) : GridSampling.refine_generic_swsh_sample(SH, SHsamp, next_sample)
         res2 = _generic_flux_from_sample(next_sample, next_Ysamp, next_SHsamp, s, l, m, n, k, a, ω, ϒθ)
@@ -1966,9 +1929,6 @@ end
 
 function generic_mode_flux(a, p, e, x, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
     KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
     KG_master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
     return generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
 end
@@ -2166,29 +2126,26 @@ const DEFAULT_ADAPTIVE_LEVIN_LOCAL_N = 16
 const DEFAULT_ADAPTIVE_LEVIN_TOL0 = 1e-6
 const DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH = 2
 const DEFAULT_ADAPTIVE_LEVIN_TOL_MAX = 1e-2
-const _levin_1d_local_plan_cache = Dict{Tuple{Int, Int}, Levin1DLocalPlan}()
 
 function _levin_1d_local_plan(n::Int, local_order::Int)
     p = min(max(local_order, 4), n)
-    return get!(_levin_1d_local_plan_cache, (n, p)) do
-        x_ref = [cos(π * k / (n - 1)) for k in 0:n-1]
-        x_phys = π .* (x_ref .+ 1.0) ./ 2.0
-        perm = sortperm(x_phys)
-        x = Float64.(x_phys[perm])
-        segments = Levin1DLocalSegmentPlan[]
-        start = 1
-        while start < n
-            stop = min(start + p - 1, n)
-            if 0 < n - stop < 3
-                stop = n
-            end
-            idx = start:stop
-            push!(segments, Levin1DLocalSegmentPlan(idx, _diff_matrix_arbitrary_nodes(collect(x[idx]))))
-            stop == n && break
-            start = stop
+    x_ref = [cos(π * k / (n - 1)) for k in 0:n-1]
+    x_phys = π .* (x_ref .+ 1.0) ./ 2.0
+    perm = sortperm(x_phys)
+    x = Float64.(x_phys[perm])
+    segments = Levin1DLocalSegmentPlan[]
+    start = 1
+    while start < n
+        stop = min(start + p - 1, n)
+        if 0 < n - stop < 3
+            stop = n
         end
-        Levin1DLocalPlan(perm, x, segments)
+        idx = start:stop
+        push!(segments, Levin1DLocalSegmentPlan(idx, _diff_matrix_arbitrary_nodes(collect(x[idx]))))
+        stop == n && break
+        start = stop
     end
+    return Levin1DLocalPlan(perm, x, segments)
 end
 
 function _levin_1d_local_segment(f_vals::Vector{<:Number}, gprime_vals::Vector{<:Number}, g_left::Number, g_right::Number, x::Vector{Float64}, D::Matrix{Float64} = _diff_matrix_arbitrary_nodes(x))
@@ -2814,8 +2771,8 @@ function convolution_integral_generic_levin(a, p, e, x, s, l, m, n, k, N_sample,
     end
 end
 
-function convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N_sample)
-    KG = kerr_geo_orbit(a, p, e, 1.0)  # Assume this handles equatorial case
+function convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N_sample; x=1.0)
+    KG = kerr_geo_orbit(a, p, e, x)
     
     # Extract frequencies and compute omega (radial-only mode)
     Frequencies = KG["Frequencies"]
@@ -2873,9 +2830,9 @@ function convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N_sampl
     end
 end
 
-function convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N_sample)
+function convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N_sample; x=1.0)
 
-    KG = kerr_geo_orbit(a, p, e, 1.0)
+    KG = kerr_geo_orbit(a, p, e, x)
 
     Frequencies = KG["Frequencies"]
     Γ = Frequencies["ϒt"]
@@ -2883,10 +2840,7 @@ function convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N_sample)
     ϒφ = Frequencies["ϒϕ"]
     omega = (m * ϒφ + n * ϒr) / Γ
     if _skip_radiative_mode(s, a, m, omega)
-        result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        _eccentric_levin_last_key[] = key
-        _eccentric_levin_last_result[] = result
-        return result
+        return _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
     end
     rsin = rstar_from_r(a, 1+sqrt(1-a^2)+1e-4)
     rsout = max(500.0, 10pi / abs(omega))
@@ -3073,9 +3027,9 @@ function convolution_integral_inclined_levin(a, p, x, s, l, m, k, K_sample)
     end
 end
 
-function convolution_integral_circular_equatorial_m2(a, p, l, m)
+function convolution_integral_circular_equatorial_m2(a, p, l, m; x=1.0)
 
-    KG = kerr_geo_orbit(a, p, 0.0, 1.0)
+    KG = kerr_geo_orbit(a, p, 0.0, x)
     E = KG["Energy"]
     Lz = KG["AngularMomentum"]
     Γ = KG["Frequencies"]["ϒt"]
@@ -3153,9 +3107,9 @@ function convolution_integral_circular_equatorial_m2(a, p, l, m)
     )
 end
 
-function convolution_integral_circular_equatorial_p2(a, p, l, m)
+function convolution_integral_circular_equatorial_p2(a, p, l, m; x=1.0)
 
-    KG = kerr_geo_orbit(a, p, 0.0, 1.0)
+    KG = kerr_geo_orbit(a, p, 0.0, x)
     E = KG["Energy"]
     Lz = KG["AngularMomentum"]
     Γ = KG["Frequencies"]["ϒt"]
@@ -3241,11 +3195,11 @@ function convolution_integral_circular_equatorial_p2(a, p, l, m)
     )
 end
 
-function convolution_integral_circular_equatorial(a, p, s, l, m)
+function convolution_integral_circular_equatorial(a, p, s, l, m; x=1.0)
     if s == 2
-        return convolution_integral_circular_equatorial_p2(a, p, l, m)
+        return convolution_integral_circular_equatorial_p2(a, p, l, m; x)
     elseif s == -2
-        return convolution_integral_circular_equatorial_m2(a, p, l, m)
+        return convolution_integral_circular_equatorial_m2(a, p, l, m; x)
     else
         error("Spin weight s must be either 2 or -2.")
     end
@@ -3253,9 +3207,6 @@ end
 
 function convolution_integral_trapezoidal(a, p, e, x, s, l, m, n, k; N = 256, K = 64)
     KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
     if m == 0 && n == 0 && k == 0
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
@@ -3272,7 +3223,7 @@ function convolution_integral_trapezoidal(a, p, e, x, s, l, m, n, k; N = 256, K 
                     "SWSH" => nothing
                     )
         end
-        return convolution_integral_circular_equatorial(a, p, s, l, m)
+        return convolution_integral_circular_equatorial(a, p, s, l, m; x)
     elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0
             return Dict(
@@ -3300,7 +3251,7 @@ function convolution_integral_trapezoidal(a, p, e, x, s, l, m, n, k; N = 256, K 
                     "SWSH" => nothing
                     )
         end
-        return convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N)
+        return convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N; x)
     else
         return convolution_integral_generic_trapezoidal(a, p, e, x, s, l, m, n, k, N, K)
     end
@@ -3308,9 +3259,6 @@ end
 
 function convolution_integral_levin(a, p, e, x, s, l, m, n, k; N = 256, K = 32)
     KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
     if m == 0 && n == 0 && k == 0
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
@@ -3327,7 +3275,7 @@ function convolution_integral_levin(a, p, e, x, s, l, m, n, k; N = 256, K = 32)
                     "SWSH" => nothing
                     )
         end
-        return convolution_integral_circular_equatorial(a, p, s, l, m)
+        return convolution_integral_circular_equatorial(a, p, s, l, m; x)
     elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0
             return Dict(
@@ -3355,14 +3303,14 @@ function convolution_integral_levin(a, p, e, x, s, l, m, n, k; N = 256, K = 32)
                     "SWSH" => nothing
                     )
         end
-        return convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N)
+        return convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N; x)
     else
         return convolution_integral_generic_levin(a, p, e, x, s, l, m, n, k, N, K)
     end
 end
 
-function convolution_integral_circular_equatorial_isem(a, p, s, l, m)
-    KG = kerr_geo_orbit(a, p, 0.0, 1.0)
+function convolution_integral_circular_equatorial_isem(a, p, s, l, m; x=1.0, trajectory=nothing)
+    KG = _submission_public_trajectory(a, p, 0.0, x, trajectory)
     E = KG["Energy"]
     Lz = KG["AngularMomentum"]
     Γ = KG["Frequencies"]["ϒt"]
@@ -3477,13 +3425,15 @@ function convolution_integral_circular_equatorial_isem(a, p, s, l, m)
     end
 end
 
-function convolution_integral_eccentric_trapezoidal_isem(a, p, e, s, l, m, n, N_sample; Nmax::Int = 2^14, kwargs...)
-    KG = kerr_geo_orbit(a, p, e, 1.0)
-    KG_sample = kerr_geo_eccentric_sample_dense(KG, Nmax)
-    return convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N_sample; Nmax = Nmax, kwargs...)
+function convolution_integral_eccentric_trapezoidal_isem(a, p, e, s, l, m, n, N_sample; x=1.0, Nmax::Int = 2^14, cache=nothing, trajectory=nothing, geometry_owner=nothing, kwargs...)
+    route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
+    KG_sample = route.master
+    KG_sample === nothing && (KG_sample = kerr_geo_eccentric_sample_dense(route.KG, Nmax))
+    return convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N_sample; Nmax = Nmax, cache=route.cache, kwargs...)
 end
 
 function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+    _check_mode_geometry(cache, KG_sample)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
     N_sample <= Nmax || throw(ArgumentError("N_sample must not exceed Nmax"))
@@ -3725,10 +3675,20 @@ end
 function _cached_adaptive_eccentric_segment_bundle!(cache, KG::Dict, local_n::Int, level::Int, bin::Int)
     if cache isa EccentricFluxCache
         return get!(cache.adaptive_levin_segments, (local_n, level, bin)) do
-            nbin = 2^level
-            qlo = π * bin / nbin
-            qhi = π * (bin + 1) / nbin
-            eccentric_segment_sample_bundle_cheby(KG, qlo, qhi, local_n)
+            build = function()
+                nbin = 2^level
+                qlo = π * bin / nbin
+                qhi = π * (bin + 1) / nbin
+                eccentric_segment_sample_bundle_cheby(KG, qlo, qhi, local_n)
+            end
+            owner = cache.geometry_owner
+            owner === nothing && return build()
+            _submission_geometry_lookup!(owner, :adaptive_segments, (local_n, level, bin), owner.master) do
+                KG["Trajectory"] === owner.master["Trajectory"] &&
+                    KG["Frequencies"] === owner.master["Frequencies"] ||
+                    throw(ArgumentError("Adaptive segment belongs to another orbit"))
+                build()
+            end
         end
     end
     nbin = 2^level
@@ -3836,6 +3796,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
         zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
         cache = nothing)
+    _check_mode_geometry(cache, KG_sample)
     local_n >= 2 || throw(ArgumentError("local_n must be at least 2"))
     max_depth >= 0 || throw(ArgumentError("max_depth must be nonnegative"))
     adaptive_tol0 = sample_tol === nothing ? tol0 : Float64(sample_tol)
@@ -3967,6 +3928,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
 end
 
 function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+    _check_mode_geometry(cache, KG_sample)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
     N_sample <= Nmax || throw(ArgumentError("N_sample must not exceed Nmax"))
@@ -4045,13 +4007,10 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
     return res
 end
 
-function convolution_integral_eccentric_levin_isem(a, p, e, s, l, m, n, N_sample)
-    key = (a, p, e, s, l, m, n, N_sample)
-    if _eccentric_levin_last_key[] === key
-        return _eccentric_levin_last_result[]
-    end
+function convolution_integral_eccentric_levin_isem(a, p, e, s, l, m, n, N_sample; x=1.0)
+    key = (a, p, e, x, s, l, m, n, N_sample)
 
-    KG = kerr_geo_orbit(a, p, e, 1.0)
+    KG = kerr_geo_orbit(a, p, e, x)
 
     Frequencies = KG["Frequencies"]
     Γ = Frequencies["ϒt"]
@@ -4112,12 +4071,11 @@ function convolution_integral_eccentric_levin_isem(a, p, e, s, l, m, n, N_sample
     else
         error("Spin weight s must be either 2 or -2.")
     end
-    _eccentric_levin_last_key[] = key
-    _eccentric_levin_last_result[] = result
     return result
 end
 
 function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+    _check_mode_geometry(cache, KG_sample)
     ispow2(K_sample) || throw(ArgumentError("K_sample must be a power of 2"))
     ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
     K_sample <= Kmax || throw(ArgumentError("K_sample must not exceed Kmax"))
@@ -4190,19 +4148,18 @@ function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m
     return res
 end
 
-function convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K_sample; Kmax::Int = 2^12, kwargs...)
-    KG = kerr_geo_orbit(a, p, 0.0, x)
-    KG_sample = kerr_geo_inclined_sample_dense(KG, x, Kmax)
-    return convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K_sample; Kmax = Kmax, kwargs...)
+function convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K_sample; Kmax::Int = 2^12, cache=nothing, trajectory=nothing, geometry_owner=nothing, kwargs...)
+    route = _submission_public_route(a, p, 0.0, x, cache, trajectory, geometry_owner)
+    KG_sample = route.master
+    KG_sample === nothing && (KG_sample = kerr_geo_inclined_sample_dense(route.KG, x, Kmax))
+    return convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K_sample; Kmax = Kmax, cache=route.cache, kwargs...)
 end
 
-function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
-    key = (a, p, x, s, l, m, k, K_sample)
-    if _inclined_levin_last_key[] === key
-        return _inclined_levin_last_result[]
-    end
+function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample; cache=nothing, trajectory=nothing, geometry_owner=nothing)
 
-    KG = kerr_geo_orbit(a, p, 0.0, x)
+    cache = _submission_public_cache(cache, geometry_owner, :inclined)
+    KG = _submission_public_trajectory(a, p, 0.0, x, trajectory)
+    _submission_public_master(cache, KG)
 
     Frequencies = KG["Frequencies"]
     Γ = Frequencies["ϒt"]
@@ -4211,15 +4168,13 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
     omega = (m * ϒφ + k * ϒθ) / Γ
     if _skip_radiative_mode(s, a, m, omega)
         result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        _inclined_levin_last_key[] = key
-        _inclined_levin_last_result[] = result
         return result
     end
 
     rsin = rstar_from_r(a, 1+sqrt(1-a^2)+1e-4)
     rsout = max(200.0, 10pi / abs(omega))
-    KG_samp = kerr_geo_inclined_sample_cheby(KG, K_sample)
-    KG_trap = kerr_geo_inclined_sample(KG, K_sample)
+    KG_samp = _inclined_levin_owner_sample(cache, KG, K_sample, true)
+    KG_trap = _inclined_levin_owner_sample(cache, KG, K_sample, false)
     carter_samp = carter_ingredients_sample(KG_trap, a, m, omega)
     carter_factor = trapezoidal_1d_integral(carter_samp)
 
@@ -4279,64 +4234,57 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample)
     else
         error("Spin weight s must be either 2 or -2.")
     end
-    _inclined_levin_last_key[] = key
-    _inclined_levin_last_result[] = result
     return result
 end
 
-function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax::Int = 2^14, Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
+function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax::Int = 2^14, Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache=nothing, trajectory=nothing, geometry_owner=nothing)
+    route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
+    KG = route.KG
     if m == 0 && n == 0 && k == 0
-        KG = kerr_geo_orbit(a, p, e, x)
-        typeof(KG) == Vector{String} && return KG
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
     if isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0 || k != 0
-            KG = kerr_geo_orbit(a, p, e, x)
-            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        return convolution_integral_circular_equatorial_isem(a, p, s, l, m)
+        return convolution_integral_circular_equatorial_isem(a, p, s, l, m; x, trajectory=isequal(e, 0.0) ? KG : nothing)
     elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0
-            KG = kerr_geo_orbit(a, p, e, x)
-            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        return convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
+        # The original tolerance-based near-e branch projects onto e=0.
+        # Borrowing the raw-e owner would change that trajectory. Keep its
+        # original private helper; ordinary exact-e=0 still shares geometry.
+        if !isequal(e, 0.0)
+            return convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K;
+                Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux,
+                mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux,
+                threaded_sampling=threaded_sampling)
+        end
+        master = route.master
+        master === nothing && (master = kerr_geo_inclined_sample_dense(KG, x, Kmax))
+        return convolution_integral_inclined_trapezoidal_isem(master, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache=route.cache)
     elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if k != 0
-            KG = kerr_geo_orbit(a, p, e, x)
-            typeof(KG) == Vector{String} && return KG
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        master = _cached_orbit_master!(_eccentric_master_cache,
-                (a, p, e, Nmax)) do
-            KG = kerr_geo_orbit(a, p, e, x)
-            typeof(KG) == Vector{String} && return KG
-            kerr_geo_eccentric_sample_dense(KG, Nmax)
-        end
-        typeof(master) == Vector{String} && return master
+        master = route.master
+        master === nothing && (master = kerr_geo_eccentric_sample_dense(KG, Nmax))
         return convolution_integral_eccentric_trapezoidal_isem(master,
             s, l, m, n, N; Nmax = Nmax, tol = tol,
             sample_tol = sample_tol, max_flux = max_flux,
             mode_abs_floor = mode_abs_floor,
             zero_low_flux = zero_low_flux,
-            threaded_sampling = threaded_sampling)
+            threaded_sampling = threaded_sampling, cache=route.cache)
     else
-        master = _cached_orbit_master!(_generic_master_cache,
-                (a, p, e, x, Nmax, Kmax)) do
-            KG = kerr_geo_orbit(a, p, e, x)
-            typeof(KG) == Vector{String} && return KG
-            GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
-        end
-        typeof(master) == Vector{String} && return master
+        master = route.master
+        master === nothing && (master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax))
         return generic_mode_flux_from_master(master, s, l, m, n, k;
             N0 = N, K0 = K, Nmax = Nmax, Kmax = Kmax, tol = tol,
             sample_tol = sample_tol, max_flux = max_flux,
             mode_abs_floor = mode_abs_floor,
             zero_low_flux = zero_low_flux,
-            threaded_sampling = threaded_sampling)
+            threaded_sampling = threaded_sampling, cache=route.cache)
     end
 end
 
@@ -4355,11 +4303,10 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
         adaptive_local_n::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
         adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH,
         adaptive_max_depth::Int = 8,
-        adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
-    KG = kerr_geo_orbit(a, p, e, x)
-    if typeof(KG) == Vector{String}
-        return KG
-    end
+        adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX,
+        cache=nothing, trajectory=nothing, geometry_owner=nothing)
+    route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
+    KG = route.KG
     if m == 0 && n == 0 && k == 0
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
@@ -4367,19 +4314,22 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
         if n != 0 || k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        return convolution_integral_circular_equatorial_isem(a, p, s, l, m)
+        return convolution_integral_circular_equatorial_isem(a, p, s, l, m; x, trajectory=isequal(e, 0.0) ? KG : nothing)
     elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
         if n != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        return convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K)
+        if !isequal(e, 0.0)
+            return convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K)
+        end
+        return convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K; cache=route.cache, trajectory=KG, geometry_owner=geometry_owner)
     elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         if adaptive
             return convolution_integral_eccentric_adaptive_levin_isem(
-                KG, s, l, m, n;
+                route.master === nothing ? KG : route.master, s, l, m, n;
                 tol = tol,
                 tol0 = sample_tol,
                 local_n = adaptive_local_n,
@@ -4388,21 +4338,25 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
                 depth_tol_max = adaptive_tol_max,
                 mode_abs_floor = mode_abs_floor,
                 zero_low_flux = zero_low_flux,
-                threaded_sampling = threaded_sampling,
+                threaded_sampling = threaded_sampling, cache=route.cache,
             )
         end
+        master = route.master
+        master === nothing && (master = kerr_geo_eccentric_sample_dense(KG, Nmax))
         return convolution_integral_eccentric_levin_isem(
-            KG_sample, s, l, m, n, N;
+            master, s, l, m, n, N;
             Nmax = Nmax,
             tol = tol,
             sample_tol = sample_tol,
             max_flux = max_flux,
             mode_abs_floor = mode_abs_floor,
             zero_low_flux = zero_low_flux,
-            threaded_sampling = threaded_sampling,
+            threaded_sampling = threaded_sampling, cache=route.cache,
         )
     else
-        return convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, adaptive = adaptive, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max)
+        master = route.master
+        master === nothing && (master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax))
+        return convolution_integral_generic_levin_isem(master, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, adaptive = adaptive, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max, cache=route.cache)
     end
 end
 

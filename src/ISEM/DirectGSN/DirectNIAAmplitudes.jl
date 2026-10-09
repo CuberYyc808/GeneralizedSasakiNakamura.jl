@@ -195,6 +195,28 @@ function _in_real_axis_anchor(route, evaluator)
         departure,
         steps=basis.step_count,
     )
+    # A projective match cannot certify the normalization of a dominant state.
+    # Require the reference propagation to converge before using its scale.
+    confirmation_controls = direct_gsn_controls(
+        rational.params;
+        N=rational.settings.order,
+        horizon_order=DirectComplexRational._horizon_series_order(rational.settings.order),
+        xm=rational.match_x,
+        tol=route.plan.controls.tolerance,
+        sfe=false,
+        lfe=false,
+    )
+    confirmation = direct_iterate_from_zero(rational.coefficients, :in;
+        controls=confirmation_controls, match_x=rational.match_x)
+    reference_error = _pair_error(target,
+        (confirmation.match_X,confirmation.match_dXdx))
+    reference_error <= _STATE_ANCHOR_MAX_ERROR || return rejected(
+        :uncertified_reference;
+        projective_error,
+        scale=correction,
+        departure,
+        steps=basis.step_count,
+    )
     return (
         evaluator=ScaledEvaluator(evaluator, correction),
         metadata=(;
@@ -229,13 +251,13 @@ end
 )
     backend == :direct_rational || return false
     controls === nothing || return false
+    # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
         lambda,
         nu,
         xm,
         rhom,
         N,
-        tol,
         sfe,
         lfe,
         TSinInf,
@@ -284,14 +306,10 @@ function _overlay(
         teukolsky_incidence,
         teukolsky_reflection,
     )) || return route
-    rebuilt = _rebuild_up_state(
-        route,
-        state_evaluator,
-        incidence,
-        reflection,
-    )
-    state_evaluator = rebuilt.evaluator
-    state_metadata = merge(state_metadata, rebuilt.metadata)
+    # The real-axis state is not rebuilt from the reported amplitudes: a
+    # change of the state at the match point that is within the amplitudes'
+    # error grows along the real axis (weak-damping UP solutions), so the
+    # state keeps its own construction and certificate.
 
     metadata = merge(route.metadata, (;
         amplitude_backend,
@@ -302,6 +320,17 @@ function _overlay(
         mst_amplitude_truncation_agreement=
             result.truncation_agreement,
         mst_amplitude_max_condition=result.max_condition,
+        mst_amplitude_errors=hasproperty(result, :gsn_error) ?
+            Float64.(result.gsn_error) : (NaN, NaN),
+        mst_amplitude_component_agreement=
+            hasproperty(result, :component_agreement) ?
+            Float64.(result.component_agreement) : (NaN, NaN),
+        mst_amplitude_coefficient_residual=
+            hasproperty(result, :coefficient_residual) ?
+            Float64(result.coefficient_residual) : NaN,
+        mst_amplitude_coefficient_source_shift=
+            hasproperty(result, :coefficient_source_shift) ?
+            Int(result.coefficient_source_shift) : 0,
     ), state_metadata)
     amplitudes = merge(route.plan.amplitudes, (;
         teukolsky=merge(route.plan.amplitudes.teukolsky, (;
@@ -357,18 +386,10 @@ function _state_overlay(route::DirectComplexRoute, anchor)
     )
 end
 
-function _retain_analytic_agreement(route, result, agreement)
+function _with_amplitude_errors(route, errors)
     metadata = merge(route.metadata, (;
-        amplitude_backend=:complex_rational_certified,
-        mst_amplitude_certificate=result.certificate_kind,
-        mst_amplitude_agreement=Float64(agreement),
-        mst_amplitude_representation_spread=
-            result.representation_spread,
-        mst_amplitude_nearest_agreement=result.nearest_agreement,
-        mst_amplitude_truncation_agreement=
-            result.truncation_agreement,
-        mst_amplitude_max_condition=result.max_condition,
-    ))
+        incidence_error=Float64(errors[1]),
+        reflection_error=Float64(errors[2])))
     return DirectComplexRoute(
         route.branch,
         route.params,
@@ -386,77 +407,44 @@ function _retain_analytic_agreement(route, result, agreement)
     )
 end
 
-function _rebuild_up_state(
-    route,
-    evaluator,
-    incidence,
-    reflection,
-)
-    rejected(status; projective_error=Inf) = (
-        evaluator,
-        metadata=(;
-            amplitude_state_status=status,
-            amplitude_state_projective_error=Float64(projective_error),
-        ),
-    )
-    route.branch == :UP || return rejected(:not_applicable)
-    evaluator isa DirectComplexRationalEvaluator ||
-        return rejected(:not_rational)
-    metadata = route.metadata
-    amplitude_match_policy =
-        hasproperty(metadata, :amplitude_match_policy) ?
-        metadata.amplitude_match_policy : :unknown
-    amplitude_match_policy == :interior ||
-        return rejected(:noninterior_amplitudes)
-    hasproperty(metadata, :endpoint_states) ||
-        return rejected(:missing_endpoint_states)
-    endpoints = metadata.endpoint_states
-    endpoints === nothing && return rejected(:missing_endpoint_states)
-    horizon_in = endpoints.horizon_in
-    horizon_out = endpoints.horizon_out
-    reconstructed = DirectComplexRationalState(
-        ComplexF64(
-            reflection * horizon_in.X +
-            incidence * horizon_out.X,
-        ),
-        ComplexF64(
-            reflection * horizon_in.dXdx +
-            incidence * horizon_out.dXdx,
-        ),
-    )
-    current = evaluator.match_state
-    all(_finite, (
-        reconstructed.X,
-        reconstructed.dXdx,
-        current.X,
-        current.dXdx,
-    )) || return rejected(:nonfinite_state)
-    determinant = reconstructed.X * current.dXdx -
-        current.X * reconstructed.dXdx
-    scale = max(
-        abs(reconstructed.X * current.dXdx),
-        abs(current.X * reconstructed.dXdx),
-        floatmin(Float64),
-    )
-    projective_error = Float64(abs(determinant) / scale)
-    projective_error <= _STATE_ANCHOR_MAX_ERROR ||
-        return rejected(
-            :rejected_projective;
-            projective_error,
-        )
-    rebuilt = DirectComplexRationalEvaluator(
-        evaluator.params,
-        evaluator.coefficients,
-        evaluator.settings,
-        evaluator.match_x,
-        reconstructed,
-    )
-    return (
-        evaluator=rebuilt,
-        metadata=(;
-            amplitude_state_status=:reconstructed,
-            amplitude_state_projective_error=projective_error,
-        ),
+function _retain_analytic_agreement(route, result, agreement)
+    metadata = merge(route.metadata, (;
+        amplitude_backend=agreement <= _AMPLITUDE_AGREEMENT_MAX ?
+            :complex_rational_certified : :complex_rational,
+        mst_amplitude_certificate=result.certificate_kind,
+        mst_amplitude_agreement=Float64(agreement),
+        mst_amplitude_representation_spread=
+            result.representation_spread,
+        mst_amplitude_nearest_agreement=result.nearest_agreement,
+        mst_amplitude_truncation_agreement=
+            result.truncation_agreement,
+        mst_amplitude_max_condition=result.max_condition,
+        mst_amplitude_errors=hasproperty(result, :gsn_error) ?
+            Float64.(result.gsn_error) : (NaN, NaN),
+        mst_amplitude_component_agreement=
+            hasproperty(result, :component_agreement) ?
+            Float64.(result.component_agreement) : (NaN, NaN),
+        mst_amplitude_coefficient_residual=
+            hasproperty(result, :coefficient_residual) ?
+            Float64(result.coefficient_residual) : NaN,
+        mst_amplitude_coefficient_source_shift=
+            hasproperty(result, :coefficient_source_shift) ?
+            Int(result.coefficient_source_shift) : 0,
+    ))
+    return DirectComplexRoute(
+        route.branch,
+        route.params,
+        route.controls,
+        route.p_solution,
+        route.state_evaluator,
+        metadata,
+        route.plan,
+        route.transmission,
+        route.incidence,
+        route.reflection,
+        route.teukolsky_transmission,
+        route.teukolsky_incidence,
+        route.teukolsky_reflection,
     )
 end
 
@@ -982,7 +970,7 @@ function _analytic_result(route)
             nothing
         end
         refined !== nothing && refined.certificate_accepted &&
-            return refined, refined_nu, :complex_refined
+            return refined, refined.nu, :complex_refined
     end
     return nothing
 end
@@ -1010,13 +998,13 @@ end
 )
     backend == :direct_rational || return false
     controls === nothing || return false
+    # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
         lambda,
         nu,
         xm,
         rhom,
         N,
-        tol,
         sfe,
         lfe,
         TSinInf,
@@ -1123,6 +1111,11 @@ function _fast_route(
         end
     end
     result.certificate_accepted || return nothing
+    # The analytic amplitudes stand alone here, with nothing to compare them
+    # with, so they are taken only when their error bound meets the tolerance;
+    # otherwise the two-ray route is built and the overlay adjudicates.
+    maximum(result.gsn_error) <=
+        (tol === nothing ? _FAST_ANCHOR_TOLERANCE : tol) || return nothing
     state_data = if hasproperty(result, :nu)
         refined_nu = ComplexF64(result.nu)
         DirectMSTInfinity._nia_series_data(
@@ -1335,6 +1328,17 @@ function _fast_route(
         mst_amplitude_truncation_agreement=
             result.truncation_agreement,
         mst_amplitude_max_condition=result.max_condition,
+        mst_amplitude_errors=hasproperty(result, :gsn_error) ?
+            Float64.(result.gsn_error) : (NaN, NaN),
+        mst_amplitude_component_agreement=
+            hasproperty(result, :component_agreement) ?
+            Float64.(result.component_agreement) : (NaN, NaN),
+        mst_amplitude_coefficient_residual=
+            hasproperty(result, :coefficient_residual) ?
+            Float64(result.coefficient_residual) : NaN,
+        mst_amplitude_coefficient_source_shift=
+            hasproperty(result, :coefficient_source_shift) ?
+            Int(result.coefficient_source_shift) : 0,
         mst_amplitude_nu_residual=
             hasproperty(result, :nu_residual) ?
             result.nu_residual : NaN,
@@ -1458,13 +1462,13 @@ end
 )
     backend == :direct_rational || return false
     controls === nothing || return false
+    # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
         lambda,
         nu,
         xm,
         rhom,
         N,
-        tol,
         sfe,
         lfe,
         TSinInf,
@@ -1511,13 +1515,13 @@ end
 )
     backend == :direct_rational || return false
     controls === nothing || return false
+    # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
         lambda,
         nu,
         xm,
         rhom,
         N,
-        tol,
         sfe,
         lfe,
         TSinInf,
@@ -1624,6 +1628,72 @@ end
         pole_normalization,
     )
     (amplitude_trigger || state_trigger) || return route
+    # Function barrier: the triggered work is compiled only when it runs.
+    return Base.inferencebarrier(_post_overlay_triggered)(
+        route, amplitude_trigger, state_trigger)
+end
+
+# Error of the analytic amplitudes from their condition and the agreement of
+# their nearest and truncated representations, in units of the larger
+# amplitude (the representation distances are max norms of the pair).
+_analytic_error(result) = max(eps(Float64) * result.max_condition,
+    result.nearest_agreement, result.truncation_agreement)
+
+# Relative error bound of each analytic amplitude: its own relative distance
+# from the other evaluations it was compared with (another representation and
+# the truncated sums), plus the running error of its own sums (a distance to
+# another evaluation bounds the error only together with that evaluation's own
+# error). Where only the pair distance is recorded, it is in units of the
+# larger amplitude and is rescaled to each amplitude.
+function _analytic_bound(result)
+    own = hasproperty(result, :gsn_error) ? result.gsn_error : (0.0, 0.0)
+    hasproperty(result, :component_agreement) && return own .+ max.(
+        eps(Float64) * result.max_condition, result.component_agreement)
+    scale = maximum(abs, result.gsn)
+    return own .+ _analytic_error(result) .* scale ./ abs.(result.gsn)
+end
+
+# Which of the two-ray amplitudes u the analytic ones v replace, and the
+# errors to report for the kept ones. v replaces u only where it proves u
+# wrong: |v - u| > 2 E(v) gives |u - true| > E(v) >= |v - true|, with E(v) the
+# running error bound of the analytic sums and their combinations (eps times
+# the largest condition alone misses the per-term rounding and the
+# cancellation of the final combinations). The reflection coefficient is
+# judged on its own relative scale. The incidence coefficient, which vanishes
+# at a mode frequency where the analytic bound is not reliable in relative
+# terms, is judged with the pair as a vector (max norm, units of the larger
+# amplitude). A kept u has an error of at least |v - u| - E(v) and at most
+# |v - u| + E(v).
+function _rational_preferred(route, result)
+    metadata = route.metadata
+    hasproperty(metadata, :incidence_error) &&
+        hasproperty(metadata, :reflection_error) || return nothing
+    _finite(route.transmission) && !iszero(route.transmission) ||
+        return nothing
+    bound = _analytic_bound(result)
+    current = (route.incidence / route.transmission,
+        route.reflection / route.transmission)
+    differences = abs.(current .- result.gsn) ./ abs.(result.gsn)
+    scale = maximum(abs, result.gsn)
+    pair = maximum(differences .* abs.(result.gsn)) / scale >
+        2 * maximum(bound .* abs.(result.gsn)) / scale
+    replace = (pair, differences[2] > 2 * bound[2])
+    # A kept value is within its distance to the analytic value plus the
+    # analytic value's own error. An analytic value less precise than the
+    # kept value's own estimate can only contradict that estimate, when the
+    # two disagree by more than both errors.
+    own = (metadata.incidence_error, metadata.reflection_error)
+    relative = abs.(result.gsn) ./ abs.(current)
+    analytic = bound .* relative
+    distance = differences .* relative
+    reported = ifelse.(
+        (analytic .< own) .| (distance .> own .+ analytic),
+        distance .+ analytic, own)
+    return (; replace, reported, bound)
+end
+
+function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
+    Base.@nospecialize route
     analytic = amplitude_trigger ? _analytic_result(route) : nothing
     p = route.params
     near_nia = abs(real(p.omega)) <=
@@ -1648,7 +1718,16 @@ end
     else
         Inf
     end
-    if amplitude_agreement <= _AMPLITUDE_AGREEMENT_MAX
+    decision = _rational_preferred(route, result)
+    # The per-coefficient decision governs where there is one: a pair that
+    # agrees in units of the larger amplitude can still be wrong in the
+    # smaller one.
+    retain = decision === nothing ?
+        amplitude_agreement <= _AMPLITUDE_AGREEMENT_MAX :
+        !any(decision.replace)
+    if retain
+        decision === nothing || (route = _with_amplitude_errors(route,
+            decision.reported))
         anchor = try
             _state_anchor(
                 route;
@@ -1664,8 +1743,10 @@ end
             amplitude_agreement,
         )
     end
+    # The real-axis state is chosen by its own certificate, as on the retain
+    # path; which amplitude values are reported does not change it.
     anchor = try
-        _state_anchor(route; nu=nu_value)
+        _state_anchor(route; nu=nu_value, require_certificate=true)
     catch
         (evaluator=route.state_evaluator, metadata=(;))
     end
@@ -1675,6 +1756,8 @@ end
         :principal_single_nu,
     )) &&
         return anchored_route
+    decision === nothing || all(decision.replace) ||
+        return _overlay_part(anchored_route, route, result, decision, anchor)
     return _overlay(
         anchored_route,
         result;
@@ -1682,6 +1765,29 @@ end
         state_evaluator=anchored_route.state_evaluator,
         state_metadata=anchor.metadata,
     )
+end
+
+# The analytic value of one coefficient with the two-ray value of the other
+# (each kept with its own error), applied as an overlay so that the UP state
+# is rebuilt from the pair.
+function _overlay_part(anchored_route, route, result, decision, anchor)
+    two_ray = (route.incidence, route.reflection) ./ route.transmission
+    two_ray_teukolsky = (route.teukolsky_incidence,
+        route.teukolsky_reflection) ./ route.teukolsky_transmission
+    pick(analytic, own) = ifelse.(decision.replace, analytic, own)
+    part = merge(result, (;
+        gsn=pick(result.gsn, two_ray),
+        teuk=pick(result.teuk, two_ray_teukolsky),
+    ))
+    errors = pick(decision.bound, decision.reported)
+    overlaid = _overlay(
+        anchored_route,
+        part;
+        amplitude_backend=:complex_mst_partial,
+        state_evaluator=anchored_route.state_evaluator,
+        state_metadata=anchor.metadata,
+    )
+    return _with_amplitude_errors(overlaid, errors)
 end
 
 @noinline function build(
@@ -1752,6 +1858,11 @@ end
         TSoutHor,
         pole_normalization,
     ) || return nothing
+    # Function barrier: the triggered work is compiled only when it runs.
+    return Base.inferencebarrier(_build_triggered)(s, l, m, a, omega, branch)
+end
+
+function _build_triggered(s, l, m, a, omega, branch)
     route = try
         DirectComplexFrequency._direct_complex_p_route(
             s, l, m, a, omega, branch)

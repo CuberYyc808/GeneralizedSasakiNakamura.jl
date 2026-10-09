@@ -6,10 +6,7 @@ using Interpolations
 
 export rstar_from_r, r_from_rstar
 
-const _EXACT_EXTREMAL_SPIN_ATOL = 16eps(Float64)
-
-_is_exact_extremal_spin(a) = isreal(a) &&
-    abs(abs(float(real(a))) - 1.0) <= _EXACT_EXTREMAL_SPIN_ATOL
+_is_exact_extremal_spin(a) = isreal(a) && isone(abs(real(a)))
 
 function _rstar_from_exact_extremal_rp(h)
     h < 0 && throw(DomainError(h, "r-r_+ must be nonnegative"))

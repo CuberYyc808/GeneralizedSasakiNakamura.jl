@@ -7,9 +7,12 @@ using ..DirectAsymptoticAmplitudes: _try_unit_pair
 using ..DirectMatching:
     DirectRoute,
     DirectConjugatedRoute,
+    DirectScaledBasis,
     direct_evaluate,
     direct_state
 using ..DirectMatching: direct_route_plan, direct_route_truncations
+using ..DirectIteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
+using ..DirectMatching: _mst_evaluation_region
 
 export direct_kappa, direct_r_plus, direct_r_minus
 export direct_y_from_x, direct_x_from_y
@@ -21,6 +24,76 @@ export direct_gsn_solution_rstar, direct_gsn_radial_function
 export direct_teukolsky_solution, direct_teukolsky_radial_function
 export direct_y_branch_supported, direct_y_solution, direct_y_radial_function
 
+# Teukolsky horizon solutions R_in -> Delta^{-s} e^{-i k r*} and R_out -> e^{+i k r*}
+# (leading coefficient one, r* as in Coordinates) at real r near r_+, from the
+# Frobenius series of z^2 p2 R'' + z p1 R' + p0 R = 0 in z = r - r_+ (the
+# Teukolsky equation times Delta), exponents -s - i u and i u, u = r_+ k / kappa.
+# Returns (R_in, dR_in/dr, R_out, dR_out/dr, relative truncation error); the
+# series converges for |z| < 2 kappa (the next singular point is r_-).
+function direct_teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
+    kappa = sqrt(1 - a^2)
+    rplus = 1 + kappa
+    rminus = 1 - kappa
+    z = Float64(r) - rplus
+    k = omega - m * a / (2 * rplus)
+    u = rplus * k / kappa
+    K0 = 2 * rplus * omega - a * m
+    L0 = lambda - 4im * s * omega * rplus
+    # p2 = (z + 2 kappa)^2, p1 = 2 (s + 1)(z + kappa)(z + 2 kappa),
+    # p0 = K^2 - 2 i s (z + kappa) K - z (z + 2 kappa)(lambda - 4 i s omega r),
+    # K = K0 + 2 r_+ omega z + omega z^2.
+    Kc = (K0, 2 * rplus * omega, omega)
+    K2 = (Kc[1]^2, 2 * Kc[1] * Kc[2], Kc[2]^2 + 2 * Kc[1] * Kc[3],
+        2 * Kc[2] * Kc[3], Kc[3]^2)
+    sK = (kappa * Kc[1], Kc[1] + kappa * Kc[2], Kc[2] + kappa * Kc[3], Kc[3])
+    zz = (0.0, 2 * kappa, 1.0)                      # z (z + 2 kappa)
+    L = (L0, -4im * s * omega)                       # lambda - 4 i s omega r
+    zzL = (0.0im, zz[2] * L[1], zz[2] * L[2] + zz[3] * L[1], zz[3] * L[2])
+    p2 = (complex(4 * kappa^2), complex(4 * kappa), 1.0 + 0.0im, 0.0im, 0.0im)
+    p1 = (complex(4 * (s + 1) * kappa^2), complex(6 * (s + 1) * kappa),
+        complex(2 * (s + 1)), 0.0im, 0.0im)
+    p0 = ntuple(j -> K2[j] - 2im * s * (j <= 4 ? sK[j] : 0.0im) -
+        (j <= 4 ? zzL[j] : 0.0im), 5)
+    function series(rho)
+        T(j, n) = p2[j + 1] * (n + rho) * (n + rho - 1) + p1[j + 1] * (n + rho) +
+            p0[j + 1]
+        coefficients = ComplexF64[1.0]
+        value = 1.0 + 0.0im
+        derivative = rho / z
+        zn = 1.0
+        n = 0
+        tail = Inf
+        while n < 400
+            n += 1
+            acc = 0.0im
+            for j in 1:min(n, 4)
+                acc += T(j, n - j) * coefficients[n - j + 1]
+            end
+            c = -acc / T(0, n)
+            push!(coefficients, c)
+            zn *= z
+            term = c * zn
+            value += term
+            derivative += (n + rho) * term / z
+            tail = abs(term) / max(abs(value), floatmin(Float64))
+            n >= 4 && tail <= eps(Float64) && break
+        end
+        power = exp(rho * log(z))
+        return power * value, power * derivative, tail
+    end
+    rho_in = -s - im * u
+    rho_out = im * u
+    norm_in = (2 * kappa)^(-s) * exp(-im * k * rplus) * exp(im * u * log(2.0)) *
+        exp(im * k * rminus / kappa * log(kappa))
+    norm_out = exp(im * k * rplus) * exp(-im * u * log(2.0)) *
+        exp(-im * k * rminus / kappa * log(kappa))
+    Rin, dRin, tin = series(rho_in)
+    Rout, dRout, tout = series(rho_out)
+    # Delta^{-s} e^{-i k r*} = norm_in z^{rho_in} (1 + O(z)), e^{i k r*} likewise.
+    return (Rin * norm_in, dRin * norm_in, Rout * norm_out, dRout * norm_out,
+        max(tin, tout))
+end
+
 struct DirectTeukolskySolution{F,G,H}
     tuple_value::F
     pair_value::G
@@ -29,17 +102,101 @@ end
 
 (solution::DirectTeukolskySolution)(r) = solution.tuple_value(r)
 
-struct DirectTeukolskyPairEvaluator{R,C,T}
+struct DirectTeukolskyInfinitySeries{P}
+    params::P
+    coefficients::Vector{ComplexF64}
+    radius::Float64
+    tolerance::Float64
+end
+
+function _teukolsky_infinity_coefficients(s, m, a, w, L, order)
+    a2 = a*a
+    a4 = a2*a2
+    # Equation for R=exp(i*w*rstar)*r^(-2s-1)*f(1/r), multiplied by r^-4.
+    L2 = ComplexF64.((0im,0im,0im,0im,1+0im,-4+0im,2(a2+2),-4a2,a4))
+    L1 = ComplexF64.((0im,0im,-2im*w,2(s+2im*w+1),-2(2im*a2*w+5s+5),
+        2(3a2*s+2im*a2*w+3a2+6s+6),-2a2*(im*a2*w+7s+7),4a4*(s+1),0im))
+    L0 = ComplexF64.((0im,0im,-L-2a*m*w,
+        -2(-L+2im*a2*s*w+im*a2*w-im*a*m*s+2s*s+3s+1),
+        -L*a2-2a*a2*m*w+a2*m*m+4a2*s*s+8im*a2*s*w+6a2*s+
+            4im*a2*w+2a2-2im*a*m*s+8s*s+12s+4,
+        -2a2*(2s+1)*(im*a2*w+3s+3),2a4*(s+1)*(2s+1),0im,0im))
+    coefficient = zeros(ComplexF64, order+1)
+    coefficient[1] = 1
+    at(v,n) = 0<=n<length(v) ? v[n+1] : 0im
+    # Store coefficients in 1/(w*r); cancel w in the indicial denominator first.
+    for n in 1:order
+        acc = 0im
+        for j in max(0,n-8):n-1
+            acc += (at(L2,n-j+3)*j*(j-1)+at(L1,n-j+2)*j+at(L0,n-j+1))*
+                w^(n-j-1)*coefficient[j+1]
+        end
+        coefficient[n+1] = acc/(2im*n)
+    end
+    return coefficient
+end
+
+function direct_teukolsky_infinity_series(p, order, tolerance)
+    coefficient = _teukolsky_infinity_coefficients(p.s, p.m, p.a, p.omega,
+        p.lambda, order)
+    radius = _endpoint_last_term_radius(coefficient,Float64(tolerance),Inf)
+    return DirectTeukolskyInfinitySeries(p,coefficient,radius,Float64(tolerance))
+end
+
+function (series::DirectTeukolskyInfinitySeries)(r)
+    p = series.params
+    z = inv(p.omega*r)
+    abs(z)<=series.radius || return nothing
+    c = series.coefficients
+    value = c[end]
+    derivative = zero(value)
+    for j in length(c)-1:-1:1
+        derivative = derivative*z+value
+        value = value*z+c[j]
+    end
+    power = -2p.s-1
+    radial_factor = power+im*p.omega*(r*r+p.a*p.a)*r/((r-direct_r_plus(p))*(r-direct_r_minus(p)))
+    slope = radial_factor*value-z*derivative
+    term, norm_value, norm_slope = 1+0im, 0.0, 0.0
+    for j in eachindex(c)
+        contribution = c[j]*term
+        norm_value += abs(contribution)
+        norm_slope += abs((radial_factor-(j-1))*contribution)
+        term *= z
+    end
+    ratio = abs(c[end]*z/c[end-1])
+    ratio<1 || return nothing
+    tail = abs(c[end]*z^(length(c)-1))/(1-ratio)
+    error = max((tail+eps(Float64)*norm_value)/abs(value),
+        (tail*abs(radial_factor-length(c))+eps(Float64)*norm_slope)/abs(slope))
+    error<=series.tolerance || return nothing
+    phase = p.omega*rstar_from_r(p.a,r)
+    scale = exp(im*phase)*r^power
+    return (scale*value,scale*slope/r,error+eps(Float64)*abs(phase))
+end
+
+struct DirectTeukolskyPairEvaluator{R,C,T,E}
     route::R
     converter::C
     inv_scale::T
+    infinity_series::E
+    infinity_scale::ComplexF64
+end
+
+function _teukolsky_pair_with_error(e::DirectTeukolskyPairEvaluator,r)
+    if e.infinity_series !== nothing
+        endpoint = e.infinity_series(r)
+        endpoint !== nothing && return e.infinity_scale*endpoint[1],e.infinity_scale*endpoint[2],endpoint[3]
+    end
+    x = direct_r_to_x(e.route.params, r)
+    state = direct_state(e.route, x; radius=r)
+    R, Rp = e.converter(r, state.X, state.dXdx)
+    return e.inv_scale * R, e.inv_scale * Rp, 0.0
 end
 
 function (e::DirectTeukolskyPairEvaluator)(r)
-    x = direct_r_to_x(e.route.params, r)
-    state = direct_state(e.route, x)
-    R, Rp = e.converter(r, state.X, state.dXdx)
-    return e.inv_scale * R, e.inv_scale * Rp
+    R,Rp,_ = _teukolsky_pair_with_error(e,r)
+    return R,Rp
 end
 
 struct DirectTeukolskyRadialEvaluator{P}
@@ -58,10 +215,10 @@ struct DirectTeukolskyTupleEvaluator{P,E,F}
 end
 
 function (e::DirectTeukolskyTupleEvaluator)(r)
-    R, Rp = e.pair(r)
+    R, Rp, error = _teukolsky_pair_with_error(e.pair,r)
     p = e.params
     Rpp = e.d2R(r, R, Rp, p.s, p.a, p.omega, p.m, p.lambda)
-    return (R, Rp, Rpp, 0.0)
+    return (R, Rp, Rpp, error)
 end
 
 direct_y_from_x(x) = one(x) - x
@@ -295,14 +452,20 @@ end
 
 function _direct_r_state(route::DirectRoute, r)
     x = direct_r_to_x(route.params, r)
-    state = direct_state(route, x)
-    dXdrstar = state.dXdx * direct_dx_drstar(route.params, x)
-    return state.X, dXdrstar
+    state = direct_state(route, x; radius=r)
+    return state.X, state.dXdx * (2route.params.kappa*x/(r^2+route.params.a^2))
 end
 
 function direct_gsn_solution_rstar(route::DirectRoute)
     return rs -> begin
         x = _x_from_rstar(route.params, rs)
+        if _mst_evaluation_region(route, x) ||
+                (x > route.match_x && (route.endpoint_bridge isa DirectScaledBasis ||
+                    route.endpoint_plan !== nothing))
+            r = r_from_rstar(route.params.a, rs)
+            X, dXdrstar = _direct_r_state(route, r)
+            return (X, dXdrstar, 0.0)
+        end
         state = direct_state(route, x)
         dXdrstar = state.dXdx * direct_dx_drstar(route.params, x)
         return (state.X, dXdrstar, 0.0)
@@ -500,7 +663,11 @@ function _direct_teukolsky_solution(route::DirectRoute, scale_value, pair_conver
     p = route.params
     tt = _teukolsky_transformation_module()
     inv_scale = inv(scale_value)
-    pair_value = DirectTeukolskyPairEvaluator(route, pair_converter, inv_scale)
+    endpoint = route.branch == :UP && isreal(p.omega) ?
+        direct_teukolsky_infinity_series(p,max(route.infinity_out_order,route.controls.ordinary_order),
+            max(route.controls.tolerance,_ENDPOINT_SEED_TARGET)) : nothing
+    endpoint_scale = ComplexF64(first(_normalization_scale(route,:teukolsky))/scale_value)
+    pair_value = DirectTeukolskyPairEvaluator(route,pair_converter,inv_scale,endpoint,endpoint_scale)
     tuple_value = DirectTeukolskyTupleEvaluator(p, pair_value, getfield(tt, :d2R))
     radial_value = DirectTeukolskyRadialEvaluator(pair_value)
     return DirectTeukolskySolution(tuple_value, pair_value, radial_value)

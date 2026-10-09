@@ -34,11 +34,40 @@ function _qnm_conditioned_radial_tolerance(a)
     return clamp(conditioned, 1.0e-14, 1.0e-11)
 end
 
-function _qnm_default_radial_solver(s, l, m, a, omega, boundary)
+function _qnm_default_radial_solver(s, l, m, a, omega, boundary;
+        solver=GSN_radial)
     tolerance = _qnm_conditioned_radial_tolerance(a)
+    if tolerance === nothing && abs(a) < 1
+        # Keep the connection normalization fixed across the derivative
+        # stencil; the automatic MST amplitude overlay uses another route.
+        order = abs(imag(omega)) > 1 ? 96 : 48
+        solution = try
+            solver(s, l, m, a, omega, boundary;
+                method="GSN-ISEM", N=order, tol=1.0e-14)
+        catch error
+            # A straight tortoise-coordinate ray can hit a coordinate
+            # branch point. Move its real junction, without changing the ODE.
+            occursin("two-ray coordinate path", sprint(showerror,error)) || rethrow()
+            return solver(s, l, m, a, omega, boundary;
+                method="GSN-ISEM", N=order, tol=1.0e-14, xm=0.3)
+        end
+        gsn = solver === Teukolsky_radial ? solution.GSN_solution : solution
+        numerical = gsn.numerical_GSN_solution
+        if hasproperty(numerical, :infinity_horizon_winding) &&
+                numerical.infinity_horizon_winding != 0
+            # Removing monodromy cannot recover digits already lost on
+            # a winding path. Prefer an unwound real junction when available.
+            alternate = solver(s, l, m, a, omega, boundary;
+                method="GSN-ISEM", N=order, tol=1.0e-14, xm=0.3)
+            alternate_gsn = solver === Teukolsky_radial ? alternate.GSN_solution : alternate
+            alternate_gsn.numerical_GSN_solution.infinity_horizon_winding == 0 &&
+                return alternate
+        end
+        return solution
+    end
     return tolerance === nothing ?
-        GSN_radial(s, l, m, a, omega, boundary) :
-        GSN_radial(s, l, m, a, omega, boundary; tol=tolerance)
+        solver(s, l, m, a, omega, boundary) :
+        solver(s, l, m, a, omega, boundary; tol=tolerance)
 end
 
 function _radial_evaluation_inputs(result::LeaverResult, omega=result.omega)
@@ -71,7 +100,6 @@ function _radial_evaluation_inputs(result::LeaverResult, omega=result.omega)
 end
 
 function _use_wronskian_incidence(result::LeaverResult, omega=result.omega)
-    result.mode.branch == :negative_real && return true
     result.status == :estimated && abs(result.a) >= oftype(result.a, 0.9999) &&
         result.mode.n >= 4 && return true
     return abs(result.a) == one(result.a) && !isreal(omega)

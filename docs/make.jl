@@ -20,5 +20,5 @@ makedocs(
 
 deploydocs(
     repo = "github.com/ricokaloklo/GeneralizedSasakiNakamura.jl.git",
-    devbranch = "master",
+    devbranch = "main",
 )

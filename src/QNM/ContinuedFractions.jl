@@ -84,15 +84,90 @@ function leaver_cf_truncated(omega, a, s::Int, m::Int, angular_A,
     return pivot.beta - pivot.gamma * lower - pivot.alpha * upper
 end
 
+function _leaver_tail_coefficients(D, order::Int=12)
+    C = typeof(D[1])
+    T = typeof(real(D[1]))
+    coefficients = zeros(C, order + 3)
+    shifted = similar(coefficients)
+    coefficients[1] = -1
+    coefficients[2] = sqrt(-(D[1] + D[2] + D[3]))
+    iszero(coefficients[2]) && throw(DomainError(coefficients[2],
+        "The half-integer asymptotic tail requires nonzero frequency."))
+    coefficient(k) = k < 0 ? zero(C) : coefficients[k + 1]
+    product(k) = k < 0 ? zero(C) :
+        sum(coefficients[i + 1] * shifted[k - i + 1] for i in 0:k)
+    for j in 2:order
+        # U(t/sqrt(1+t^2)): each t^p acquires (1+t^2)^(-p/2).
+        fill!(shifted, zero(C))
+        shifted[1] = coefficients[1]
+        for p in 1:(j - 1)
+            weight = one(T)
+            for k in p:2:(j + 1)
+                shifted[k + 1] += weight * coefficients[p + 1]
+                r = (k - p) ÷ 2
+                weight *= (-T(p) / 2 - r) / (r + 1)
+            end
+        end
+        k = j + 1
+        defect = product(k) + (D[1] + 1)*product(k - 2) +
+            D[1]*product(k - 4) + 2coefficient(k) -
+            (D[2] + 2)*coefficient(k - 2) - D[4]*coefficient(k - 4)
+        k == 4 && (defect += D[5] - D[3] + 2)
+        coefficients[j + 1] = -defect / (2coefficients[2])
+    end
+    return coefficients[1:(order + 1)]
+end
+
+function _leaver_cf_asymptotic(omega, a, s, m, angular_A, n_inv;
+        tolerance, minimum_iterations, maximum_iterations)
+    T = typeof(real(omega))
+    D = leaver_D_coefficients(omega, a, s, m, angular_A)
+    coefficients = _leaver_tail_coefficients(D)
+    depth = min(maximum_iterations, max(minimum_iterations, n_inv + 32))
+    evaluate(N) = leaver_cf_truncated(omega, a, s, m, angular_A, n_inv;
+        depth=N, tail=-evalpoly(inv(sqrt(T(N + 1))), coefficients))
+    previous = evaluate(depth)
+    previous_error = T(Inf)
+    error = T(Inf)
+    convergence_error = T(Inf)
+    value = previous
+    while depth < maximum_iterations
+        depth = min(2depth, maximum_iterations)
+        value = evaluate(depth)
+        error = abs(value - previous) / max(one(T), abs(value))
+        convergence_error = max(error, previous_error)
+        if convergence_error <= tolerance
+            return (value=value, error=convergence_error,
+                iterations=depth, converged=true, D=D)
+        end
+        previous = value
+        previous_error = error
+    end
+    return (value=value, error=convergence_error, iterations=depth,
+        converged=false, D=D)
+end
+
 function leaver_cf_inversion(omega, a, s::Int, m::Int, angular_A,
         n_inv::Int; tolerance=nothing, minimum_iterations::Int=300,
-        maximum_iterations::Int=4000, require_convergence::Bool=true)
+        maximum_iterations::Int=4000, require_convergence::Bool=true,
+        algorithm::Symbol=:auto)
     n_inv >= 0 || throw(ArgumentError("n_inv must be nonnegative."))
     maximum_iterations > minimum_iterations || throw(ArgumentError(
         "maximum_iterations must exceed minimum_iterations."))
     T = promote_type(typeof(real(omega)), typeof(real(a)),
         typeof(real(angular_A)))
     tol = tolerance === nothing ? T(1.0e-13) : T(tolerance)
+    use_tail = algorithm === :asymptotic ||
+        (algorithm === :auto && !iszero(omega))
+    if use_tail
+        result = _leaver_cf_asymptotic(omega, a, s, m, angular_A, n_inv;
+            tolerance=tol, minimum_iterations, maximum_iterations)
+        if require_convergence && !result.converged
+            throw(LentzConvergenceError(result.error, result.iterations,
+                maximum_iterations))
+        end
+        return result
+    end
     D = leaver_D_coefficients(omega, a, s, m, angular_A)
 
     lower = zero(omega)

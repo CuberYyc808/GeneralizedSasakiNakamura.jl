@@ -18,6 +18,7 @@ using ..DirectComplexRational:
     direct_complex_offpole_match_plateau_candidate
 import ..DirectMatching:
     DirectConjugatedRoute,
+    direct_amplitude_errors,
     direct_gsn_radial,
     direct_match,
     direct_state,
@@ -29,6 +30,7 @@ import ..DirectMSTInfinity:
     direct_mst_nia_jump,
     nia_strength_fast
 import ..DirectTransformation:
+    direct_teukolsky_horizon_pair,
     DirectTeukolskyRadialEvaluator,
     DirectTeukolskySolution,
     _direct_teukolsky_converter,
@@ -147,7 +149,7 @@ const _RATIONAL_STEP_LIMIT_ERROR =
 const _RATIONAL_ORDINARY_Q0_ERROR =
     "noninvertible q0 in direct GSN ordinary P/Q recurrence"
 const _RATIONAL_PATCH_LIMIT_ERROR =
-    "complex rational patch limit reached."
+    "complex rational patch limit reached"
 const _RATIONAL_INFINITY_STEP_ERROR =
     "infinity path propagation failed:"
 const _RATIONAL_INFINITY_CERTIFICATE_ERROR =
@@ -1805,14 +1807,11 @@ function _up_initial_match_metrics(rational::DirectComplexRoute, candidates)
     )
 end
 
-function _up_initial_match_route(
-    rational::DirectComplexRoute,
-    candidates,
-    metrics,
-    elapsed_us,
-)
-    Base.@nospecialize rational candidates metrics
-    candidate = candidates.initial
+# A route rebuilt from a full match result of the rational solver (same
+# coefficients and settings) chosen by a consensus retry; `extra` holds the
+# retry's own diagnostics, appended to the metadata.
+function _route_from_match(rational::DirectComplexRoute, candidate, policy, extra)
+    Base.@nospecialize rational candidate extra
     factors = rational.plan.amplitudes.conversion_factors
     transmission = rational.transmission
     incidence = ComplexF64(candidate.incidence)
@@ -1833,7 +1832,7 @@ function _up_initial_match_route(
         candidate.infinity.max_score,
     )
     metadata = merge(rational.metadata, (;
-        match_policy=:up_initial_match_consensus,
+        match_policy=policy,
         match_rstar=candidate.match_rstar,
         match_x=candidate.match_x,
         xsplit=candidate.match_x,
@@ -1864,29 +1863,7 @@ function _up_initial_match_route(
         propagation_us=candidate.propagation_us,
         matching_us=candidate.matching_us,
         endpoint_states=candidate.endpoint_states,
-        up_initial_match_scale=candidates.scale,
-        up_initial_match_far_rstar=candidates.far_rstar,
-        up_initial_match_mid_rstar=candidates.mid_rstar,
-        up_initial_match_initial_residual=metrics.initial_residual,
-        up_initial_match_far_mid_agreement=metrics.far_mid_agreement,
-        up_initial_match_mid_initial_agreement=
-            metrics.mid_initial_agreement,
-        up_initial_match_far_initial_agreement=
-            metrics.far_initial_agreement,
-        up_initial_match_reflection_agreement=
-            metrics.reflection_agreement,
-        up_initial_match_selected_separation=
-            metrics.selected_initial_separation,
-        up_initial_match_split_mismatch=metrics.split_mismatch,
-        up_initial_match_consensus_us=elapsed_us,
-        rational_match_policy=rational.metadata.match_policy,
-        rational_match_x=rational.metadata.match_x,
-        rational_matching_condition=rational.metadata.matching_condition,
-        rational_coefficient1_cancellation=
-            rational.metadata.coefficient1_cancellation,
-        rational_coefficient2_cancellation=
-            rational.metadata.coefficient2_cancellation,
-        rational_patch_count=rational.plan.patch_count,
+        extra...,
     ))
     contour = merge(rational.plan.contour, (;
         horizon_direction=ComplexF64(candidate.horizon_seed.path.direction),
@@ -1899,7 +1876,7 @@ function _up_initial_match_route(
         selected_x=candidate.match_x,
         split_mismatch=candidate.abel_error,
         condition=candidate.matching_condition,
-        policy=:up_initial_match_consensus,
+        policy=policy,
     ))
     controls = merge(rational.plan.controls, (;
         xm=candidate.match_x,
@@ -1936,6 +1913,41 @@ function _up_initial_match_route(
         teukolsky[2],
         teukolsky[3],
     )
+end
+
+function _up_initial_match_route(
+    rational::DirectComplexRoute,
+    candidates,
+    metrics,
+    elapsed_us,
+)
+    Base.@nospecialize rational candidates metrics
+    return _route_from_match(rational, candidates.initial,
+        :up_initial_match_consensus, (;
+            up_initial_match_scale=candidates.scale,
+            up_initial_match_far_rstar=candidates.far_rstar,
+            up_initial_match_mid_rstar=candidates.mid_rstar,
+            up_initial_match_initial_residual=metrics.initial_residual,
+            up_initial_match_far_mid_agreement=metrics.far_mid_agreement,
+            up_initial_match_mid_initial_agreement=
+                metrics.mid_initial_agreement,
+            up_initial_match_far_initial_agreement=
+                metrics.far_initial_agreement,
+            up_initial_match_reflection_agreement=
+                metrics.reflection_agreement,
+            up_initial_match_selected_separation=
+                metrics.selected_initial_separation,
+            up_initial_match_split_mismatch=metrics.split_mismatch,
+            up_initial_match_consensus_us=elapsed_us,
+            rational_match_policy=rational.metadata.match_policy,
+            rational_match_x=rational.metadata.match_x,
+            rational_matching_condition=rational.metadata.matching_condition,
+            rational_coefficient1_cancellation=
+                rational.metadata.coefficient1_cancellation,
+            rational_coefficient2_cancellation=
+                rational.metadata.coefficient2_cancellation,
+            rational_patch_count=rational.plan.patch_count,
+        ))
 end
 
 function _try_up_initial_match_consensus(rational::DirectComplexRoute)
@@ -2084,129 +2096,31 @@ function _offpole_match_plateau_route(
     elapsed_us,
 )
     Base.@nospecialize rational selected candidates metrics
-    candidate = metrics.selected
-    factors = rational.plan.amplitudes.conversion_factors
-    transmission = rational.transmission
-    incidence = ComplexF64(candidate.incidence)
-    reflection = ComplexF64(candidate.reflection)
-    teukolsky = _candidate_raw_triplet(candidate, factors, transmission)
-    evaluator = DirectComplexRationalEvaluator(
-        rational.state_evaluator.params,
-        rational.state_evaluator.coefficients,
-        rational.state_evaluator.settings,
-        candidate.match_x,
-        candidate.match_state,
-    )
-    horizon_rho = candidate.horizon_seed.path.rho
-    infinity_rho = candidate.infinity_seed.path.rho
-    rho_match = max(abs(horizon_rho), abs(infinity_rho))
-    propagation_score = max(
-        candidate.horizon.max_score,
-        candidate.infinity.max_score,
-    )
-    metadata = merge(rational.metadata, (;
-        match_policy=:offpole_match_plateau,
-        match_rstar=candidate.match_rstar,
-        match_x=candidate.match_x,
-        xsplit=candidate.match_x,
-        xm_match=candidate.match_x,
-        control_xm=candidate.match_x,
-        control_rhom=rho_match,
-        matching_condition=candidate.matching_condition,
-        coefficient1_cancellation=candidate.coefficient1_cancellation,
-        coefficient2_cancellation=candidate.coefficient2_cancellation,
-        horizon_path_kind=candidate.horizon_seed.path.kind,
-        horizon_direction=candidate.horizon_seed.path.direction,
-        horizon_angle_offset=candidate.horizon_seed.path.angle_offset,
-        horizon_rho,
-        infinity_rho,
-        horizon_coordinate_steps=candidate.horizon_seed.path.accepted_steps,
-        infinity_coordinate_steps=candidate.infinity_seed.path.accepted_steps,
-        horizon_endpoint_score=candidate.horizon_seed.score,
-        infinity_endpoint_score=candidate.infinity_seed.score,
-        horizon_patches=candidate.horizon.patches,
-        infinity_patches=candidate.infinity.patches,
-        patch_count=candidate.patch_count,
-        propagation_score,
-        abel_ratio=candidate.abel_ratio,
-        abel_raw_error=candidate.abel_raw_error,
-        abel_error=candidate.abel_error,
-        split_mismatch=candidate.abel_error,
-        endpoint_us=candidate.endpoint_us,
-        propagation_us=candidate.propagation_us,
-        matching_us=candidate.matching_us,
-        endpoint_states=candidate.endpoint_states,
-        offpole_match_plateau_triggered=true,
-        offpole_match_plateau_accepted=true,
-        offpole_match_plateau_candidate_count=candidates.candidate_count,
-        offpole_match_plateau_reused_candidate_count=
-            candidates.reused_candidate_count,
-        offpole_match_plateau_agreement=metrics.agreement,
-        offpole_match_plateau_member_agreement=metrics.member_agreement,
-        offpole_match_plateau_separation=metrics.separation,
-        offpole_match_plateau_separation_ratio=metrics.separation_ratio,
-        offpole_match_plateau_split_mismatch=metrics.split_mismatch,
-        offpole_match_plateau_continuity_x_error=
-            metrics.continuity_x_error,
-        offpole_match_plateau_continuity_dx_error=
-            metrics.continuity_dx_error,
-        offpole_match_plateau_continuity_error=metrics.continuity_error,
-        offpole_match_plateau_first_rstar=candidates.first_rstar,
-        offpole_match_plateau_second_rstar=candidates.second_rstar,
-        offpole_match_plateau_us=elapsed_us,
-        offpole_match_plateau_replaced_backend=
-            _metadata_value(selected.metadata, :backend, missing),
-        offpole_match_plateau_rational_match_policy=
-            _metadata_value(rational.metadata, :match_policy, missing),
-    ))
-    contour = merge(rational.plan.contour, (;
-        horizon_direction=ComplexF64(candidate.horizon_seed.path.direction),
-        horizon_rho,
-        infinity_rho,
-        rho_match,
-    ))
-    matching = merge(rational.plan.matching, (;
-        candidate_x=candidate.match_x,
-        selected_x=candidate.match_x,
-        split_mismatch=candidate.abel_error,
-        condition=candidate.matching_condition,
-        policy=:offpole_match_plateau,
-    ))
-    controls = merge(rational.plan.controls, (;
-        xm=candidate.match_x,
-        rhom=rho_match,
-    ))
-    amplitudes = merge(rational.plan.amplitudes, (;
-        teukolsky=(
-            transmission=teukolsky[1],
-            incidence=teukolsky[2],
-            reflection=teukolsky[3],
-        ),
-        raw_gsn_transmission=transmission,
-        gsn=(; transmission, incidence, reflection),
-    ))
-    plan = DirectComplexRoutePlan(
-        contour,
-        matching,
-        controls,
-        amplitudes,
-        candidate.patch_count,
-    )
-    return DirectComplexRoute(
-        rational.branch,
-        rational.params,
-        rational.controls,
-        rational.p_solution,
-        evaluator,
-        metadata,
-        plan,
-        transmission,
-        incidence,
-        reflection,
-        teukolsky[1],
-        teukolsky[2],
-        teukolsky[3],
-    )
+    return _route_from_match(rational, metrics.selected,
+        :offpole_match_plateau, (;
+            offpole_match_plateau_triggered=true,
+            offpole_match_plateau_accepted=true,
+            offpole_match_plateau_candidate_count=candidates.candidate_count,
+            offpole_match_plateau_reused_candidate_count=
+                candidates.reused_candidate_count,
+            offpole_match_plateau_agreement=metrics.agreement,
+            offpole_match_plateau_member_agreement=metrics.member_agreement,
+            offpole_match_plateau_separation=metrics.separation,
+            offpole_match_plateau_separation_ratio=metrics.separation_ratio,
+            offpole_match_plateau_split_mismatch=metrics.split_mismatch,
+            offpole_match_plateau_continuity_x_error=
+                metrics.continuity_x_error,
+            offpole_match_plateau_continuity_dx_error=
+                metrics.continuity_dx_error,
+            offpole_match_plateau_continuity_error=metrics.continuity_error,
+            offpole_match_plateau_first_rstar=candidates.first_rstar,
+            offpole_match_plateau_second_rstar=candidates.second_rstar,
+            offpole_match_plateau_us=elapsed_us,
+            offpole_match_plateau_replaced_backend=
+                _metadata_value(selected.metadata, :backend, missing),
+            offpole_match_plateau_rational_match_policy=
+                _metadata_value(rational.metadata, :match_policy, missing),
+        ))
 end
 
 function _try_offpole_match_plateau(
@@ -2808,6 +2722,22 @@ function _p_consensus_metrics(
         reflection_error, split_mismatch)
 end
 
+# The adopted candidate's own error: its distance to the two-ray value plus
+# that value's error, relative to the candidate's amplitude (both in
+# Teukolsky normalisation, the candidate scaled to the same transmission).
+function _p_consensus_errors(
+    rational::DirectComplexRoute,
+    candidate::DirectComplexRoute,
+)
+    alignment = rational.teukolsky_transmission /
+        candidate.teukolsky_transmission
+    aligned = alignment .* (candidate.teukolsky_incidence,
+        candidate.teukolsky_reflection)
+    two_ray = (rational.teukolsky_incidence, rational.teukolsky_reflection)
+    return Float64.((abs.(two_ray .- aligned) .+
+        direct_amplitude_errors(rational) .* abs.(two_ray)) ./ abs.(aligned))
+end
+
 function _p_consensus_route(
     rational::DirectComplexRoute,
     candidate::DirectComplexRoute,
@@ -2815,8 +2745,11 @@ function _p_consensus_route(
 )
     Base.@nospecialize rational candidate metrics
     rational_metadata = rational.metadata
+    errors = _p_consensus_errors(rational, candidate)
     metadata = merge(candidate.metadata, (;
         backend=:direct_gsn_p_consensus,
+        incidence_error=errors[1],
+        reflection_error=errors[2],
         consensus_source=:p_equation,
         consensus_acceptance_kind=metrics.acceptance_kind,
         consensus_direct_residual=metrics.direct_residual,
@@ -3164,6 +3097,12 @@ function _try_nia_partner(
     branch,
 )
     _p_nia_partner_pretrigger(s, a, omega) || return route
+    # Function barrier: the triggered work is compiled only when it runs.
+    return Base.inferencebarrier(_nia_partner_retry)(
+        route, s, l, m, a, omega, branch)
+end
+
+function _nia_partner_retry(route, s, l, m, a, omega, branch)
     partner_spin = -s
     tolerance = route.plan.controls.tolerance
     candidate = try
@@ -3427,6 +3366,11 @@ function _try_nia_side(
     omega,
 )
     _nia_side_pretrigger(route) || return route
+    # Function barrier: the triggered work is compiled only when it runs.
+    return Base.inferencebarrier(_nia_side_retry)(route, s, l, m, a, omega)
+end
+
+function _nia_side_retry(route, s, l, m, a, omega)
     omegac = ComplexF64(omega)
     axis_omega = ComplexF64(0, imag(omegac))
     strength = try
@@ -3776,6 +3720,21 @@ end
     return requested ? _apply_exact_pole_normalization(route) : route
 end
 
+# The retries are independent of each other, so each is built only when the
+# earlier ones in the selection order leave the rational route unchanged.
+function _select_consensus_retry(rational, s, l, m, a, omega, branch)
+    horizon_retry = _try_up_horizon_in_order_consensus(
+        rational, s, l, m, a, omega, branch)
+    horizon_retry !== rational && return horizon_retry
+    p_retry = _try_p_consensus(
+        rational, s, l, m, a, omega, branch)
+    p_retry !== rational && _metadata_value(
+        p_retry.metadata, :consensus_acceptance_kind, nothing) ==
+        :pole_dual_order && return p_retry
+    initial_match_retry = _try_up_initial_match_consensus(rational)
+    return initial_match_retry !== rational ? initial_match_retry : p_retry
+end
+
 function _direct_complex_route_impl(
     s::Int,
     l::Int,
@@ -3819,9 +3778,12 @@ function _direct_complex_route_impl(
         return _apply_exact_pole_normalization(
             selected, pole_normalization)
     end
-    custom_controls = controls !== nothing || lambda !== nothing ||
+    # Controls that fix the route itself (matching point, order, eigenvalue,
+    # expansions) are not overridden by retries or fallbacks; a tolerance alone
+    # sets accuracy targets, which the retries and fallbacks carry along.
+    pinned_controls = controls !== nothing || lambda !== nothing ||
         nu !== nothing || xm !== nothing || rhom !== nothing ||
-        N !== nothing || tol !== nothing || sfe !== nothing ||
+        N !== nothing || sfe !== nothing ||
         lfe !== nothing || TSinInf !== nothing || TSoutInf !== nothing ||
         TSinHor !== nothing || TSoutHor !== nothing
     if backend == :direct_rational
@@ -3861,7 +3823,7 @@ function _direct_complex_route_impl(
                 _direct_complex_principal_sfe_route(
                     s, l, m, a, omegac, branch, requested; lambda, nu)
             catch error
-                custom_controls && rethrow()
+                pinned_controls && rethrow()
                 _principal_sfe_build_fallback(
                     s, l, m, a, omegac, branch, requested, error)
             end
@@ -3890,16 +3852,16 @@ function _direct_complex_route_impl(
             )
         catch error
             fallback_trigger = _rational_build_fallback_trigger(error)
-            principal_fallback = !custom_controls &&
+            principal_fallback = !pinned_controls &&
                 _principal_sfe_axis(ComplexF64(omega))
-            if custom_controls ||
+            if pinned_controls ||
                     (fallback_trigger === nothing && !principal_fallback)
                 rethrow()
             end
             fallback_trigger === nothing &&
                 (fallback_trigger = :principal_mst_evaluator_fallback)
             fallback = _direct_complex_p_route(
-                s, l, m, a, omega, branch)
+                s, l, m, a, omega, branch; tol)
             fallback = _tag_p_build_fallback(
                 fallback, fallback_trigger, sprint(showerror, error))
             fallback = _principal_sfe_overlay(
@@ -3920,27 +3882,10 @@ function _direct_complex_route_impl(
             :principal_mst_logscaled &&
             return _apply_exact_pole_normalization(
                 rational, pole_normalization)
-        custom_controls && return _apply_exact_pole_normalization(
+        pinned_controls && return _apply_exact_pole_normalization(
             rational, pole_normalization)
-        horizon_retry = _try_up_horizon_in_order_consensus(
+        selected = _select_consensus_retry(
             rational, s, l, m, a, omega, branch)
-        initial_match_retry = _try_up_initial_match_consensus(rational)
-        p_retry = _try_p_consensus(
-            rational, s, l, m, a, omega, branch)
-        selected = if horizon_retry !== rational
-            horizon_retry
-        elseif p_retry !== rational &&
-                _metadata_value(
-                    p_retry.metadata,
-                    :consensus_acceptance_kind,
-                    nothing,
-                ) == :pole_dual_order
-            p_retry
-        elseif initial_match_retry !== rational
-            initial_match_retry
-        else
-            p_retry
-        end
         pole_normalization || (selected =
             _try_offpole_match_plateau(
                 rational, selected, rational_build.retry_cache))
@@ -4259,11 +4204,63 @@ end
         r, "Direct complex Teukolsky evaluation requires a finite exterior radius."))
     dXdx = state.dXdrstar / dxdrstar
     R, Rp = evaluator.converter(r, state.X, dXdx)
+    # Near the horizon the conversion can cancel strongly (for s = -2 the
+    # ingoing R ~ Delta^2 comes from terms of size one), multiplying the state's
+    # error; there the horizon series with the route's Teukolsky amplitudes is
+    # used when its error (the amplitudes' errors) is the smaller.
+    value_part = evaluator.converter(r, state.X, zero(dXdx))
+    derivative_part = evaluator.converter(r, zero(state.X), dXdx)
+    cancellation = max(
+        (abs(value_part[1]) + abs(derivative_part[1])) / abs(R),
+        (abs(value_part[2]) + abs(derivative_part[2])) / abs(Rp))
+    conversion_error = state.error * cancellation + eps(Float64) * cancellation
+    if Float64(r) - p.rplus < 2 * p.kappa && conversion_error > eps(Float64)
+        series = _teukolsky_horizon_state(evaluator, r)
+        series !== nothing && series.error < conversion_error && return series
+    end
     return (
         R=evaluator.inv_scale * R,
         Rp=evaluator.inv_scale * Rp,
-        error=state.error,
+        error=isfinite(conversion_error) ? conversion_error : Inf,
     )
+end
+
+function _teukolsky_horizon_state(evaluator::DirectComplexTeukolskyPair, r::Real)
+    route = evaluator.route
+    p = route.params
+    Rin, dRin, Rout, dRout, tail = direct_teukolsky_horizon_pair(
+        p.s, p.m, p.a, p.omega, p.lambda, r)
+    isfinite(tail) || return nothing
+    if route.branch == :IN
+        A = route.teukolsky_transmission
+        R = evaluator.inv_scale * A * Rin
+        Rp = evaluator.inv_scale * A * dRin
+        return (R=R, Rp=Rp, error=tail)
+    end
+    # The horizon coefficients of the solution the state evaluator represents
+    # (they differ from the route's amplitudes when an analytic overlay
+    # replaced those), in the route's Teukolsky normalization.
+    A = route.teukolsky_reflection
+    B = route.teukolsky_incidence
+    incidence_error, reflection_error = direct_amplitude_errors(route)
+    evaluator_state = route.state_evaluator
+    if evaluator_state isa DirectComplexRationalEvaluator &&
+            evaluator_state.amplitudes[] !== nothing &&
+            !iszero(route.reflection) && !iszero(route.incidence)
+        a, b, da, db = evaluator_state.amplitudes[]
+        A *= a / route.reflection
+        B *= b / route.incidence
+        reflection_error = da / abs(a)
+        incidence_error = db / abs(b)
+    end
+    R = evaluator.inv_scale * (A * Rin + B * Rout)
+    Rp = evaluator.inv_scale * (A * dRin + B * dRout)
+    error = max(
+        (abs(A * Rin) * reflection_error + abs(B * Rout) * incidence_error) /
+            abs(R / evaluator.inv_scale),
+        (abs(A * dRin) * reflection_error + abs(B * dRout) * incidence_error) /
+            abs(Rp / evaluator.inv_scale)) + tail
+    return (R=R, Rp=Rp, error=isfinite(error) ? error : Inf)
 end
 
 function (evaluator::DirectComplexTeukolskyPair)(r::Real)
@@ -4386,6 +4383,10 @@ function _complex_gsn_wrapper(route::DirectComplexRoute)
             route.metadata, :horizon_path_kind, missing),
         horizon_coordinate_steps=_metadata_value(
             route.metadata, :horizon_coordinate_steps, missing),
+        infinity_horizon_winding=_metadata_value(
+            route.metadata, :infinity_horizon_winding, 0),
+        horizon_monodromy=_metadata_value(
+            route.metadata, :horizon_monodromy, one(ComplexF64)),
         eikonal_candidate=false,
         horizon_order=order,
         ordinary_order=order,
@@ -4620,7 +4621,10 @@ function direct_gsn_radial(
     default_controls = lambda === nothing && nu === nothing &&
         controls === nothing && sfe === :auto && lfe === :auto &&
         all(value === nothing for value in values(kwargs))
-    if default_controls && real(omegac) < 0 && imag(omegac) > 0
+    # Re omega < 0: the exact reflection R_m(omega) = conj R_{-m}(-conj(omega))
+    # (the MST closed forms hold only for Re epsilon > 0); the sign of the
+    # zero of Re omega picks the side of the negative imaginary axis.
+    if default_controls && signbit(real(omegac))
         source_omega = -conj(omegac)
         source = direct_complex_route(
             Int(s), Int(l), -Int(m), a, source_omega, branch;
@@ -4650,5 +4654,39 @@ end
 
 direct_gsn_radial_function(route::DirectComplexRoute) =
     direct_complex_gsn_radial_function(route)
+
+
+# Relative errors (incidence, reflection) of the route's amplitudes: those
+# recorded by the two-ray build, or, when the analytic (MST) amplitudes
+# replaced them, the analytic estimate (condition and the agreement of their
+# representations, rescaled to each amplitude, plus the running error bound of
+# their sums where recorded);
+# Inf when neither is recorded.
+function direct_amplitude_errors(route::DirectComplexRoute)
+    metadata = route.metadata
+    if _metadata_value(metadata, :amplitude_backend, nothing) ==
+            :complex_mst_analytic
+        analytic = max(
+            eps(Float64) * _metadata_value(
+                metadata, :mst_amplitude_max_condition, Inf),
+            _metadata_value(metadata, :mst_amplitude_nearest_agreement, Inf),
+            _metadata_value(metadata,
+                :mst_amplitude_truncation_agreement, Inf))
+        bound = _metadata_value(metadata, :mst_amplitude_errors, (NaN, NaN))
+        own = all(isfinite, bound) ? bound : (0.0, 0.0)
+        # Each amplitude's own relative distance from the other evaluations
+        # where recorded; otherwise the pair distance (units of the larger
+        # amplitude) rescaled to it. Plus the running error of its own sums.
+        components = _metadata_value(metadata,
+            :mst_amplitude_component_agreement, (NaN, NaN))
+        all(isfinite, components) && return Float64.(own .+ max.(
+            eps(Float64) * _metadata_value(
+                metadata, :mst_amplitude_max_condition, Inf), components))
+        amplitudes = abs.((route.incidence, route.reflection))
+        return Float64.(own .+ analytic .* maximum(amplitudes) ./ amplitudes)
+    end
+    return (Float64(_metadata_value(metadata, :incidence_error, Inf)),
+        Float64(_metadata_value(metadata, :reflection_error, Inf)))
+end
 
 end

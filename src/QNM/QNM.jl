@@ -5,7 +5,8 @@ using Printf
 using SpinWeightedSpheroidalHarmonics
 using ..GeneralizedSasakiNakamura:
     GSN_radial, Teukolsky_radial, Y_radial, IN, UP,
-    ConversionFactors, Transformation, r_from_rstar, ISEM
+    ConversionFactors, Transformation, r_from_rstar, ISEM,
+    UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
 
 # Portions of ContinuedFractions.jl are translated from qnm/radial.py at
 # commit f3abd18e59828e7e7d75d07f20c7cbc87925edfa.

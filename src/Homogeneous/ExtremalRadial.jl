@@ -16,16 +16,11 @@ export extremal_teukolsky_horizon_state, extremal_synchronous_exponents
 export extremal_gsn_horizon_state, extremal_horizon_normalization
 export solve_extremal_gsn
 
-const _EXACT_SPIN_ATOL = 16eps(Float64)
-const _SYNCHRONOUS_RTOL = 128eps(Float64)
 const _NORMALIZATION_PRECISION_BITS = 384
 const _NORMALIZATION_SERIES_ORDER = 48
 const _SERIES_ORDER = 28
-const _NORMALIZATION_CACHE = Dict{Any,Any}()
-const _NORMALIZATION_CACHE_LOCK = ReentrantLock()
 
-is_exact_extremal_spin(a) = isreal(a) &&
-    abs(abs(float(real(a))) - 1.0) <= _EXACT_SPIN_ATOL
+is_exact_extremal_spin(a) = isreal(a) && isone(abs(real(a)))
 
 function _checked_extremal_sign(a)
     is_exact_extremal_spin(a) || throw(ArgumentError(
@@ -36,14 +31,9 @@ end
 extremal_horizon_detuning(a, m::Integer, omega) =
     2omega - m * _checked_extremal_sign(a)
 
-function _synchronous_scale(a, m, omega)
-    return max(one(abs(omega)), abs(2omega), abs(m * _checked_extremal_sign(a)))
-end
-
 function _require_nonsynchronous(a, m, omega)
     detuning = extremal_horizon_detuning(a, m, omega)
-    threshold = _SYNCHRONOUS_RTOL * _synchronous_scale(a, m, omega)
-    abs(detuning) > threshold || throw(DomainError(omega,
+    iszero(detuning) && throw(DomainError(omega,
         "omega = m*Omega_H is a synchronous extremal branch point; " *
         "IN/OUT plane-wave amplitudes and a simple-pole QNM residue are not defined there"))
     return detuning
@@ -154,12 +144,7 @@ function extremal_horizon_normalization(
         precision_bits::Int=_NORMALIZATION_PRECISION_BITS,
         order::Int=_NORMALIZATION_SERIES_ORDER)
     _require_nonsynchronous(a, m, omega)
-    cache_key = (s, m, a, omega, lambda, branch, precision_bits, order)
-    cached = lock(_NORMALIZATION_CACHE_LOCK) do
-        get(_NORMALIZATION_CACHE, cache_key, nothing)
-    end
-    cached === nothing || return cached
-    result = setprecision(precision_bits) do
+    return setprecision(precision_bits) do
         abig = _bigreal(real(a))
         omegabig = _bigcomplex(omega)
         lambdabig = _bigcomplex(lambda)
@@ -182,10 +167,6 @@ function extremal_horizon_normalization(
         return (value=leading, drift=drift, base_h=base_h,
             precision_bits=precision_bits, order=order)
     end
-    lock(_NORMALIZATION_CACHE_LOCK) do
-        _NORMALIZATION_CACHE[cache_key] = result
-    end
-    return result
 end
 
 function extremal_gsn_horizon_state(
@@ -217,10 +198,10 @@ end
 
 function _infinity_pair(s, m, a, omega, lambda, r, rs, order, branch)
     coefficient = branch === :outgoing ?
-        n -> Solutions.outgoing_coefficient_at_inf(
-            s, m, a, omega, lambda, n) :
-        n -> Solutions.ingoing_coefficient_at_inf(
-            s, m, a, omega, lambda, n)
+        Solutions.coefficient_sequence(Solutions.outgoing_coefficient_at_inf,
+            s, m, a, omega, lambda) :
+        Solutions.coefficient_sequence(Solutions.ingoing_coefficient_at_inf,
+            s, m, a, omega, lambda)
     value = InitialConditions.fansatz(coefficient, omega, r; order)
     derivative = InitialConditions.dfansatz_dr(coefficient, omega, r; order)
     sign = branch === :outgoing ? one(omega) : -one(omega)

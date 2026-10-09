@@ -264,6 +264,11 @@ function Base.show(io::IO, ::MIME"text/plain", result::QNMPairResult)
     print(io, "  stop_reason = ", result.stop_reason)
 end
 
+"""
+    LeaverResult
+
+Leaver continued-fraction root for one QNM: frequency, angular separation constant and eigenvalue, residuals and status.
+"""
 struct LeaverResult{T,C,A,M,P}
     mode::QNMMode
     convention::Symbol
@@ -285,6 +290,11 @@ struct LeaverResult{T,C,A,M,P}
     provenance::P
 end
 
+"""
+    ISEMValidationResult
+
+Independent GSN-ISEM check of a QNM frequency: radial incidence, reflection and transmission amplitudes and the scaled incidence residual.
+"""
 struct ISEMValidationResult{O,C,T,M}
     omega::O
     incidence::C
@@ -298,6 +308,11 @@ struct ISEMValidationResult{O,C,T,M}
     metadata::M
 end
 
+"""
+    ExcitationFactorResult
+
+QNM excitation factor with the amplitudes it is built from and their error estimates.
+"""
 struct ExcitationFactorResult{O,A,AT,R,RT,B,BT,T,M}
     omega::O
     alpha::A

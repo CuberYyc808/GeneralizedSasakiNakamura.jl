@@ -28,6 +28,9 @@ const _KERR_L2_M2_NEAR_AS_ANCHORS = Dict{Symbol,ComplexF64}(
     :algebraically_special =>
         0.060299316438925596 - 2.0888402014191692im,
 )
+# Counterrotating n=8 at a=0.5, Table I of arXiv:2609.09531v1 (M=1).
+# This rounded value is only a seed; the continued fraction is solved anew.
+const _KERR_L2_COUNTER_N8_ANCHOR = 0.098356 - 2.078506im
 
 # Frozen qnm 0.4.4 (commit f3abd18) branch anchors for the counterrotating
 # (s,l,|m|)=(-2,2,2) family.  They select the physical overtone branch only;
@@ -47,10 +50,6 @@ const _COUNTERROTATING_NEAR_EXTREMAL_ANCHORS = Dict(
     (0.99999, 10) => 0.08165609544784828 - 2.6748151109278746im,
 )
 const _COUNTERROTATING_ANCHOR_SPINS = (0.9999, 0.99999)
-
-const _GENERATED_SCHWARZSCHILD_SEEDS = Dict{NTuple{3,Int},ComplexF64}()
-const _GENERATED_SCHWARZSCHILD_SEED_METADATA = Dict{NTuple{3,Int},NamedTuple}()
-const _SCHWARZSCHILD_SEED_LOCK = ReentrantLock()
 
 function _working_type(a, guess)
     if a isa BigFloat || guess isa Complex{BigFloat} || guess isa BigFloat
@@ -76,20 +75,25 @@ function _branch_consistent(mode::QNMMode, omega)
     return real(omega) < 0
 end
 
-function _schwarzschild_label_contract(mode::QNMMode, convention::Symbol)
+function _schwarzschild_label_contract(mode::QNMMode, convention::Symbol, a=0)
     # Negative public spins are evaluated through (a,m) -> (-a,-m), so the
     # same physical near-AS branch appears internally with m=-2.
     l2m2 = mode.s == -2 && mode.l == 2 && abs(mode.m) == 2
-    standard_as = convention == :overtone && l2m2 && mode.n == 8
-    complete_unconventional = convention == :complete_spectrum && l2m2 &&
+    kerr_overtone = convention == :overtone && l2m2 && !iszero(a)
+    corotating = a * mode.m * (mode.branch == :positive_real ? 1 : -1) > 0
+    complete = convention == :complete_spectrum || (kerr_overtone && corotating)
+    counter_n8 = kerr_overtone && !corotating && mode.n == 8
+    standard_as = convention == :overtone && l2m2 && mode.n == 8 && iszero(a)
+    complete_unconventional = complete && l2m2 &&
         mode.n == 8
-    complete_as = convention == :complete_spectrum && l2m2 && mode.n == 9
-    near_as_role = standard_as || complete_as ? :algebraically_special :
+    complete_as = complete && l2m2 && mode.n == 9
+    near_as_role = counter_n8 ? :counterrotating :
+        standard_as || complete_as ? :algebraically_special :
         complete_unconventional ? :unconventional : :none
     is_algebraically_special_pair = near_as_role != :none
     endpoint_kind = near_as_role == :none ? :regular : near_as_role
     sequence_index = convention == :leaver ? missing :
-        convention == :complete_spectrum && l2m2 && mode.n >= 10 ?
+        complete && l2m2 && mode.n >= 10 ?
             mode.n - 1 :
         complete_as ? missing : mode.n
     branch_label = convention == :leaver ? :unassigned_leaver_root :
@@ -661,7 +665,9 @@ function _polish_leaver_root(mode::QNMMode, a::T, initial::Complex{T};
             8 * deflated_value(xplus.value, omega + h) -
             8 * deflated_value(xminus.value, omega - h) +
             deflated_value(xminus2.value, omega - 2h)) / (12h)
-        if !isfinite(derivative) || abs(derivative) <= sqrt(eps(T))
+        # Deflation can scale a regular derivative arbitrarily small.
+        # Root acceptance is checked against the undeflated residual.
+        if !isfinite(derivative) || iszero(derivative)
             return (
                 omega=omega, evaluation=evaluation, history=history,
                 converged=false, conditioned=false,
@@ -867,6 +873,17 @@ _root_residual(evaluation) = hasproperty(evaluation, :scaled_residual) ?
 
 function _near_as_anchor_seed(mode::QNMMode, target_spin::T,
         near_as_role::Symbol) where {T<:AbstractFloat}
+    if near_as_role == :counterrotating
+        seed = _complex_of_type(T, _KERR_L2_COUNTER_N8_ANCHOR)
+        return (
+            seed=mode.branch == :positive_real ? seed : -conj(seed),
+            seed_spin=T(0.5),
+            source=:published_finite_spin_anchor_repolished_locally,
+            seed_inversion_index=8,
+            seed_predictor=:counterrotating_a0p5,
+            seed_duplicate_distance=T(Inf),
+        )
+    end
     _near_as_complete_scope(mode, near_as_role) || throw(ArgumentError(
         "The automatic near-AS anchor is available only for " *
         "the explicitly selected (s,l,abs(m))=(-2,2,2) near-AS branch."))
@@ -954,30 +971,12 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
         )
     end
 
-    return lock(_SCHWARZSCHILD_SEED_LOCK) do
-        if haskey(_GENERATED_SCHWARZSCHILD_SEEDS, target_key)
-            metadata = _GENERATED_SCHWARZSCHILD_SEED_METADATA[target_key]
-            return (
-                seed=_complex_of_type(
-                    T, _GENERATED_SCHWARZSCHILD_SEEDS[target_key]),
-                seed_spin=zero(T),
-                source=:generated_schwarzschild_overtone_sequence,
-                seed_inversion_index=metadata.inversion_index,
-                seed_predictor=metadata.predictor,
-                seed_duplicate_distance=T(metadata.duplicate_distance),
-            )
-        end
-
-        roots = Dict{Int,Complex{T}}()
+    return let roots = Dict{Int,Complex{T}}(),
+            generated_metadata = Dict{Int,NamedTuple}()
         for (key, value) in _SCHWARZSCHILD_SEEDS
             key[1] == mode.s && key[2] == mode.l || continue
             roots[key[3]] = _complex_of_type(T, value)
         end
-        for (key, value) in _GENERATED_SCHWARZSCHILD_SEEDS
-            key[1] == mode.s && key[2] == mode.l || continue
-            roots[key[3]] = _complex_of_type(T, value)
-        end
-
         for overtone in 0:mode.n
             haskey(roots, overtone) && continue
             if mode.s == -2 && mode.l == 2 && abs(mode.m) == 2 && overtone == 8
@@ -1055,10 +1054,7 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
             selected = candidates[argmin(
                 candidate.predictor_distance for candidate in candidates)]
             roots[overtone] = selected.polished.omega
-            generated_key = (mode.s, mode.l, overtone)
-            _GENERATED_SCHWARZSCHILD_SEEDS[generated_key] = ComplexF64(
-                selected.polished.omega)
-            _GENERATED_SCHWARZSCHILD_SEED_METADATA[generated_key] = (
+            generated_metadata[overtone] = (
                 inversion_index=selected.inversion,
                 predictor=selected.predictor,
                 duplicate_distance=Float64(selected.duplicate_distance),
@@ -1067,7 +1063,7 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
                 cf_error=Float64(selected.polished.evaluation.error),
             )
         end
-        metadata = _GENERATED_SCHWARZSCHILD_SEED_METADATA[target_key]
+        metadata = generated_metadata[mode.n]
         return (
             seed=roots[mode.n],
             seed_spin=zero(T),
@@ -1095,8 +1091,8 @@ function _automatic_precision_fallback(mode::QNMMode, a, omega;
         (mode.branch == :negative_real ? 240000 : 120000) : 24000
     fallback_cf_maximum_iterations = max(
         cf_maximum_iterations, fallback_cf_ceiling)
-    result = setprecision(BigFloat, fallback_precision_bits) do
-        qnm_frequency(
+    return setprecision(BigFloat, fallback_precision_bits) do
+        result = qnm_frequency(
             mode, BigFloat(a);
             guess=Complex{BigFloat}(
                 BigFloat(real(omega)), BigFloat(imag(omega))),
@@ -1120,67 +1116,67 @@ function _automatic_precision_fallback(mode::QNMMode, a, omega;
             convention,
             inversion_index,
         )
-    end
-    precision_drift = abs(result.omega - omega) /
-        max(one(real(result.omega)), abs(result.omega), abs(omega))
-    branch_reference = _complex_of_type(BigFloat, omega)
-    raw_branch_allowance = zero(BigFloat)
-    if hasproperty(float64_provenance, :terminal_predictor)
-        branch_reference = _complex_of_type(
-            BigFloat, float64_provenance.terminal_predictor)
-    elseif hasproperty(float64_provenance, :terminal_extrapolation_rows) &&
-            !isempty(float64_provenance.terminal_extrapolation_rows)
-        terminal_row = last(float64_provenance.terminal_extrapolation_rows)
-        branch_reference = _complex_of_type(BigFloat, terminal_row.predictor)
-        if hasproperty(terminal_row, :branch_allowance)
-            raw_branch_allowance = BigFloat(terminal_row.branch_allowance)
+        precision_drift = abs(result.omega - omega) /
+            max(one(real(result.omega)), abs(result.omega), abs(omega))
+        branch_reference = _complex_of_type(BigFloat, omega)
+        raw_branch_allowance = zero(BigFloat)
+        if hasproperty(float64_provenance, :terminal_predictor)
+            branch_reference = _complex_of_type(
+                BigFloat, float64_provenance.terminal_predictor)
+        elseif hasproperty(float64_provenance, :terminal_extrapolation_rows) &&
+                !isempty(float64_provenance.terminal_extrapolation_rows)
+            terminal_row = last(float64_provenance.terminal_extrapolation_rows)
+            branch_reference = _complex_of_type(BigFloat, terminal_row.predictor)
+            if hasproperty(terminal_row, :branch_allowance)
+                raw_branch_allowance = BigFloat(terminal_row.branch_allowance)
+            end
         end
+        branch_scale = max(one(BigFloat), abs(result.omega),
+            abs(branch_reference))
+        precision_candidate_allowance =
+            BigFloat(64) * sqrt(BigFloat(stability_tolerance))
+        precision_predictor_allowance = max(
+            precision_candidate_allowance,
+            raw_branch_allowance / branch_scale,
+        )
+        precision_predictor_drift = abs(result.omega - branch_reference) /
+            branch_scale
+        precision_branch_drift = min(
+            BigFloat(precision_drift), precision_predictor_drift)
+        precision_branch_allowance = precision_candidate_allowance
+        precision_branch_guard_passed =
+            BigFloat(precision_drift) <= precision_candidate_allowance ||
+            precision_predictor_drift <= precision_predictor_allowance
+        provenance = merge(result.provenance, (
+            precision_policy=:automatic_bigfloat_fallback,
+            high_damping_near_extremal,
+            fallback_cf_maximum_iterations,
+            float64_candidate=omega,
+            float64_bigfloat_drift=precision_drift,
+            precision_branch_reference=branch_reference,
+            precision_candidate_drift=precision_drift,
+            precision_candidate_allowance,
+            precision_predictor_drift,
+            precision_predictor_allowance,
+            precision_branch_drift,
+            precision_branch_allowance,
+            precision_branch_guard_passed,
+            float64_provenance=float64_provenance,
+        ))
+        status = result.status in (:accepted, :estimated) &&
+            precision_branch_guard_passed ? result.status : :failed
+        stop_reason = !(result.status in (:accepted, :estimated)) ?
+            result.stop_reason :
+            precision_branch_guard_passed ? result.stop_reason :
+            :precision_fallback_branch_guard
+        return LeaverResult(
+            result.mode, result.convention, result.overtone_index,
+            result.inversion_index, result.a, result.omega, result.angular_A,
+            result.lambda, result.mixing, result.cf_value, result.cf_error,
+            result.cf_iterations, result.root_residual,
+            result.angular_residual, result.precision_bits, status,
+            stop_reason, provenance)
     end
-    branch_scale = max(one(BigFloat), abs(result.omega),
-        abs(branch_reference))
-    precision_candidate_allowance =
-        BigFloat(64) * sqrt(BigFloat(stability_tolerance))
-    precision_predictor_allowance = max(
-        precision_candidate_allowance,
-        raw_branch_allowance / branch_scale,
-    )
-    precision_predictor_drift = abs(result.omega - branch_reference) /
-        branch_scale
-    precision_branch_drift = min(
-        BigFloat(precision_drift), precision_predictor_drift)
-    precision_branch_allowance = precision_candidate_allowance
-    precision_branch_guard_passed =
-        BigFloat(precision_drift) <= precision_candidate_allowance ||
-        precision_predictor_drift <= precision_predictor_allowance
-    provenance = merge(result.provenance, (
-        precision_policy=:automatic_bigfloat_fallback,
-        high_damping_near_extremal,
-        fallback_cf_maximum_iterations,
-        float64_candidate=omega,
-        float64_bigfloat_drift=precision_drift,
-        precision_branch_reference=branch_reference,
-        precision_candidate_drift=precision_drift,
-        precision_candidate_allowance,
-        precision_predictor_drift,
-        precision_predictor_allowance,
-        precision_branch_drift,
-        precision_branch_allowance,
-        precision_branch_guard_passed,
-        float64_provenance=float64_provenance,
-    ))
-    status = result.status in (:accepted, :estimated) &&
-        precision_branch_guard_passed ? result.status : :failed
-    stop_reason = !(result.status in (:accepted, :estimated)) ?
-        result.stop_reason :
-        precision_branch_guard_passed ? result.stop_reason :
-        :precision_fallback_branch_guard
-    return LeaverResult(
-        result.mode, result.convention, result.overtone_index,
-        result.inversion_index, result.a, result.omega, result.angular_A,
-        result.lambda, result.mixing, result.cf_value, result.cf_error,
-        result.cf_iterations, result.root_residual,
-        result.angular_residual, result.precision_bits, status,
-        stop_reason, provenance)
 end
 
 function _extremal_damped_limit_result(mode::QNMMode, a::T;
@@ -1443,7 +1439,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
         stability_tolerance=nothing,
         maximum_root_iterations::Int=30,
         initial_spin_step=0.005,
-        maximum_spin_step=0.004,
+        maximum_spin_step=0.02,
         minimum_spin_step=1.0e-6,
         trust_radius=0.2,
         automatic_precision_fallback::Bool=true,
@@ -1484,7 +1480,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
             mode, aT, source; angular_order=mapped_order, sheet_id)
     end
     label_contract = _schwarzschild_label_contract(
-        mode, selected_convention)
+        mode, selected_convention, aT)
     near_as_role = label_contract.near_as_role
     automatic_inversion = inversion_index === :auto
     default_inversion = selected_convention == :leaver ||
@@ -1653,19 +1649,28 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
     accepted_angular_A = Complex{T}[]
     last_polish = nothing
 
+    polish_options = (;
+        angular_order, sheet_id, inversion_index=selected_inversion,
+        cf_tolerance=tolerance_cf, cf_minimum_iterations,
+        cf_maximum_iterations=maximum_cf_iterations,
+        root_tolerance=continuation_root_tolerance,
+        maximum_root_iterations, trust_radius=radius, near_as_role)
+    fallback_options = (;
+        angular_order, sheet_id, cf_minimum_iterations,
+        cf_maximum_iterations=maximum_cf_iterations,
+        maximum_root_iterations, trust_radius=radius,
+        fallback_precision_bits, cf_tolerance=tolerance_cf,
+        root_tolerance=tolerance_root, stability_tolerance=tolerance_stability,
+        continuation_coordinate=selected_coordinate,
+        convention=selected_convention, overtone_index,
+        inversion_index=selected_inversion)
+
     try
         if guess === nothing
             spin = seed_result.seed_spin
             coordinate = selected_coordinate == :nu ? asin(spin) : spin
             polished = _polish_frequency_root(mode, spin, current;
-                angular_order, sheet_id,
-                inversion_index=selected_inversion,
-                cf_tolerance=tolerance_cf,
-                cf_minimum_iterations,
-                cf_maximum_iterations=maximum_cf_iterations,
-                root_tolerance=continuation_root_tolerance,
-                maximum_root_iterations, trust_radius=radius,
-                near_as_role)
+                polish_options...)
             append!(continuation_rows, [merge(row, (a=spin,
                 continuation_attempt=1, predictor=current))
                 for row in polished.history])
@@ -1728,14 +1733,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
                         accepted_coordinates, accepted_roots, next_coordinate)
                     polished = _polish_frequency_root(
                         mode, next_spin, predictor;
-                        angular_order, sheet_id,
-                        inversion_index=selected_inversion,
-                        cf_tolerance=tolerance_cf,
-                        cf_minimum_iterations,
-                        cf_maximum_iterations=maximum_cf_iterations,
-                        root_tolerance=continuation_root_tolerance,
-                        maximum_root_iterations, trust_radius=radius,
-                        near_as_role)
+                        polish_options...)
                     append!(continuation_rows, [merge(row, (
                         a=next_spin, continuation_attempt=attempt,
                         continuation_coordinate=selected_coordinate,
@@ -1801,14 +1799,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
                 predictor = _terminal_extrapolation_predictor(
                     accepted_coordinates, accepted_roots, aT)
                 polished = _polish_frequency_root(mode, aT, predictor;
-                    angular_order, sheet_id,
-                    inversion_index=selected_inversion,
-                    cf_tolerance=tolerance_cf,
-                    cf_minimum_iterations,
-                    cf_maximum_iterations=maximum_cf_iterations,
-                    root_tolerance=continuation_root_tolerance,
-                    maximum_root_iterations, trust_radius=radius,
-                    near_as_role)
+                    polish_options...)
                 append!(continuation_rows, [merge(row, (
                     a=aT, continuation_attempt=1,
                     predictor=predictor,
@@ -1831,19 +1822,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
                     if T === Float64 && automatic_precision_fallback
                         return _automatic_precision_fallback(
                             mode, aT, polished.omega;
-                            angular_order, sheet_id,
-                            cf_minimum_iterations,
-                            cf_maximum_iterations=maximum_cf_iterations,
-                            maximum_root_iterations,
-                            trust_radius=radius,
-                            fallback_precision_bits,
-                            cf_tolerance=tolerance_cf,
-                            root_tolerance=tolerance_root,
-                            stability_tolerance=tolerance_stability,
-                            continuation_coordinate=selected_coordinate,
-                            convention=selected_convention,
-                            overtone_index,
-                            inversion_index=selected_inversion,
+                            fallback_options...,
                             float64_provenance=terminal_provenance)
                     end
                     return failed_result(polished.omega,
@@ -1872,14 +1851,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
             end
         else
             polished = _polish_frequency_root(mode, aT, current;
-                angular_order, sheet_id,
-                inversion_index=selected_inversion,
-                cf_tolerance=tolerance_cf,
-                cf_minimum_iterations,
-                cf_maximum_iterations=maximum_cf_iterations,
-                root_tolerance=continuation_root_tolerance,
-                maximum_root_iterations, trust_radius=radius,
-                near_as_role)
+                polish_options...)
             append!(continuation_rows, [merge(row, (a=aT,
                 continuation_attempt=1, predictor=current))
                 for row in polished.history])
@@ -1932,29 +1904,18 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
             # angular-order drift; otherwise ordinary Newton correction is
             # misclassified as a branch jump.
             final_primary = _polish_frequency_root(mode, aT, current;
-                angular_order,
+                polish_options...,
                 sheet_id=Symbol(sheet_id, :_final_primary),
-                inversion_index=selected_inversion,
-                cf_tolerance=tolerance_cf,
-                cf_minimum_iterations,
-                cf_maximum_iterations=maximum_cf_iterations,
-                root_tolerance=tolerance_root,
-                maximum_root_iterations,
-                trust_radius=radius,
-                near_as_role)
+                root_tolerance=tolerance_root)
             current = final_primary.omega
             guard = final_primary.converged ? _polish_frequency_root(
                 mode, aT, current;
+                polish_options...,
                 angular_order=angular_order + 8,
                 sheet_id=Symbol(sheet_id, :_guard),
-                inversion_index=selected_inversion,
-                cf_tolerance=tolerance_cf,
                 cf_minimum_iterations=cf_minimum_iterations + 100,
-                cf_maximum_iterations=maximum_cf_iterations,
                 root_tolerance=tolerance_root,
-                maximum_root_iterations,
-                trust_radius=radius,
-                derivative_step_scale=T(0.5), near_as_role) : final_primary
+                derivative_step_scale=T(0.5)) : final_primary
         end
         float64_provenance = (
             input_type=string(typeof(a)),
@@ -1990,18 +1951,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
                     guard_root_equation == :leaver_continued_fraction
                 return _automatic_precision_fallback(
                     mode, aT, guard.omega;
-                    angular_order, sheet_id, cf_minimum_iterations,
-                    cf_maximum_iterations=maximum_cf_iterations,
-                    maximum_root_iterations,
-                    trust_radius=radius,
-                    fallback_precision_bits,
-                    cf_tolerance=tolerance_cf,
-                    root_tolerance=tolerance_root,
-                    stability_tolerance=tolerance_stability,
-                    continuation_coordinate=selected_coordinate,
-                    convention=selected_convention,
-                    overtone_index,
-                    inversion_index=selected_inversion,
+                    fallback_options...,
                     float64_provenance=merge(float64_provenance, (
                         float64_stop_reason=guard.stop_reason,)))
             end
@@ -2052,18 +2002,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
                 root_equation == :leaver_continued_fraction
             return _automatic_precision_fallback(
                 mode, aT, guard.omega;
-                angular_order, sheet_id, cf_minimum_iterations,
-                cf_maximum_iterations=maximum_cf_iterations,
-                maximum_root_iterations,
-                trust_radius=radius,
-                fallback_precision_bits,
-                cf_tolerance=tolerance_cf,
-                root_tolerance=tolerance_root,
-                stability_tolerance=tolerance_stability,
-                continuation_coordinate=selected_coordinate,
-                convention=selected_convention,
-                overtone_index,
-                inversion_index=selected_inversion,
+                fallback_options...,
                 float64_provenance=merge(float64_provenance, (
                     float64_root_drift=root_drift,
                     float64_root_residual=final_root_residual,

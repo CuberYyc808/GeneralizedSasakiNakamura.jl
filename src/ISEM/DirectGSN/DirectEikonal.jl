@@ -33,15 +33,15 @@ const EIKONAL_SFE_COMPRESSION_MIN = 8192.0
 const EIKONAL_ROUTE_COMPRESSION_MIN = 192.0
 const EIKONAL_IN_PHASE_MIN = 5.0
 const EIKONAL_PROFILE = get(ENV, "DIRECT_GSN_EIKONAL_PROFILE", "0") == "1"
-const _PROFILE_ACCEPTED = Ref(0)
-const _PROFILE_REJECTED = Ref(0)
-const _PROFILE_RESIDUAL_REJECTED = Ref(0)
-const _PROFILE_CHECK_REJECTED = Ref(0)
-const _PROFILE_SPLIT_REJECTED = Ref(0)
-const _PROFILE_NONFINITE_REJECTED = Ref(0)
-const _PROFILE_OTHER_REJECTED = Ref(0)
-const _PROFILE_PLANS = Ref(0)
-const _PROFILE_PLAN_NS = Ref{Int128}(0)
+const _PROFILE_ACCEPTED = Threads.Atomic{Int}(0)
+const _PROFILE_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_RESIDUAL_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_CHECK_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_SPLIT_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_NONFINITE_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_OTHER_REJECTED = Threads.Atomic{Int}(0)
+const _PROFILE_PLANS = Threads.Atomic{Int}(0)
+const _PROFILE_PLAN_NS = Threads.Atomic{UInt64}(0)
 
 function reset_eikonal_profile!()
     _PROFILE_ACCEPTED[] = 0
@@ -76,19 +76,19 @@ end
 
 @inline function _profile_accept!(count)
     @static if EIKONAL_PROFILE
-        _PROFILE_ACCEPTED[] += count
+        Threads.atomic_add!(_PROFILE_ACCEPTED, count)
     end
     return nothing
 end
 
 @inline function _profile_reject!(reason::Symbol=:other)
     @static if EIKONAL_PROFILE
-        _PROFILE_REJECTED[] += 1
-        reason === :residual ? (_PROFILE_RESIDUAL_REJECTED[] += 1) :
-        reason === :check ? (_PROFILE_CHECK_REJECTED[] += 1) :
-        reason === :split ? (_PROFILE_SPLIT_REJECTED[] += 1) :
-        reason === :nonfinite ? (_PROFILE_NONFINITE_REJECTED[] += 1) :
-        (_PROFILE_OTHER_REJECTED[] += 1)
+        Threads.atomic_add!(_PROFILE_REJECTED, 1)
+        reason === :residual ? (Threads.atomic_add!(_PROFILE_RESIDUAL_REJECTED, 1)) :
+        reason === :check ? (Threads.atomic_add!(_PROFILE_CHECK_REJECTED, 1)) :
+        reason === :split ? (Threads.atomic_add!(_PROFILE_SPLIT_REJECTED, 1)) :
+        reason === :nonfinite ? (Threads.atomic_add!(_PROFILE_NONFINITE_REJECTED, 1)) :
+        (Threads.atomic_add!(_PROFILE_OTHER_REJECTED, 1))
     end
     return nothing
 end
@@ -466,8 +466,8 @@ end
     @static if EIKONAL_PROFILE
         start = time_ns()
         plan = _eikonal_plan!(a_coeffs, b_coeffs, scratch, terms)
-        _PROFILE_PLAN_NS[] += time_ns() - start
-        _PROFILE_PLANS[] += 1
+        Threads.atomic_add!(_PROFILE_PLAN_NS, time_ns() - start)
+        Threads.atomic_add!(_PROFILE_PLANS, 1)
         return plan
     else
         return _eikonal_plan!(a_coeffs, b_coeffs, scratch, terms)
@@ -563,8 +563,8 @@ end
     @static if EIKONAL_PROFILE
         start = time_ns()
         plan = _eikonal_plan(a_coeffs, b_coeffs, scratch, terms)
-        _PROFILE_PLAN_NS[] += time_ns() - start
-        _PROFILE_PLANS[] += 1
+        Threads.atomic_add!(_PROFILE_PLAN_NS, time_ns() - start)
+        Threads.atomic_add!(_PROFILE_PLANS, 1)
         return plan
     else
         return _eikonal_plan(a_coeffs, b_coeffs, scratch, terms)

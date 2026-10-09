@@ -14,13 +14,17 @@ Both codes are capable of handling *complex* frequencies, and we use $M = 1$ con
 
 The paper describing both the GSN formalism and the implementation can be found in [2306.16469](https://arxiv.org/abs/2306.16469). A set of Mathematica notebooks deriving all the equations used in the code can be found in [10.5281/zenodo.8080241](https://zenodo.org/records/8080242).
 
-Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
+Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due to a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
 
-Starting from v0.9.0, the package includes the direct GSN-based ISEM solver, short for _iterative series expansion matching_. The default `method = "auto"` tries `GSN-ISEM` first and falls back to the legacy automatic radial route only if direct construction fails. The explicit `method = "GSN-ISEM"` form is strict and never falls back. This path accelerates homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The release also adds a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
+Starting from v0.9.0, the package includes the ISEM solver, short for _iterative series expansion matching_, and a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
+
+Starting from v0.10.0, the package includes the direct GSN-based ISEM solver. The default `method = "auto"` tries `GSN-ISEM` first and falls back to the legacy automatic radial route only if direct construction fails. The explicit `method = "GSN-ISEM"` form is strict and never falls back. This path accelerates homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The package also computes Kerr quasinormal modes (`qnm`, `qnm_frequency`, `qnm_sequence`, `qnm_excitation_factor`), and point-particle calls on the same orbit can share one read-only trajectory and sampling geometry through `with_pointparticle_submission`, with private per-mode workspaces for threaded use.
 
 For high-index tail modes in eccentric and generic flux summations, the ISEM solver can use adaptive Levin quadrature instead of globally densifying a trapezoidal grid. The radial phase interval is refined only where the oscillatory integral has not stabilized. In generic two-dimensional convolutions, this radial adaptive Levin rule is combined with a fixed Clenshaw-Curtis rule in the polar direction, which resolves the smooth polar dependence with a compact cosine-spaced grid while keeping the expensive adaptivity in the radial direction.
 
 ## Installation
+Julia 1.12 or later in the 1.x series is required.
+
 To install the package using the Julia package manager, simply type the following in the Julia REPL:
 ```julia
 using Pkg
@@ -29,12 +33,7 @@ Pkg.add("GeneralizedSasakiNakamura")
 
 *Note: There is no need to install [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) separately as it should be automatically installed by the package manager.*
 
-The `GSN-ISEM` development branch is paired with the `Fast-eigenvalue` angular-solver branch. Install both branches explicitly (this also works on Julia 1.10):
-```julia
-using Pkg
-Pkg.add(url="https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git", rev="Fast-eigenvalue")
-Pkg.add(url="https://github.com/CuberYyc808/GeneralizedSasakiNakamura.jl.git", rev="GSN-ISEM")
-```
+Version 0.10 requires KerrGeodesics v0.5 and SpinWeightedSpheroidalHarmonics v1.4, both available from the General registry.
 
 ## Highlights
 ### Two classes of solvers

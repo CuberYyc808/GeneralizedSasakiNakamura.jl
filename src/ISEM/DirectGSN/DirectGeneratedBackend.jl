@@ -159,88 +159,31 @@ function _ordinary_module_symbol(s::Integer, basis::Symbol)
     throw(ArgumentError("unsupported ordinary basis $basis."))
 end
 
+# Each generated table is looked up by name (a dynamic call), so a solve
+# compiles only the tables for its spin and basis. The tables convert their arguments to
+# these types themselves; converting first lets real and complex frequencies
+# share one compiled method per table.
+_generated_function(name::Symbol, table::Symbol) =
+    getfield(getfield(@__MODULE__, table), name)
+
 function _endpoint_values(s::Integer, group::Symbol, lambda, m, nu, omega)
-    if group == :H
-        s == -2 && return DirectGSNEndpoint_h_hc_sminus2.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == -1 && return DirectGSNEndpoint_h_hc_sminus1.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 0 && return DirectGSNEndpoint_h_hc_s0.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 1 && return DirectGSNEndpoint_h_hc_splus1.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 2 && return DirectGSNEndpoint_h_hc_splus2.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-    elseif group == :I
-        s == -2 && return DirectGSNEndpoint_i_ic_sminus2.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == -1 && return DirectGSNEndpoint_i_ic_sminus1.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 0 && return DirectGSNEndpoint_i_ic_s0.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 1 && return DirectGSNEndpoint_i_ic_splus1.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-        s == 2 && return DirectGSNEndpoint_i_ic_splus2.construct_direct_gsn_endpoint_basis(lambda, m, nu, omega)
-    end
-    throw(ArgumentError("unsupported endpoint spin/group s=$s group=$group."))
+    construct = _generated_function(
+        :construct_direct_gsn_endpoint_basis, _endpoint_module_symbol(s, group))
+    return construct(ComplexF64(lambda), Float64(m), Float64(nu),
+        ComplexF64(omega))::Vector{ComplexF64}
 end
 
 function _ordinary_coefficients_and_eval(s::Integer, basis::Symbol, lambda, m, nu, omega)
-    if basis == :yc
-        s == -2 && return (
-            DirectGSNBasis_yc_sminus2.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_yc_sminus2.ordinary_value_count(),
-            DirectGSNBasis_yc_sminus2.eval_direct_gsn_basis!,
-            DirectGSNBasis_yc_sminus2.eval_direct_gsn_basis_variable!,
-        )
-        s == -1 && return (
-            DirectGSNBasis_yc_sminus1.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_yc_sminus1.ordinary_value_count(),
-            DirectGSNBasis_yc_sminus1.eval_direct_gsn_basis!,
-            DirectGSNBasis_yc_sminus1.eval_direct_gsn_basis_variable!,
-        )
-        s == 0 && return (
-            DirectGSNBasis_yc_s0.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_yc_s0.ordinary_value_count(),
-            DirectGSNBasis_yc_s0.eval_direct_gsn_basis!,
-            DirectGSNBasis_yc_s0.eval_direct_gsn_basis_variable!,
-        )
-        s == 1 && return (
-            DirectGSNBasis_yc_splus1.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_yc_splus1.ordinary_value_count(),
-            DirectGSNBasis_yc_splus1.eval_direct_gsn_basis!,
-            DirectGSNBasis_yc_splus1.eval_direct_gsn_basis_variable!,
-        )
-        s == 2 && return (
-            DirectGSNBasis_yc_splus2.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_yc_splus2.ordinary_value_count(),
-            DirectGSNBasis_yc_splus2.eval_direct_gsn_basis!,
-            DirectGSNBasis_yc_splus2.eval_direct_gsn_basis_variable!,
-        )
-    elseif basis == :ys
-        s == -2 && return (
-            DirectGSNBasis_ys_sminus2.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_ys_sminus2.ordinary_value_count(),
-            DirectGSNBasis_ys_sminus2.eval_direct_gsn_basis!,
-            DirectGSNBasis_ys_sminus2.eval_direct_gsn_basis_variable!,
-        )
-        s == -1 && return (
-            DirectGSNBasis_ys_sminus1.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_ys_sminus1.ordinary_value_count(),
-            DirectGSNBasis_ys_sminus1.eval_direct_gsn_basis!,
-            DirectGSNBasis_ys_sminus1.eval_direct_gsn_basis_variable!,
-        )
-        s == 0 && return (
-            DirectGSNBasis_ys_s0.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_ys_s0.ordinary_value_count(),
-            DirectGSNBasis_ys_s0.eval_direct_gsn_basis!,
-            DirectGSNBasis_ys_s0.eval_direct_gsn_basis_variable!,
-        )
-        s == 1 && return (
-            DirectGSNBasis_ys_splus1.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_ys_splus1.ordinary_value_count(),
-            DirectGSNBasis_ys_splus1.eval_direct_gsn_basis!,
-            DirectGSNBasis_ys_splus1.eval_direct_gsn_basis_variable!,
-        )
-        s == 2 && return (
-            DirectGSNBasis_ys_splus2.construct_direct_gsn_basis(lambda, m, nu, omega),
-            DirectGSNBasis_ys_splus2.ordinary_value_count(),
-            DirectGSNBasis_ys_splus2.eval_direct_gsn_basis!,
-            DirectGSNBasis_ys_splus2.eval_direct_gsn_basis_variable!,
-        )
-    end
-    throw(ArgumentError("unsupported ordinary spin/basis s=$s basis=$basis."))
+    table = _ordinary_module_symbol(s, basis)
+    construct = _generated_function(:construct_direct_gsn_basis, table)
+    value_count = _generated_function(:ordinary_value_count, table)
+    return (
+        construct(ComplexF64(lambda), Float64(m), Float64(nu),
+            ComplexF64(omega))::Vector{ComplexF64},
+        value_count()::Int,
+        _generated_function(:eval_direct_gsn_basis!, table),
+        _generated_function(:eval_direct_gsn_basis_variable!, table),
+    )
 end
 
 function _ordinary_evaluator(s::Integer, lambda, m, nu::Float64, omega, basis::Symbol, requires_latest_world::Bool)

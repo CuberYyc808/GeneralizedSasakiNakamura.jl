@@ -14,6 +14,7 @@ export direct_rational_series_from_coefficients!
 export direct_endpoint_ab_series!, direct_endpoint_ab_series
 export direct_ordinary_ab_series!, direct_ordinary_ab_series
 export direct_ordinary_y_ab_series!
+export direct_ordinary_scaled_y_ab_series!
 export direct_shifted_ab!, direct_shifted_infinity_ab!
 export direct_ordinary_point_coeffs!, direct_ordinary_point_coeffs
 export direct_endpoint_power_lookup
@@ -205,7 +206,7 @@ end
 end
 
 function _shift_poly!(
-    work::Vector{ComplexF64},
+    work::Vector{<:Complex},
     start::Integer,
     source,
     pole_order::Integer,
@@ -230,7 +231,7 @@ function _shift_poly!(
 end
 
 function _shift_condition(
-    work::Vector{ComplexF64},
+    work::Vector{<:Complex},
     start::Integer,
     source,
     pole_order::Integer,
@@ -256,9 +257,9 @@ function _shift_condition(
 end
 
 function _shift_series!(
-    out::Vector{ComplexF64},
+    out::Vector{<:Complex},
     out_len::Integer,
-    work::Vector{ComplexF64},
+    work::Vector{<:Complex},
     p_start::Integer,
     p_len::Integer,
     q_start::Integer,
@@ -285,9 +286,9 @@ function _shift_series!(
 end
 
 function _shift_rational!(
-    out::Vector{ComplexF64},
+    out::Vector{<:Complex},
     out_len::Integer,
-    work::Vector{ComplexF64},
+    work::Vector{<:Complex},
     rational::DirectRationalCoefficients,
     pole_order::Integer,
     center,
@@ -306,13 +307,31 @@ function _shift_rational!(
     return max(p_condition, q_condition, recurrence_condition)
 end
 
+function _accurate_shift_rational!(out, terms, work, rational, pole_order, center, eps_limit)
+    condition = _shift_rational!(out, terms, work, rational, pole_order, center)
+    error = eps(Float64) * condition
+    error <= eps_limit && return error
+    # Only the polynomial shift and series division need extra precision.
+    # The returned local coefficients and propagated solution remain binary64.
+    return setprecision(BigFloat, 128) do
+        big_out = Vector{Complex{BigFloat}}(undef, terms)
+        big_work = Vector{Complex{BigFloat}}(undef, length(work))
+        condition = _shift_rational!(big_out, terms, big_work,
+            rational, pole_order, Complex{BigFloat}(center))
+        copyto!(out, 1, big_out, 1, terms)
+        Float64(eps(BigFloat) * condition + eps(Float64))
+    end
+end
+
 @inline function _valid_shift_center(center)
     finite = isfinite(real(center)) && isfinite(imag(center))
     finite || return false
     if center isa Real
         return 0 < center < 1
     end
-    return 0 < abs(center) < 1
+    # A rational Taylor shift is not restricted to the unit disk. Its
+    # denominator and conditioning checks below determine local validity.
+    return !iszero(center) && !isone(center)
 end
 
 function direct_shifted_ab!(
@@ -332,11 +351,11 @@ function direct_shifted_ab!(
         throw(ArgumentError("A-series output buffer is too short."))
     length(b_out) >= b_terms ||
         throw(ArgumentError("B-series output buffer is too short."))
-    a_condition = _shift_rational!(
-        a_out, a_terms, work, endpoint.A, 1, center)
-    b_condition = _shift_rational!(
-        b_out, b_terms, work, endpoint.B, 2, center)
-    eps_condition = eps(Float64) * max(a_condition, b_condition)
+    a_error = _accurate_shift_rational!(
+        a_out, a_terms, work, endpoint.A, 1, center, eps_limit)
+    b_error = _accurate_shift_rational!(
+        b_out, b_terms, work, endpoint.B, 2, center, eps_limit)
+    eps_condition = max(a_error, b_error)
     accepted = isfinite(eps_condition) && eps_condition <= eps_limit
     return accepted, a_terms, b_terms, eps_condition
 end
@@ -358,11 +377,11 @@ function direct_shifted_infinity_ab!(
         throw(ArgumentError("A-series output buffer is too short."))
     length(b_out) >= b_terms ||
         throw(ArgumentError("B-series output buffer is too short."))
-    a_condition = _shift_rational!(
-        a_out, a_terms, work, endpoint.A, 1, center)
-    b_condition = _shift_rational!(
-        b_out, b_terms, work, endpoint.B, 4, center)
-    eps_condition = eps(Float64) * max(a_condition, b_condition)
+    a_error = _accurate_shift_rational!(
+        a_out, a_terms, work, endpoint.A, 1, center, eps_limit)
+    b_error = _accurate_shift_rational!(
+        b_out, b_terms, work, endpoint.B, 4, center, eps_limit)
+    eps_condition = max(a_error, b_error)
     accepted = isfinite(eps_condition) && eps_condition <= eps_limit
     if accepted
         @inbounds for index in 1:a_terms
@@ -468,6 +487,34 @@ function direct_ordinary_y_ab_series!(
         b_out[n + 1] *= iseven(n) ? 1.0 : -1.0
     end
     return a_terms, b_terms
+end
+
+function direct_ordinary_scaled_y_ab_series!(a_out, b_out, pq,
+        coefficients::DirectCoefficientSet, y0, omega_scale, order::Integer)
+    variable = coefficients.ordinary.variable == :y ?
+        omega_scale * y0 : 1.0 - omega_scale * y0
+    evaluate_ordinary_variable!(pq, coefficients.ordinary, variable)
+    layout = direct_pq_layout(coefficients.params.s, :O)
+    starts = direct_split_starts(layout)
+    lengths = (layout.ap_len, layout.aq_len, layout.bp_len, layout.bq_len)
+    # Rescale the rational polynomials before division; the unscaled Taylor
+    # coefficients can overflow even when the scaled equation is regular.
+    for (start, count) in zip(starts, lengths)
+        power = 1.0
+        for j in 0:(count-1)
+            pq[start+j] *= power
+            power *= -omega_scale
+        end
+    end
+    na, nb = direct_ordinary_ab_series!(
+        a_out, b_out, pq, coefficients.params.s, order)
+    for j in 1:na
+        a_out[j] *= -omega_scale
+    end
+    for j in 1:nb
+        b_out[j] *= omega_scale^2
+    end
+    return na, nb
 end
 
 function direct_ordinary_ab_series!(

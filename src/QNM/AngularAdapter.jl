@@ -27,15 +27,25 @@ function _require_qnm_angular_backend()
         nothing
     end
     throw(ArgumentError(
-        "qnm requires the SpinWeightedSpheroidalHarmonics Fast-eigenvalue " *
-        "backend. The loaded backend at $(repr(backend_path)) is missing " *
-        "$(join(string.(missing_apis), ", ")). Install the Fast-eigenvalue " *
-        "branch and restart Julia before calling qnm."))
+        "qnm requires SpinWeightedSpheroidalHarmonics >= 1.4. " *
+        "The loaded backend at $(repr(backend_path)) is missing " *
+        "$(join(string.(missing_apis), ", ")). Update SpinWeightedSpheroidalHarmonics " *
+        "and restart Julia before calling qnm."))
 end
 
+"""
+    angular_A_to_lambda(angular_A, c, m)
+
+Convert the angular separation constant `A` (Leaver convention, `c = a*omega`) to the eigenvalue `lambda = A + c^2 - 2 m c`.
+"""
 @inline angular_A_to_lambda(angular_A, c, m::Int) =
     angular_A + c^2 - 2m * c
 
+"""
+    lambda_to_angular_A(lambda, c, m)
+
+Inverse of `angular_A_to_lambda`: `A = lambda - c^2 + 2 m c`.
+"""
 @inline lambda_to_angular_A(lambda, c, m::Int) =
     lambda - c^2 + 2m * c
 

@@ -10,18 +10,24 @@ Both codes are capable of handling *complex* frequencies, and we use $M = 1$ con
 
 The paper describing both the GSN formalism and the implementation can be found in [2306.16469](https://arxiv.org/abs/2306.16469). A set of Mathematica notebooks deriving all the equations used in the code can be found in [10.5281/zenodo.8080241](https://zenodo.org/records/8080242).
 
-Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
+Starting from v0.8.0, the code is also capable of computing the gravitational waveform amplitude and fluxes at infinity and at the horizon due to a test particle orbiting around a Kerr black hole in a _generic (eccentric, inclined) timelike bound orbit_ by solving the inhomogeneous SN equation using integration by parts.
 
-Starting from v0.9.0, the package includes the direct GSN-based ISEM solver,
-short for _iterative series expansion matching_. The default
-`method = "auto"` tries `GSN-ISEM` first and falls back to the legacy automatic
-radial route only when direct construction fails. The explicit
+Starting from v0.9.0, the package includes the ISEM solver, short for
+_iterative series expansion matching_, and a high-level total-flux interface,
+[`Teukolsky_pointparticle_flux`](@ref), which automatically selects the
+circular, eccentric, inclined, or generic mode-summation strategy.
+
+Starting from v0.10.0, the package includes the direct GSN-based ISEM solver.
+The default `method = "auto"` tries `GSN-ISEM` first and falls back to the
+legacy automatic radial route only when direct construction fails. The explicit
 `method = "GSN-ISEM"` form is strict. The direct route constructs the GSN radial
 function directly and accelerates homogeneous radial functions, single-mode
-point-particle amplitudes, and total-flux mode summations. The release also adds
-a high-level total-flux interface, [`Teukolsky_pointparticle_flux`](@ref), which
-automatically selects the circular, eccentric, inclined, or generic
-mode-summation strategy.
+point-particle amplitudes, and total-flux mode summations. The release also
+computes Kerr quasinormal modes ([`qnm`](@ref), [`qnm_frequency`](@ref),
+[`qnm_sequence`](@ref), [`qnm_excitation_factor`](@ref)), and point-particle
+calls on the same orbit can share one read-only trajectory and sampling
+geometry through `with_pointparticle_submission`. It requires Julia 1.12,
+KerrGeodesics v0.5 and SpinWeightedSpheroidalHarmonics v1.4.
 
 For high-index tail modes in eccentric and generic flux summations, the
 GSN-ISEM path can use adaptive Levin quadrature instead of globally densifying
@@ -31,13 +37,15 @@ convolutions, this radial adaptive Levin rule is combined with a fixed
 Clenshaw-Curtis rule in the polar direction.
 
 ## Installation
+Julia 1.12 or later in the 1.x series is required.
+
 To install the package using the Julia package manager, simply type the following in the Julia REPL:
 ```julia
 using Pkg
 Pkg.add("GeneralizedSasakiNakamura")
 ```
 
-*Note: There is no need to install [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) separately as it should be automatically installed by the package manager.*
+*Note: [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) v1.4 or later is installed automatically from the General registry.*
 
 ## Highlights
 ### Numerical solver path: linear/Riccati integration

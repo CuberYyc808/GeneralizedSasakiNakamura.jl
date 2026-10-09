@@ -26,7 +26,6 @@ export Mode, GSNRadialFunction, TeukolskyRadialFunction, GSN_radial, Teukolsky_r
 export YRadialFunction, Y_radial
 export matching_controls
 
-const _DEFAULT_XM = -1.0
 const _DEFAULT_RHOM = 1.0
 const _DEFAULT_N = 40
 const _DEFAULT_TOL = 1e-13
@@ -38,17 +37,18 @@ const _GSN_ASYMPTOTIC_PATCH_RELATIVE_MISMATCH_MAX = 1e-4
 const _RADIAL_MATCHING_WARNING_TOL = 1e-8
 const _STATIC_OMEGA_TOL = 1e-12
 const _SELECTOR_MODEL_FILE = joinpath(@__DIR__, "selector_mlp_model.jls")
-const _SELECTOR_PAYLOAD = Ref{Any}(nothing)
+const _SELECTOR_PAYLOAD = isfile(_SELECTOR_MODEL_FILE) ?
+    deserialize(_SELECTOR_MODEL_FILE) : nothing
 const _CONTROL_SOURCE_SELECTOR = :selector
 const _CONTROL_SOURCE_SECOND_LAYER = :second_layer
 const _CONTROL_SOURCE_LOCAL_N = :local_N
 const _CONTROL_SOURCE_NORMALIZATION_GUARD = :normalization_guard
 
-_is_static_frequency(omega) = abs(omega) < _STATIC_OMEGA_TOL
-_is_exact_extremal_spin(a) = isreal(a) &&
-    abs(abs(float(real(a))) - 1.0) <= 16eps(Float64)
-_horizon_frequency(a, m) = m * a / (2 * (1 + sqrt(1 - a^2)))
-_is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) && !_is_static_frequency(omega) && abs(omega - _horizon_frequency(a, m)) < _STATIC_OMEGA_TOL
+_is_static_frequency(omega) = iszero(omega)
+_is_exact_extremal_spin(a) = isreal(a) && isone(abs(real(a)))
+_horizon_frequency(a, m) = m * (a / (2 * (1 + sqrt(1 - a^2))))
+_is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) &&
+    !iszero(omega) && omega == _horizon_frequency(a, m)
 _use_large_frequency_expansion(a, omega) = isreal(omega) && abs(sqrt(1 - a^2) * omega) > 3
 
 function _is_omega_complex(omega)
@@ -74,13 +74,7 @@ function _selector_available(s, l, m, a, omega, boundary_condition)
         isfile(_SELECTOR_MODEL_FILE)
 end
 
-function _selector_payload()
-    payload = _SELECTOR_PAYLOAD[]
-    payload !== nothing && return payload
-    payload = deserialize(_SELECTOR_MODEL_FILE)
-    _SELECTOR_PAYLOAD[] = payload
-    return payload
-end
+_selector_payload() = _SELECTOR_PAYLOAD
 
 function _selector_features(s::Int, l::Int, m::Int, a, omega, boundary_condition)
     lf = Float32(max(l, 1))
@@ -156,7 +150,7 @@ function matching_controls(s, l, m, a, omega; boundary_condition=IN)
         pred = _selector_predict_controls(s, l, m, a, omega, boundary_condition)
         lfe = _selector_lfe_override(s, l, m, omega, boundary_condition) ? true : pred.lfe
         return (
-            xm = _DEFAULT_XM,
+            xm = nothing,
             rhom = _DEFAULT_RHOM,
             N = pred.N,
             tol = _DEFAULT_TOL,
@@ -175,42 +169,33 @@ function matching_controls(s, l, m, a, omega; boundary_condition=IN)
     sfe = small_real_omega && abs(s) == 2
     lfe = false
     N = _legacy_matching_N(a, l)
-    xm = _DEFAULT_XM
     if boundary_condition == IN && s == 1 && isreal(omega)
         N = max(N, 50)
-        xm = -0.6
         TSinInf = false
     elseif boundary_condition == IN && s == 2 && isreal(omega) && iszero(a) && l == 2
         if m == 2
             N = 55
-            xm = -0.6
             sfe = absomega < 0.1 ? true : sfe
             TSinInf = false
         elseif m == 1
             N = 60
-            xm = -0.6
             TSinInf = false
         elseif m == 0
             N = 80
-            xm = -0.8
             TSinInf = false
         elseif m == -1
             N = 25
-            xm = -0.4
             TSinInf = false
         else
             N = 40
-            xm = -0.5
             TSinInf = false
         end
     elseif boundary_condition == IN && s == 2 && isreal(omega) && l == 2 && m != 2
         N = 10
-        xm = -0.9
         TSinInf = false
     elseif boundary_condition == IN && s == 2 && isreal(omega)
         # Direct +2 infinity TSI is inaccurate for small/moderate real frequencies.
         N = max(N, 50)
-        xm = -0.6
         TSinInf = false
     else
         TSinInf = s == 2 && isreal(omega)
@@ -219,7 +204,7 @@ function matching_controls(s, l, m, a, omega; boundary_condition=IN)
     TSinHor = false
     TSoutHor = false
     return (
-        xm = xm,
+        xm = nothing,
         rhom = _DEFAULT_RHOM,
         N = N,
         tol = _DEFAULT_TOL,
@@ -395,6 +380,9 @@ function _try_build_teukolsky_function_with_controls(s, l, m, a, omega, boundary
         metadata = _attach_control_metadata(metadata, c, rescue_source)
         return (teuk_func = teuk_func, metadata = metadata, mismatch = _metadata_mismatch(metadata), controls = c, error = nothing)
     catch err
+        # An invalid requested option (e.g. xm outside the matching range) is
+        # reported to the caller, not retried with other controls.
+        err isa ArgumentError && rethrow()
         return (teuk_func = nothing, metadata = missing, mismatch = Inf, controls = c, error = err)
     end
 end
@@ -548,6 +536,13 @@ function _y_branch_transmission_amplitude(s, m, a, omega, lambda)
     end
 end
 
+"""
+    YRadialFunction
+
+Callable auxiliary ISEM radial solution returned by `Y_radial`: `Y(r)` evaluates the solution at radius `r`.
+Stores the mode, boundary condition, asymptotic amplitudes, the evaluators of the underlying P, Teukolsky and X
+solutions where available, and the normalization convention.
+"""
 struct YRadialFunction
     mode::Mode
     boundary_condition::BoundaryCondition
@@ -807,31 +802,19 @@ function _gsn_horizon_ansatz(mode::Mode, boundary_condition::BoundaryCondition, 
     r = r_from_rstar(a, rs)
     p = omega - m * _kerr_omega_horizon(a)
 
+    cin = AsymptoticExpansionCoefficients.coefficient_sequence(AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor, s, m, a, omega, lambda)
     gin(r0) = InitialConditions.gansatz(
-        ord -> AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor(s, m, a, omega, lambda, ord),
+        cin,
         a,
         r0;
         order = order,
     )
     dgin_dr(r0) = InitialConditions.dgansatz_dr(
-        ord -> AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor(s, m, a, omega, lambda, ord),
+        cin,
         a,
         r0;
         order = order,
     )
-    gout(r0) = InitialConditions.gansatz(
-        ord -> AsymptoticExpansionCoefficients.outgoing_coefficient_at_hor(s, m, a, omega, lambda, ord),
-        a,
-        r0;
-        order = order,
-    )
-    dgout_dr(r0) = InitialConditions.dgansatz_dr(
-        ord -> AsymptoticExpansionCoefficients.outgoing_coefficient_at_hor(s, m, a, omega, lambda, ord),
-        a,
-        r0;
-        order = order,
-    )
-
     Δfac = _kerr_delta(r, a) / (r^2 + a^2)
     if boundary_condition == IN
         phase = exp(-1im * p * rs)
@@ -839,6 +822,9 @@ function _gsn_horizon_ansatz(mode::Mode, boundary_condition::BoundaryCondition, 
         Xp = transmission_amplitude * (Δfac * dgin_dr(r) - 1im * p * gin(r)) * phase
         return X, Xp
     elseif boundary_condition == UP
+        cout = AsymptoticExpansionCoefficients.coefficient_sequence(AsymptoticExpansionCoefficients.outgoing_coefficient_at_hor, s, m, a, omega, lambda)
+        gout(r0) = InitialConditions.gansatz(cout, a, r0; order=order)
+        dgout_dr(r0) = InitialConditions.dgansatz_dr(cout, a, r0; order=order)
         phase_out = exp(1im * p * rs)
         phase_in = exp(-1im * p * rs)
         X = incidence_amplitude * gout(r) * phase_out + reflection_amplitude * gin(r) * phase_in
@@ -857,26 +843,15 @@ function _gsn_infinity_ansatz(mode::Mode, boundary_condition::BoundaryCondition,
     lambda = mode.lambda
     r = r_from_rstar(a, rs)
 
-    fin(r0) = InitialConditions.fansatz(
-        ord -> AsymptoticExpansionCoefficients.ingoing_coefficient_at_inf(s, m, a, omega, lambda, ord),
-        omega,
-        r0;
-        order = order,
-    )
-    dfin_dr(r0) = InitialConditions.dfansatz_dr(
-        ord -> AsymptoticExpansionCoefficients.ingoing_coefficient_at_inf(s, m, a, omega, lambda, ord),
-        omega,
-        r0;
-        order = order,
-    )
+    cout = AsymptoticExpansionCoefficients.coefficient_sequence(AsymptoticExpansionCoefficients.outgoing_coefficient_at_inf, s, m, a, omega, lambda)
     fout(r0) = InitialConditions.fansatz(
-        ord -> AsymptoticExpansionCoefficients.outgoing_coefficient_at_inf(s, m, a, omega, lambda, ord),
+        cout,
         omega,
         r0;
         order = order,
     )
     dfout_dr(r0) = InitialConditions.dfansatz_dr(
-        ord -> AsymptoticExpansionCoefficients.outgoing_coefficient_at_inf(s, m, a, omega, lambda, ord),
+        cout,
         omega,
         r0;
         order = order,
@@ -889,6 +864,9 @@ function _gsn_infinity_ansatz(mode::Mode, boundary_condition::BoundaryCondition,
         Xp = transmission_amplitude * (Δfac * dfout_dr(r) + 1im * omega * fout(r)) * phase
         return X, Xp
     elseif boundary_condition == IN
+        cin = AsymptoticExpansionCoefficients.coefficient_sequence(AsymptoticExpansionCoefficients.ingoing_coefficient_at_inf, s, m, a, omega, lambda)
+        fin(r0) = InitialConditions.fansatz(cin, omega, r0; order=order)
+        dfin_dr(r0) = InitialConditions.dfansatz_dr(cin, omega, r0; order=order)
         phase_out = exp(1im * omega * rs)
         phase_in = exp(-1im * omega * rs)
         X = reflection_amplitude * fout(r) * phase_out + incidence_amplitude * fin(r) * phase_in
@@ -904,18 +882,12 @@ function _relative_mismatch(a, b)
     return abs(a - b) / scale
 end
 
-function _continuous_gsn_patch_or_raw(gsn_solution, rs, X, Xp)
-    raw = gsn_solution(rs)
-    mismatch = max(
-        _relative_mismatch(X, raw[1]),
-        _relative_mismatch(Xp, raw[2]),
-    )
-    mismatch > _GSN_ASYMPTOTIC_PATCH_RELATIVE_MISMATCH_MAX && return raw
-    return (X, Xp, 0.0)
-end
+_patch_continuous(raw, X, Xp) = max(
+    _relative_mismatch(X, raw[1]),
+    _relative_mismatch(Xp, raw[2]),
+) <= _GSN_ASYMPTOTIC_PATCH_RELATIVE_MISMATCH_MAX
 
 function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_condition::BoundaryCondition, transmission_amplitude, incidence_amplitude, reflection_amplitude; horizon_delta_r_max = _GSN_HORIZON_DELTA_R_MAX, infinity_phase_min = _GSN_INFINITY_PHASE_MIN)
-    _is_omega_complex(mode.omega) && return gsn_solution
     s = mode.s
     m = mode.m
     a = mode.a
@@ -928,16 +900,33 @@ function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_conditi
     inf_order = _GSN_INFINITY_ASYMPTOTIC_ORDER
     real_type = promote_type(typeof(float(real(a))), typeof(float(real(omega))), typeof(float(real(lambda))))
     coeff_type = Complex{real_type}
+    patch_lock = ReentrantLock()
     hor_in_coeffs = Ref{Union{Nothing, Vector{coeff_type}}}(nothing)
     hor_out_coeffs = Ref{Union{Nothing, Vector{coeff_type}}}(nothing)
     inf_in_coeffs = Ref{Union{Nothing, Vector{coeff_type}}}(nothing)
     inf_out_coeffs = Ref{Union{Nothing, Vector{coeff_type}}}(nothing)
-    get_hor_in_coeffs() = _lazy_coefficients!(hor_in_coeffs, () -> coeff_type[AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor(s, m, a, omega, lambda, ord) for ord in 0:hor_order])
-    get_hor_out_coeffs() = _lazy_coefficients!(hor_out_coeffs, () -> coeff_type[AsymptoticExpansionCoefficients.outgoing_coefficient_at_hor(s, m, a, omega, lambda, ord) for ord in 0:hor_order])
-    get_inf_in_coeffs() = _lazy_coefficients!(inf_in_coeffs, () -> coeff_type[AsymptoticExpansionCoefficients.ingoing_coefficient_at_inf(s, m, a, omega, lambda, ord) for ord in 0:inf_order])
-    get_inf_out_coeffs() = _lazy_coefficients!(inf_out_coeffs, () -> coeff_type[AsymptoticExpansionCoefficients.outgoing_coefficient_at_inf(s, m, a, omega, lambda, ord) for ord in 0:inf_order])
+    get_hor_in_coeffs() = _lazy_coefficients!(hor_in_coeffs, () -> AsymptoticExpansionCoefficients.coefficient_values(AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor, s, m, a, omega, lambda, hor_order; data_type=coeff_type))
+    get_hor_out_coeffs() = _lazy_coefficients!(hor_out_coeffs, () -> AsymptoticExpansionCoefficients.coefficient_values(AsymptoticExpansionCoefficients.outgoing_coefficient_at_hor, s, m, a, omega, lambda, hor_order; data_type=coeff_type))
+    get_inf_in_coeffs() = _lazy_coefficients!(inf_in_coeffs, () -> AsymptoticExpansionCoefficients.coefficient_values(AsymptoticExpansionCoefficients.ingoing_coefficient_at_inf, s, m, a, omega, lambda, inf_order; data_type=coeff_type))
+    get_inf_out_coeffs() = _lazy_coefficients!(inf_out_coeffs, () -> AsymptoticExpansionCoefficients.coefficient_values(AsymptoticExpansionCoefficients.outgoing_coefficient_at_inf, s, m, a, omega, lambda, inf_order; data_type=coeff_type))
 
-    return rs -> begin
+    # A patch is accepted once, by continuity with the raw solution at the
+    # patch boundary, where the raw solution is still accurate; inside the patch
+    # the asymptotic series only improves while the raw Teukolsky-to-GSN
+    # conversion loses digits (near the horizon the subdominant part is
+    # suppressed by Delta^|s|).
+    horizon_accepted = Ref{Union{Nothing,Bool}}(nothing)
+    infinity_accepted = Ref{Union{Nothing,Bool}}(nothing)
+    accepted(flag, rs_boundary) = begin
+        if flag[] === nothing
+            patched = patch(rs_boundary)
+            flag[] = patched !== nothing && _patch_continuous(
+                gsn_solution(rs_boundary), patched[1], patched[2])
+        end
+        flag[]
+    end
+
+    patch = rs -> begin
         r = r_from_rstar(a, rs)
         Δfac = _kerr_delta(r, a) / (r^2 + a^2)
         if r - rp <= horizon_delta_r_max
@@ -949,7 +938,7 @@ function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_conditi
                 phase = exp(-1im * p * rs)
                 X = transmission_amplitude * gin * phase
                 Xp = transmission_amplitude * (Δfac * dgin - 1im * p * gin) * phase
-                return _continuous_gsn_patch_or_raw(gsn_solution, rs, X, Xp)
+                return (X, Xp)
             elseif boundary_condition == UP
                 coeffs_out = get_hor_out_coeffs()
                 gout = _eval_hor_ansatz(coeffs_out, dr)
@@ -959,7 +948,7 @@ function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_conditi
                 X = incidence_amplitude * gout * phase_out + reflection_amplitude * gin * phase_in
                 Xp = incidence_amplitude * (Δfac * dgout + 1im * p * gout) * phase_out +
                      reflection_amplitude * (Δfac * dgin - 1im * p * gin) * phase_in
-                return _continuous_gsn_patch_or_raw(gsn_solution, rs, X, Xp)
+                return (X, Xp)
             end
         elseif abs(omega * r) >= infinity_phase_min
             coeffs_out = get_inf_out_coeffs()
@@ -969,7 +958,7 @@ function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_conditi
                 phase = exp(1im * omega * rs)
                 X = transmission_amplitude * fout * phase
                 Xp = transmission_amplitude * (Δfac * dfout + 1im * omega * fout) * phase
-                return _continuous_gsn_patch_or_raw(gsn_solution, rs, X, Xp)
+                return (X, Xp)
             elseif boundary_condition == IN
                 coeffs_in = get_inf_in_coeffs()
                 fin = _eval_inf_ansatz(coeffs_in, omega, r)
@@ -979,10 +968,29 @@ function _with_gsn_asymptotic_patches(gsn_solution, mode::Mode, boundary_conditi
                 X = reflection_amplitude * fout * phase_out + incidence_amplitude * fin * phase_in
                 Xp = reflection_amplitude * (Δfac * dfout + 1im * omega * fout) * phase_out +
                      incidence_amplitude * (Δfac * dfin - 1im * omega * fin) * phase_in
-                return _continuous_gsn_patch_or_raw(gsn_solution, rs, X, Xp)
+                return (X, Xp)
             end
         end
-        return gsn_solution(rs)
+        return nothing
+    end
+
+    # Boundary points just inside each patch (an r -> r* -> r round trip must
+    # stay in the region).
+    rs_horizon = rstar_from_r(a, rp + (1 - 1e-9) * horizon_delta_r_max)
+    rs_infinity = iszero(omega) ? Inf :
+        rstar_from_r(a, (1 + 1e-9) * infinity_phase_min / abs(omega))
+    return rs -> begin
+        r = r_from_rstar(a, rs)
+        region = r - rp <= horizon_delta_r_max ? horizon_accepted :
+            abs(omega * r) >= infinity_phase_min ? infinity_accepted : nothing
+        region === nothing && return gsn_solution(rs)
+        boundary = region === horizon_accepted ? rs_horizon : rs_infinity
+        patched = lock(patch_lock) do
+            accepted(region, boundary) ? patch(rs) : nothing
+        end
+        patched === nothing && return gsn_solution(rs)
+        X, Xp = patched
+        return (X, Xp, 0.0)
     end
 end
 
@@ -1519,6 +1527,18 @@ function _try_y_legacy_riccati_then_linear(context, riccati_build, linear_build;
     end
 end
 
+# Below this |omega| the legacy ODE routes (Riccati, linear) are known to lose the
+# UP solution while integrating inward across the static zone 1 << r << 1/omega and
+# return a wrong solution without any error (the near zone collapses onto the
+# horizon-regular solution).  Falling back to them there must not be silent.
+const _LEGACY_FALLBACK_OMEGA_WARN = 1e-8
+
+function _warn_low_frequency_fallback(context, reason)
+    omega = try getfield(context, :omega) catch; nothing end
+    (omega === nothing || abs(omega) >= _LEGACY_FALLBACK_OMEGA_WARN) && return
+    @warn "ISEM $(reason) at |omega| = $(abs(omega)) < $(_LEGACY_FALLBACK_OMEGA_WARN); falling back to the legacy ODE routes, which are unreliable at such low frequency (the inward integration loses the UP solution). Treat this mode's result with suspicion." context=context maxlog=10
+end
+
 function _try_y_isem_then_legacy(context, isem_build, riccati_build, linear_build; info::Bool=false)
     saw_warn = Ref(false)
     logger = EarlyFilteredLogger(
@@ -1537,10 +1557,12 @@ function _try_y_isem_then_legacy(context, isem_build, riccati_build, linear_buil
         end
         if saw_warn[]
             info && @info "Y_radial method = \"auto\" tried ISEM, received an ISEM warning, and switched to legacy auto (Riccati, then linear). Use method = \"ISEM\" to force ISEM." context=context
+            _warn_low_frequency_fallback(context, "warned")
             return _try_y_legacy_riccati_then_linear(context, riccati_build, linear_build; info=info)
         end
         return sol
     catch err
+        _warn_low_frequency_fallback(context, "failed")
         info && @info "Y_radial method = \"auto\" tried ISEM, received an ISEM error, and switched to legacy auto (Riccati, then linear). Use method = \"ISEM\" to force ISEM." context=context error=sprint(showerror, err)
         return _try_y_legacy_riccati_then_linear(context, riccati_build, linear_build; info=info)
     end
@@ -1644,7 +1666,16 @@ function _try_y_high_spin_isem_sanity_then_legacy(
     return _try_y_legacy_riccati_then_linear(context, riccati_build, linear_build; info=info)
 end
 
+"""
+    Y_radial(s, l, m, a, omega, boundary_condition; method="auto", xm=nothing, rhom=nothing, N=nothing, tol=nothing, info=false)
+
+Construct the auxiliary ISEM radial function used by the point-particle convolution integrals for the mode
+`(s, l, m, a, omega)` with boundary condition `IN` or `UP`, and return a `YRadialFunction`. `method = "auto"` tries
+ISEM first and falls back to the legacy Riccati and linear routes on failure; `info = true` reports such fallbacks.
+Matching controls follow `Teukolsky_radial`.
+"""
 function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, rhom=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, TSinInf=nothing, TSoutInf=nothing, TSinHor=nothing, TSoutHor=nothing, info::Bool=false)
+    GeneralizedSasakiNakamura._check_radial_options(method, xm; rhom, TSinInf, TSoutInf, TSinHor, TSoutHor)
     if a < zero(a)
         positive = Y_radial(
             s, l, -m, -a, omega, boundary_condition;

@@ -30,6 +30,22 @@ struct DirectOrdinaryCoefficientEvaluator{C,F,G}
     requires_latest_world::Bool
 end
 
+@noinline function _evaluate_polynomial_blocks!(out, coefficients, t, ranges)
+    @inbounds for j in eachindex(ranges)
+        block = ranges[j]
+        if isempty(block)
+            out[j] = 0.0 + 0.0im
+        else
+            value = coefficients[last(block)]
+            for k in (last(block)-1):-1:first(block)
+                value = value*t + coefficients[k]
+            end
+            out[j] = value
+        end
+    end
+    return out
+end
+
 function evaluate_ordinary_coefficients!(out::Vector{ComplexF64}, e::DirectOrdinaryCoefficientEvaluator, x0)
     length(out) >= e.value_count || throw(ArgumentError("ordinary output buffer is too short."))
     return e.eval!(out, e.coefficients, x0)

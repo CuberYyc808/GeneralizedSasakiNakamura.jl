@@ -50,6 +50,7 @@ using ..DirectLocalSolutionAtZero:
 using ..DirectOrdinaryPointExpansion:
     direct_endpoint_ab_series,
     direct_ordinary_ab_series!,
+    direct_ordinary_scaled_y_ab_series!,
     direct_poly_pair,
     direct_poly_triple,
     direct_poly_value,
@@ -1095,8 +1096,7 @@ function _select_infinity_endpoint_order(
     seed_target = getproperty(controls, :lfe) ?
         max(getproperty(controls, :tolerance), 256eps(Float64)) :
         max(getproperty(controls, :tolerance), _ENDPOINT_SEED_TARGET)
-    endpoint_target = getproperty(controls, :lfe) ?
-        seed_target : _INFINITY_ENDPOINT_TARGET
+    endpoint_target = seed_target
     certificate_target = max(endpoint_target, _INFINITY_ENDPOINT_TARGET)
     _, out_seed = _asymptotic_order_and_seed_radius(out_full, seed_target)
     _, in_seed = _asymptotic_order_and_seed_radius(in_full, seed_target)
@@ -2067,21 +2067,6 @@ function direct_iterate_logscaled_from_state(
     )
 end
 
-function _scaled_y_ab!(work, coefficients, x0, omega_scale, order)
-    a_terms, b_terms = _local_ab!(work, coefficients, x0, order)
-    power = 1.0
-    @inbounds for index in 1:a_terms
-        work.avec[index] *= -omega_scale * power
-        power *= -omega_scale
-    end
-    power = 1.0
-    @inbounds for index in 1:b_terms
-        work.bvec[index] *= omega_scale^2 * power
-        power *= -omega_scale
-    end
-    return a_terms, b_terms
-end
-
 function direct_iterate_scaled_y(
     coefficients::DirectCoefficientSet,
     kind::Symbol,
@@ -2099,7 +2084,8 @@ function direct_iterate_scaled_y(
     final_y = target_y === nothing ?
         max(_SFE_BRIDGE_TARGET_Y, _MIN_STEP / omega_scale) :
         Float64(target_y)
-    final_y < start_y || return nothing
+    final_y == start_y && return nothing
+    direction = final_y > start_y ? 1.0 : -1.0
     work = DirectIterationScratch(coefficients, order; ordinary_dd=false)
     current_y = start_y
     current_value = ComplexF64(seed_X)
@@ -2109,10 +2095,10 @@ function direct_iterate_scaled_y(
     max_step = 0.0
     min_step = Inf
 
-    while current_y - final_y > 100eps(Float64) * max(1.0, current_y)
+    while direction * (final_y - current_y) > 100eps(Float64) * max(1.0, current_y)
         current_x = 1.0 - omega_scale * current_y
-        a_terms, b_terms = _scaled_y_ab!(
-            work, coefficients, current_x, omega_scale, order)
+        a_terms, b_terms = direct_ordinary_scaled_y_ab_series!(
+            work.avec, work.bvec, work.pq, coefficients, current_y, omega_scale, order)
         a_coeffs = @view work.avec[1:a_terms]
         b_coeffs = @view work.bvec[1:b_terms]
         all(_scaled_finite, a_coeffs) && all(_scaled_finite, b_coeffs) || break
@@ -2135,21 +2121,21 @@ function direct_iterate_scaled_y(
         radius = _endpoint_effective_radius!(
             work.radius_buffer, local_coeffs, radius_cap)
         isfinite(radius) && radius > 0 || break
-        remaining = current_y - final_y
+        remaining = direction * (final_y - current_y)
         h_start = min(remaining, _SFE_BRIDGE_STEP_SAFETY * radius)
         min_step_y = 100eps(Float64) * max(1.0, current_y)
         h_start > min_step_y || break
-        step = _single_step(local_coeffs, -1.0, h_start,
+        step = _single_step(local_coeffs, direction, h_start,
             min_step_y, Float64(tolerance), order)
         step.score <= tolerance || break
         next_y = current_y + step.h
-        next_y < current_y || break
+        direction * (next_y - current_y) > 0 || break
         next_value = ComplexF64(state_scale * step.value)
         next_derivative_y = ComplexF64(state_scale * step.derivative)
         _scaled_finite(next_value) && _scaled_finite(next_derivative_y) || break
 
         next_x = 1.0 - omega_scale * next_y
-        next_x > current_x || break
+        direction * (current_x - next_x) > 0 || break
         push!(patches, DirectScaledPatch(
             current_x,
             next_x,
@@ -2171,6 +2157,9 @@ function direct_iterate_scaled_y(
             )
             break
         end
+    end
+    if direction > 0 && final_y - current_y > 100eps(Float64) * max(1.0, current_y)
+        error("direct GSN scaled-y propagation did not reach the matching point")
     end
     isempty(patches) && return nothing
 
@@ -3488,6 +3477,22 @@ function direct_basis_state(basis::DirectBasis, x)
     patch_index > 0 && return _patch_state(basis.patches[patch_index], x)
     isempty(basis.patches) && error("direct GSN basis has no patch for x=$x")
     error("direct GSN basis does not cover x=$x")
+end
+
+function direct_basis_state(basis::DirectBasis{DirectPatch}, x, infinity_y)
+    if basis.endpoint_valid && !_is_horizon(basis.kind) && x >= basis.seed_x
+        value, derivative, _ = _scaled_infinity_series_triple(
+            basis.endpoint_coeffs, basis.exponent1, basis.exponent2,
+            infinity_y, basis.endpoint_variable_scale)
+        return basis.scale * value, basis.scale * derivative
+    end
+    index = _patch_index(basis.patches, x)
+    index > 0 || return direct_basis_state(basis, x)
+    patch = basis.patches[index]
+    # Keep the small complement supplied by the physical radius.
+    value, derivative = direct_poly_pair(
+        patch.coeffs, (1 - patch.center_x) - infinity_y)
+    return patch.scale * value, patch.scale * derivative
 end
 
 function direct_logscaled_basis_state(basis::DirectLogScaledBasis, x)

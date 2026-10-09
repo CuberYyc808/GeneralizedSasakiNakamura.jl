@@ -16,12 +16,10 @@ jobs:
       - uses: actions/checkout@v2
       - uses: julia-actions/setup-julia@v2
         with:
-          version: 'lts'
+          version: '1.12'
       - name: Install dependencies
         run: >-
           julia --project=docs/ -e 'using Pkg;
-          Pkg.add(PackageSpec(url="https://github.com/CuberYyc808/SpinWeightedSpheroidalHarmonics.jl.git",
-          rev="Fast-eigenvalue"));
           Pkg.develop(PackageSpec(path=pwd()));
           Pkg.instantiate()'
       - name: Build and deploy

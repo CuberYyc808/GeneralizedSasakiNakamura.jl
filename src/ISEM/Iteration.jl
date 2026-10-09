@@ -41,6 +41,11 @@ end
     return min(_AUTO_NMAX, max(10, ceil(Int, sqrt(abs(lambda))) + 5))
 end
 
+# The contour horizon series is started inside its estimated convergence radius,
+# closer in for large |lambda|; for |lambda| < 1 dividing by sqrt|lambda| would
+# start it outside the radius (s = +2, l = 2 at small a).
+@inline _seed_scale(lambda) = max(one(abs(lambda)), sqrt(abs(lambda)))
+
 @inline function _sfe_order(N)
     return N === nothing ? _AUTO_SFE_N : N
 end
@@ -469,8 +474,7 @@ end
 
 function iterate_zero_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _TruncatioN, tol = _TOLERANCE, sfe = 0, lfe = 0)
     coeffs_zero, R0 = zero_in_coeffs(s, epsilon, tau, kappa, lambda, z, N; tol = tol)
-    lambda_scale = iszero(abs(lambda)) ? one(abs(lambda)) : sqrt(abs(lambda))
-    rho = R0 / lambda_scale
+    rho = R0 / _seed_scale(lambda)
     P, Pp, _ = evaluate_zero_in_rho(rho, coeffs_zero)
     coeffs_list = Vector{typeof(coeffs_zero)}()
     rho_list = Float64[]
@@ -615,8 +619,7 @@ end
 
 function iterate_zero_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _TruncatioN, tol = _TOLERANCE, sfe = 0, lfe = 0)
     coeffs_zero, R0 = zero_out_coeffs(s, epsilon, tau, kappa, lambda, z, N; tol = tol)
-    lambda_scale = iszero(abs(lambda)) ? one(abs(lambda)) : sqrt(abs(lambda))
-    rho = R0 / lambda_scale
+    rho = R0 / _seed_scale(lambda)
     P, Pp, _ = evaluate_zero_out_rho(rho, s, epsilon, tau, coeffs_zero, z)
     coeffs_list = Vector{typeof(coeffs_zero)}()
     rho_list = Float64[]

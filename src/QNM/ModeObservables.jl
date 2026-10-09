@@ -114,10 +114,8 @@ function _qnm_branch_observables(root, excitation_options;
             formalism=:GSN,
         ))
     end
-    if hasproperty(root.provenance, :extremal_endpoint) &&
-            root.provenance.extremal_endpoint &&
-            hasproperty(root.provenance, :simple_pole) &&
-            !root.provenance.simple_pole
+    if get(root.provenance, :extremal_endpoint, false) &&
+            !get(root.provenance, :simple_pole, true)
         return QNMEndpointResult((
             a=input_a,
             mode=root.mode,
@@ -133,9 +131,8 @@ function _qnm_branch_observables(root, excitation_options;
             radial_observables=root.provenance.radial_observables,
             endpoint_method=root.provenance.endpoint_method,
             simple_pole=false,
-            coalesced_overtone_labels=hasproperty(
-                root.provenance, :coalesced_overtone_labels) ?
-                root.provenance.coalesced_overtone_labels : false,
+            coalesced_overtone_labels=get(
+                root.provenance, :coalesced_overtone_labels, false),
             requested_overtone_label=root.mode.n,
             overtone_interpretation=
                 :near_extremal_family_label_not_distinct_endpoint_pole,
@@ -151,8 +148,7 @@ function _qnm_branch_observables(root, excitation_options;
             formalism=:GSN_Teukolsky_endpoint,
         ))
     end
-    if hasproperty(root.provenance, :gsn_amplitude_limit_implemented) &&
-            !root.provenance.gsn_amplitude_limit_implemented
+    if !get(root.provenance, :gsn_amplitude_limit_implemented, true)
         return QNMFailure((
             a=input_a,
             mode=root.mode,
@@ -174,14 +170,10 @@ function _qnm_branch_observables(root, excitation_options;
         ))
     end
     if _is_extremal_damped_simple_pole(root)
-        radial_solver = hasproperty(excitation_options, :radial_solver) ?
-            excitation_options.radial_solver : _extremal_qnm_radial_solver
-        incidence_tolerance = hasproperty(
-            excitation_options, :incidence_tolerance) ?
-            excitation_options.incidence_tolerance : 1.0e-8
-        wronskian_tolerance = hasproperty(
-            excitation_options, :wronskian_tolerance) ?
-            excitation_options.wronskian_tolerance : 1.0e-8
+        radial_solver = get(excitation_options, :radial_solver,
+            _extremal_qnm_radial_solver)
+        incidence_tolerance = get(excitation_options, :incidence_tolerance, 1.0e-8)
+        wronskian_tolerance = get(excitation_options, :wronskian_tolerance, 1.0e-8)
         root = _polish_extremal_damped_root_with_gsn(root;
             incidence_tolerance, wronskian_tolerance, radial_solver)
         excitation_options = merge(
@@ -374,11 +366,19 @@ function _mirror_qnm_root(a, s, l, m, n, mirror_guess, root_options;
     else
         nothing
     end
-    seed = mirror_guess === nothing ?
-        -conj(partner_root.omega) : mirror_guess
-    root = _solve_qnm_root(mode, a, seed, root_options;
-        convention, inversion_index)
-    return root, seed, partner_root
+    function solve_mirror()
+        seed = mirror_guess === nothing ?
+            -conj(partner_root.omega) : mirror_guess
+        root = _solve_qnm_root(mode, a, seed, root_options;
+            convention, inversion_index)
+        return root, seed, partner_root
+    end
+    # Keep an automatic high-precision fallback at its actual precision;
+    # unary arithmetic must not silently promote it to the global 256 bits.
+    if partner_root !== nothing && partner_root.omega isa Complex{BigFloat}
+        return setprecision(solve_mirror, BigFloat, partner_root.precision_bits)
+    end
+    return solve_mirror()
 end
 
 """
@@ -402,8 +402,9 @@ Boyer-Lindquist radius. `X` and `R` use the `IN` QNM basis. The direct public
 `branch.solutions`.
 
 For `mirror`, the seed is `-conj(omega[s,l,-m,n])`, but the returned root is
-re-polished directly on the negative-real branch. Mirror amplitudes and
-derivatives are evaluated directly; they are never filled by conjugation.
+re-polished on the negative-real branch. Amplitudes and frequency derivatives
+are evaluated at that branch; the radial solver may use exact conjugation
+symmetry rather than solve the reflected equation again.
 
 Use [`qnm_pair`](@ref) only when both branches are required in one result.
 `root_options` and `excitation_options` are optional NamedTuples forwarded to
@@ -422,19 +423,17 @@ function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
         root_options::NamedTuple=NamedTuple(),
         excitation_options::NamedTuple=NamedTuple(),
         detailed::Bool=false)
-    if branch == ordinary
-        root = _ordinary_qnm_root(
+    root = if branch == ordinary
+        _ordinary_qnm_root(
             a, s, l, m, n, primary_guess, root_options;
             convention, inversion_index)
-        return _qnm_branch_observables(
-            root, excitation_options; input_a=a, detailed)
     else
-        root, _, _ = _mirror_qnm_root(
+        first(_mirror_qnm_root(
             a, s, l, m, n, mirror_guess, root_options;
-            convention, inversion_index)
-        return _qnm_branch_observables(
-            root, excitation_options; input_a=a, detailed)
+            convention, inversion_index))
     end
+    return _qnm_branch_observables(
+        root, excitation_options; input_a=a, detailed)
 end
 
 function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
