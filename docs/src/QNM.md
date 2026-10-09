@@ -62,7 +62,35 @@ root = qnm_frequency(mode, 0.68)
 sequence = qnm_sequence(mode, [0.0, 0.3, 0.68])
 ```
 
-The default `convention=:overtone` treats `n` as a physical overtone label.
+The default `convention=:overtone` treats `n` as a physical overtone label. The
+labels follow the Python [`qnm`](https://github.com/duetosymmetry/qnm) package
+(Stein 2019) and the Cook & Zalutskiy catalogue: overtone `n` is the Kerr
+continuation of the `n`-th Schwarzschild root, the same mode that
+[`qnm_sequence`](@ref) follows from `a = 0`. For `s = -2`, `l = 2`, `|m| = 2`
+co-rotating modes the Schwarzschild algebraically special frequency `-2i` splits
+at `a > 0` into a pair, which Cook labels `8₀` and `8₁`. Both are overtone `n = 8`:
+the default `multiplet = 0` returns `8₀` (the less damped one), and
+`multiplet = 1` returns `8₁`:
+
+```julia
+qnm_frequency(QNMMode(-2, 2, 2, 8), 0.68)                 # 8₀
+qnm_frequency(QNMMode(-2, 2, 2, 8), 0.68; multiplet = 1)  # 8₁
+qnm(0.68, -2, 2, 2, 8; multiplet = 1)
+```
+
+Overtones `n ≥ 9` therefore carry the same labels as the Python `qnm` package
+and the Cook catalogue. Some tables number the pair consecutively; for the
+co-rotating `(2, 2)` modes the correspondence is
+
+| this package and Python `qnm` / Cook | Forteza & Mourier (2107.11829) |
+| :--- | :--- |
+| `n = 8, multiplet = 0` (`8₀`) | `n = 8` |
+| `n = 8, multiplet = 1` (`8₁`) | `n = 9` |
+| `n ≥ 9` | `n + 1` |
+
+The mirror branch and the counter-rotating modes have no such pair, and their
+labels coincide in all of these conventions.
+
 The continued-fraction inversion convention is available separately and
 requires both an inversion index and a root guess:
 
@@ -75,16 +103,9 @@ leaver_root = qnm_frequency(
 )
 ```
 
-`convention=:complete_spectrum` is provided for the Schwarzschild
-algebraically-special neighborhood, where the complete-spectrum ordering and
-the usual overtone labels differ.
-
-For example, at `a=0.7`, `s=-2`, `l=m=2`, the default `n=10` gives
-`0.4219528033 - 1.8892581520im`. The root
-`0.4198385711 - 2.0935596107im` has default label `n=11` and Leaver inversion
-index 10. These labels differ because the default sequence retains both
-branches in the algebraically-special neighborhood. Match conventions before
-comparing high-overtone tables.
+`convention=:complete_spectrum` numbers the complete spectrum consecutively in
+the algebraically special neighborhood (the pair as 8 and 9, then `n ≥ 10`),
+as in Forteza & Mourier.
 
 ## Detailed radial solutions
 

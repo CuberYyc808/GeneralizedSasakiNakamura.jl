@@ -1092,7 +1092,7 @@ function _automatic_precision_fallback(mode::QNMMode, a, omega;
     fallback_cf_maximum_iterations = max(
         cf_maximum_iterations, fallback_cf_ceiling)
     return setprecision(BigFloat, fallback_precision_bits) do
-        result = qnm_frequency(
+        result = _qnm_frequency_labeled(
             mode, BigFloat(a);
             guess=Complex{BigFloat}(
                 BigFloat(real(omega)), BigFloat(imag(omega))),
@@ -1206,7 +1206,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         else
             previous
         end
-        result = qnm_frequency(
+        result = _qnm_frequency_labeled(
             mode, spin;
             guess=source_guess,
             convention,
@@ -1237,7 +1237,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                     sqrt(one(BigFloat) - kappa_big^2), BigFloat(a))
                 guess_big = source_guess === nothing ? nothing :
                     _complex_of_type(BigFloat, source_guess)
-                qnm_frequency(
+                _qnm_frequency_labeled(
                     mode, spin_big;
                     guess=guess_big,
                     convention,
@@ -1418,15 +1418,57 @@ function _spin_reflected_result(
 end
 
 """
-    qnm_frequency(mode::QNMMode, a; guess=nothing, kwargs...)
+    qnm_frequency(mode::QNMMode, a; guess=nothing, multiplet=0, kwargs...)
 
 Solve the coupled angular/radial Leaver equations in `M=1` units. Without an
 explicit guess, the labeled Schwarzschild mode is continued in spin. The final
 root is independently re-polished with a higher angular truncation and deeper
 continued fraction. Failed scientific gates return `status=:failed` and an
 explicit `stop_reason`.
+
+With the default `convention=:overtone`, overtone labels follow the Python
+`qnm` package and Cook & Zalutskiy: overtone `n` is the Kerr continuation of
+the `n`-th Schwarzschild root. For `s=-2`, `l=2`, `|m|=2` co-rotating modes the
+algebraically special frequency `-2i` splits into the pair `n=8` with
+`multiplet=0` (Cook's 8₀, the less damped one, default) and `multiplet=1`
+(Cook's 8₁).
 """
-function qnm_frequency(mode::QNMMode, a; guess=nothing,
+function qnm_frequency(mode::QNMMode, a; multiplet::Integer=0, kwargs...)
+    multiplet in (0, 1) || throw(ArgumentError("multiplet must be 0 or 1."))
+    convention = _qnm_convention(get(kwargs, :convention, :overtone))
+    internal_n = _overtone_internal_index(mode, a, convention, Int(multiplet))
+    internal_n == mode.n && return _qnm_frequency_labeled(mode, a; kwargs...)
+    result = _qnm_frequency_labeled(
+        QNMMode(mode.s, mode.l, mode.m, internal_n, mode.branch), a; kwargs...)
+    return _relabel_result(result, mode)
+end
+
+# Public overtone label -> label of the internal complete-spectrum ordering. Only
+# s=-2, l=2, |m|=2 co-rotating Kerr modes differ: internally the pair split from
+# -2i is 8 (8_0) and 9 (8_1), and the Schwarzschild continuation n >= 9 is n+1.
+function _overtone_internal_index(mode::QNMMode, a, convention::Symbol, multiplet::Int)
+    l2m2 = mode.s == -2 && mode.l == 2 && abs(mode.m) == 2
+    corotating = a * mode.m * (mode.branch == :positive_real ? 1 : -1) > 0
+    (convention == :overtone && l2m2 && corotating && !iszero(a)) || return mode.n
+    mode.n == 8 && return 8 + multiplet
+    return mode.n >= 9 ? mode.n + 1 : mode.n
+end
+
+function _relabel_result(result::LeaverResult, mode::QNMMode)
+    label = mode.n == 8 ? result.provenance.branch_label :
+        Symbol(:kerr_overtone_n, mode.n)
+    provenance = hasproperty(result.provenance, :branch_label) ?
+        merge(result.provenance, (branch_label=label,)) : result.provenance
+    return LeaverResult(mode, result.convention,
+        ismissing(result.overtone_index) ? missing : mode.n,
+        result.inversion_index, result.a, result.omega, result.angular_A,
+        result.lambda, result.mixing, result.cf_value, result.cf_error,
+        result.cf_iterations, result.root_residual, result.angular_residual,
+        result.precision_bits, result.status, result.stop_reason, provenance)
+end
+_relabel_result(result, mode::QNMMode) = result
+
+function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         convention=:overtone,
         inversion_index=:auto,
         continuation_coordinate=:auto,
@@ -1453,7 +1495,7 @@ function qnm_frequency(mode::QNMMode, a; guess=nothing,
     if aT < zero(T)
         source_mode = QNMMode(
             mode.s, mode.l, -mode.m, mode.n, mode.branch)
-        source = qnm_frequency(
+        source = _qnm_frequency_labeled(
             source_mode, -aT;
             guess,
             convention=selected_convention,
