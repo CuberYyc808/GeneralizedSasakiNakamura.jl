@@ -290,6 +290,61 @@ which is the value for $Z^{\mathrm{H}}_{\ell m n k}$, the amplitude of the inhom
 `Teukolsky_pointparticle_flux` sums the mode fluxes and automatically dispatches to circular, eccentric, inclined, or generic mode summation according to the orbital parameters. A generic-orbit run can be substantially slower than an eccentric equatorial run because it performs two-dimensional convolution integrals. The run times below are those of these examples on the machine that produced them, not general performance guarantees.
 
 <details>
+<summary>Circular equatorial orbit</summary>
+
+```julia
+julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 1.0; tol=1e-8)
+TeukolskyPointParticleFlux(
+    orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 1.0),
+    orbit_type = circular,
+    infinity_energy_flux = 0.0005658659548571375,
+    infinity_angular_momentum_flux = 0.008825776472648025,
+    infinity_carter_constant_flux = 0.0,
+    horizon_energy_flux = -4.177363290666302e-6,
+    horizon_angular_momentum_flux = -6.515407815579624e-5,
+    horizon_carter_constant_flux = 0.0,
+    total_modes = 378,
+    l_reached = (infinity = 19, horizon = 12),
+    convolution_integral = (strategy = "no convolution integral is needed",),
+    tolerance = 1.0e-8,
+    truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
+    cost = 0.6770381927490234 seconds,
+)
+```
+
+With `e = 0` and `x = 1` the call dispatches to the circular equatorial summation, which needs no convolution integral. In this example the warm run averaged about `1.79 ms` per computed mode.
+
+</details>
+
+<details>
+<summary>Spherical (inclined circular) orbit</summary>
+
+```julia
+julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 0.5; tol=1e-8)
+TeukolskyPointParticleFlux(
+    orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 0.5),
+    orbit_type = inclined,
+    infinity_energy_flux = 0.0006637621566020543,
+    infinity_angular_momentum_flux = 0.0060183149433979885,
+    infinity_carter_constant_flux = 0.04294455189603736,
+    horizon_energy_flux = -3.0865749224058106e-6,
+    horizon_angular_momentum_flux = -0.00010495330048599927,
+    horizon_carter_constant_flux = 8.871154473182051e-5,
+    total_modes = 11466,
+    k_reached_inf = 15,
+    k_reached_hor = 13,
+    convolution_integral = (strategy = "ISEM adaptive trapezoidal for all modes",),
+    tolerance = 1.0e-8,
+    truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
+    cost = 7.612027883529663 seconds,
+)
+```
+
+With `e = 0` and `|x| < 1` the call dispatches to the inclined (spherical-orbit) summation. In this example the warm run averaged about `0.66 ms` per computed mode.
+
+</details>
+
+<details>
 <summary>Eccentric equatorial orbit</summary>
 
 ```julia
@@ -345,7 +400,7 @@ This high-eccentricity generic run averaged about `3.667 ms` per computed mode.
 
 ### Convolution quadrature and accuracy controls
 
-Each mode amplitude is a convolution integral of the radial solution over the orbit. At large radial index $n$ the integrand oscillates rapidly, so uniform trapezoidal sampling needs dense grids. In the high-$n$ tail, eccentric and generic summations can instead use adaptive Levin quadrature in the radial direction, which bisects the radial interval until the mode amplitude converges or a depth limit is reached; generic two-dimensional convolutions pair it with a fixed Clenshaw–Curtis rule in the polar direction. This choice concerns the convolution quadrature only; the radial solutions themselves come from the solver methods above.
+Each mode amplitude is a convolution integral of the radial solution over the orbit. At large radial index $n$ the integrand oscillates rapidly, so uniform trapezoidal sampling needs dense grids. For modes with large $n$, eccentric and generic summations can instead use adaptive Levin quadrature in the radial direction, which bisects the radial interval until the mode amplitude converges or a depth limit is reached; generic two-dimensional convolutions pair it with a fixed Clenshaw–Curtis rule in the polar direction. This choice concerns the convolution quadrature only; the radial solutions themselves come from the solver methods above.
 
 The switch is automatic (`tail_levin`, by default automatic). Users set the target accuracy with `tol`: single modes refine their grids until the mode converges to that target, up to the grid caps `Nmax` and `Kmax`, and the summation stops adding shells once they fall below the target. These are convergence controls, not strict global error bounds for every parameter. See the [API reference](docs/src/APIs.md) for the keywords.
 

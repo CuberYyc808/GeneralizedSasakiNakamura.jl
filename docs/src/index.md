@@ -227,7 +227,54 @@ flux.horizon_energy_flux
 
 The function automatically dispatches to circular, eccentric, inclined, or generic mode summation according to the supplied orbital parameters.
 
-In the high-`n` tail, eccentric and generic summations can switch from uniform-grid trapezoidal sampling to adaptive Levin quadrature. For generic two-dimensional convolutions, the default accelerated tail path uses adaptive Levin in the radial direction and Clenshaw-Curtis sampling in the polar direction, reducing the need for a uniformly dense two-dimensional grid.
+For modes with large `n`, eccentric and generic summations can switch from uniform-grid trapezoidal sampling to adaptive Levin quadrature. For generic two-dimensional convolutions, the default accelerated tail path uses adaptive Levin in the radial direction and Clenshaw-Curtis sampling in the polar direction, reducing the need for a uniformly dense two-dimensional grid.
+
+!!! details "Circular equatorial orbit"
+    ```julia
+    julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 1.0; tol=1e-8)
+    TeukolskyPointParticleFlux(
+        orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 1.0),
+        orbit_type = circular,
+        infinity_energy_flux = 0.0005658659548571375,
+        infinity_angular_momentum_flux = 0.008825776472648025,
+        infinity_carter_constant_flux = 0.0,
+        horizon_energy_flux = -4.177363290666302e-6,
+        horizon_angular_momentum_flux = -6.515407815579624e-5,
+        horizon_carter_constant_flux = 0.0,
+        total_modes = 378,
+        l_reached = (infinity = 19, horizon = 12),
+        convolution_integral = (strategy = "no convolution integral is needed",),
+        tolerance = 1.0e-8,
+        truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
+        cost = 0.6770381927490234 seconds,
+    )
+    ```
+
+    With `e = 0` and `x = 1` the call dispatches to the circular equatorial summation, which needs no convolution integral. In this example the warm run averaged about `1.79 ms` per computed mode.
+
+!!! details "Spherical (inclined circular) orbit"
+    ```julia
+    julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 0.5; tol=1e-8)
+    TeukolskyPointParticleFlux(
+        orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 0.5),
+        orbit_type = inclined,
+        infinity_energy_flux = 0.0006637621566020543,
+        infinity_angular_momentum_flux = 0.0060183149433979885,
+        infinity_carter_constant_flux = 0.04294455189603736,
+        horizon_energy_flux = -3.0865749224058106e-6,
+        horizon_angular_momentum_flux = -0.00010495330048599927,
+        horizon_carter_constant_flux = 8.871154473182051e-5,
+        total_modes = 11466,
+        k_reached_inf = 15,
+        k_reached_hor = 13,
+        convolution_integral = (strategy = "ISEM adaptive trapezoidal for all modes",),
+        tolerance = 1.0e-8,
+        truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
+        cost = 7.612027883529663 seconds,
+    )
+    ```
+
+    With `e = 0` and `|x| < 1` the call dispatches to the inclined (spherical-orbit) summation. In this example the warm run averaged about `0.66 ms` per computed mode.
 
 After an API warmup call,
 ```julia

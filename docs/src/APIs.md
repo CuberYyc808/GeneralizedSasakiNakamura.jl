@@ -263,7 +263,7 @@ Important keywords:
 | `lmax` | `30` | maximum $\ell$ index |
 | `nmax` | `500` | maximum radial shell index |
 | `kmax` | `20` | maximum polar shell index |
-| `minimum_consecutive` | `2` | number of consecutive small shells required for truncation |
+| `minimum_consecutive` | `nothing` (5 for circular equatorial orbits, 2 otherwise) | number of consecutive small shells required for truncation |
 | `N`, `N0` | `64` | initial radial grid interval count for adaptive sampling |
 | `K`, `K0` | `16` | initial polar grid interval count for adaptive sampling |
 | `Nmax` | `2^14` | maximum radial grid interval count |
