@@ -18,7 +18,7 @@ Starting from v0.8.0, the code is also capable of computing the gravitational wa
 
 Starting from v0.9.0, the package includes the ISEM solver, short for _iterative series expansion matching_, and a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
 
-Starting from v0.10.0, the package includes the direct GSN-based ISEM solver. The default `method = "auto"` tries `GSN-ISEM` first and falls back to the legacy automatic radial route only if direct construction fails. The explicit `method = "GSN-ISEM"` form is strict and never falls back. This path accelerates homogeneous radial functions, single-mode point-particle amplitudes, and total-flux mode summations. The package also computes Kerr quasinormal modes (`qnm`, `qnm_frequency`, `qnm_sequence`, `qnm_excitation_factor`), and point-particle calls on the same orbit can share one read-only trajectory and sampling geometry through `with_pointparticle_submission`, with private per-mode workspaces for threaded use.
+Version 0.10.0 adds the direct GSN-ISEM solver, used by default (`method = "auto"`, with a legacy fallback), Kerr quasinormal modes (`qnm`), and `with_pointparticle_submission`, which lets threaded point-particle calls on one orbit share its trajectory.
 
 For high-index tail modes in eccentric and generic flux summations, the ISEM solver can use adaptive Levin quadrature instead of globally densifying a trapezoidal grid. The radial phase interval is refined only where the oscillatory integral has not stabilized. In generic two-dimensional convolutions, this radial adaptive Levin rule is combined with a fixed Clenshaw-Curtis rule in the polar direction, which resolves the smooth polar dependence with a compact cosine-spaced grid while keeping the expensive adaptivity in the radial direction.
 
@@ -97,8 +97,8 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = IN,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 6.5365876610342255 - 4.941203896939344im,
-    reflection_amplitude = -0.12824661911999655 - 0.44048133495464536im,
+    incidence_amplitude = 6.536587661184236 - 4.941203897065118im,
+    reflection_amplitude = -0.1282466191290958 - 0.4404813349644446im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 ),
 TeukolskyRadialFunction(
@@ -117,8 +117,8 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = IN,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 6.5365876610342255 - 4.941203896939344im,
-    reflection_amplitude = -0.12824661911999655 - 0.44048133495464536im,
+    incidence_amplitude = 6.536587661184236 - 4.941203897065118im,
+    reflection_amplitude = -0.1282466191290958 - 0.4404813349644446im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -129,7 +129,7 @@ Rin(10)
 ```
 This should give
 ```
-77.5750841719755 - 429.40290951043795im
+77.57508416830544 - 429.4029095224015im
 ```
 
 #### Complex frequencies, quasinormal modes, and excitation factors
@@ -149,22 +149,22 @@ These calls produce
 ```text
 QuasiNormalMode(
     parameters = (a = 0.68, s = -2, l = 2, m = 2, n = 0)
-    omega = 0.52397510429008387 - 0.08151262363119878im
-    lambda = 1.6550030612535804 + 0.36026776076185824im
-    incidence_amplitude = -3.0391746564809884e-13 - 2.983073027166103e-13im
-    reflection_amplitude = -0.80073261705161114 + 0.029136276806100096im
-    incidence_derivative = -2.1438079318803891 + 6.7875557750678599im
-    excitation_factor = 0.019833940774776078 + 0.10427056861193215im
+    omega = 0.52397510429008387 - 0.081512623631199529im
+    lambda = 1.6550030612535804 + 0.36026776076186157im
+    incidence_amplitude = -2.7105108183450338e-13 - 2.6237426978389081e-13im
+    reflection_amplitude = -0.80073261705163268 + 0.029136276806015594im
+    incidence_derivative = -2.1438079331183544 + 6.7875557754655729im
+    excitation_factor = 0.019833940788207563 + 0.10427056859796389im
     formalism = GSN)
 
 QuasiNormalMode(
     parameters = (a = 0.68, s = -2, l = 2, m = 2, n = 0)
-    omega = -0.31116285768546104 - 0.088754663319966773im
-    lambda = 5.4219094861401089 + 0.40958044727149007im
-    incidence_amplitude = -5.8582952128444212e-12 - 4.3983649731701936e-12im
-    reflection_amplitude = -1.2675830722584693 + 0.5743491661385175im
-    incidence_derivative = 1496.3346662535052 - 2345.3624239939027im
-    excitation_factor = 0.00073852800656908318 + 0.00022814176420702393im
+    omega = -0.31116285768546026 - 0.088754663319965468im
+    lambda = 5.4219094861401063 + 0.40958044727148396im
+    incidence_amplitude = 1.0863202903062678e-16 + 1.9786037254804651e-14im
+    reflection_amplitude = -1.2675830722584842 + 0.57434916613843456im
+    incidence_derivative = 9.1832313898895048 - 11.99041112156098im
+    excitation_factor = 0.13913753384431687 + 0.030226487428830294im
     formalism = GSN)
 ```
 
@@ -178,11 +178,11 @@ Rin, Rup = Teukolsky_radial(-2, 2, 2, 0.68, ordinary_mode.omega)
 ```julia
 julia> Rup
 TeukolskyRadialFunction(
-    mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.5239751042900839 - 0.08151262363119878im, lambda = 1.6550030612535804 + 0.36026776076185824im),
+    mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.5239751042900839 - 0.08151262363119953im, lambda = 1.6550030612535804 + 0.36026776076186157im),
     boundary_condition = UP,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 1.3263819289687083e-13 - 9.497421461186817e-13im,
-    reflection_amplitude = 1.1011615657248295 + 2.130059992157767im,
+    incidence_amplitude = 1.607773988395004e-15 - 1.0117545585358508e-15im,
+    reflection_amplitude = 1.101161565720038 + 2.1300599921594596im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -215,18 +215,18 @@ To have a glimpse of the output, one can do so with
 ```julia
 julia> mode_info
 TeukolskyPointParticleMode(
-    mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = 3.6067890121199833),
-    amplitude_inf = 0.00023429507956769735 - 6.558414441157074e-5im,
-    energy_flux_inf = 1.0917330113048381e-6,
-    angular_momentum_flux_inf = 3.324033375494676e-5,
-    Carter_const_flux_inf = 5.890504443058042e-5,
+    mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = 3.606789012119982),
+    amplitude_inf = 0.00023429507956770147 - 6.558414441157039e-5im,
+    energy_flux_inf = 1.0917330113048678e-6,
+    angular_momentum_flux_inf = 3.324033375494758e-5,
+    Carter_const_flux_inf = 5.890504443058213e-5,
     method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at infinity,
 ```julia
 julia> mode_info.amplitude
-0.00023429507956769735 - 6.558414441157074e-5im
+0.00023429507956770147 - 6.558414441157039e-5im
 ```
 which is the value for $Z^{\infty}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near infinity for that particular frequency.
 
@@ -239,18 +239,18 @@ The output should be
 ```julia
 julia> mode_info
 TeukolskyPointParticleMode(
-    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = -0.3932109878800166),
-    amplitude_hor = 0.006089946888790547 - 0.0014130019665094177im,
-    energy_flux_hor = -2.8438148784299547e-9,
-    angular_momentum_flux_hor = -8.658651402627612e-8,
-    Carter_const_flux_hor = -1.5343956812851922e-7,
+    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = -0.39321098788001757),
+    amplitude_hor = 0.006089946888790686 - 0.001413001966508359im,
+    energy_flux_hor = -2.8438148784298695e-9,
+    angular_momentum_flux_hor = -8.658651402627332e-8,
+    Carter_const_flux_hor = -1.534395681285149e-7,
     method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at the horizon,
 ```julia
 julia> mode_info.amplitude
-0.006089946888790547 - 0.0014130019665094177im
+0.006089946888790686 - 0.001413001966508359im
 ```
 which is the value for $Z^{\mathrm{H}}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near the horizon for that particular frequency.
 
@@ -260,18 +260,18 @@ julia> flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.7, 1.0; tol=1e-8)
 TeukolskyPointParticleFlux(
     orbital_parameters(a = 0.9, p = 6.0, e = 0.7, x = 1.0),
     orbit_type = eccentric,
-    infinity_energy_flux = 0.0007457787885306636,
-    infinity_angular_momentum_flux = 0.00675951769541119,
+    infinity_energy_flux = 0.0007457787885708406,
+    infinity_angular_momentum_flux = 0.0067595177009140235,
     infinity_carter_constant_flux = 0.0,
-    horizon_energy_flux = -8.777498500233843e-6,
-    horizon_angular_momentum_flux = -7.36178669754373e-5,
+    horizon_energy_flux = -8.777498432552521e-6,
+    horizon_angular_momentum_flux = -7.361786661019822e-5,
     horizon_carter_constant_flux = 0.0,
-    total_modes = 36726,
+    total_modes = 45204,
     n_reached = (infinity = 124, horizon = 58),
     convolution_integral = (strategy = "ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered", tail_levin_nmin = 50, tail_levin_local_n = 16, tail_levin_max_depth = 8),
     tolerance = 1.0e-8,
     truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-    cost = 74.72738218307495 seconds,
+    cost = 44.061431884765625 seconds,
 )
 ```
 This warm high-eccentricity equatorial run averaged about `2.035 ms` per computed mode.

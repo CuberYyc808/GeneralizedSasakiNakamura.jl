@@ -17,17 +17,11 @@ _iterative series expansion matching_, and a high-level total-flux interface,
 [`Teukolsky_pointparticle_flux`](@ref), which automatically selects the
 circular, eccentric, inclined, or generic mode-summation strategy.
 
-Starting from v0.10.0, the package includes the direct GSN-based ISEM solver.
-The default `method = "auto"` tries `GSN-ISEM` first and falls back to the
-legacy automatic radial route only when direct construction fails. The explicit
-`method = "GSN-ISEM"` form is strict. The direct route constructs the GSN radial
-function directly and accelerates homogeneous radial functions, single-mode
-point-particle amplitudes, and total-flux mode summations. The release also
-computes Kerr quasinormal modes ([`qnm`](@ref), [`qnm_frequency`](@ref),
-[`qnm_sequence`](@ref), [`qnm_excitation_factor`](@ref)), and point-particle
-calls on the same orbit can share one read-only trajectory and sampling
-geometry through `with_pointparticle_submission`. It requires Julia 1.12,
-KerrGeodesics v0.5 and SpinWeightedSpheroidalHarmonics v1.4.
+Version 0.10.0 adds the direct GSN-ISEM solver, used by default (`method = "auto"`,
+with a legacy fallback), Kerr quasinormal modes ([`qnm`](@ref)), and
+`with_pointparticle_submission`, which lets threaded point-particle calls on one
+orbit share its trajectory. It requires Julia 1.12, KerrGeodesics v0.5 and
+SpinWeightedSpheroidalHarmonics v1.4.
 
 For high-index tail modes in eccentric and generic flux summations, the
 GSN-ISEM path can use adaptive Levin quadrature instead of globally densifying
@@ -139,8 +133,8 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = IN,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 6.5365876610342255 - 4.941203896939344im,
-    reflection_amplitude = -0.12824661911999655 - 0.44048133495464536im,
+    incidence_amplitude = 6.536587661184236 - 4.941203897065118im,
+    reflection_amplitude = -0.1282466191290958 - 0.4404813349644446im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -151,7 +145,7 @@ Rin(10)
 ```
 This should give
 ```
-77.5750841719755 - 429.40290951043795im
+77.57508416830544 - 429.4029095224015im
 ```
 
 #### Solving radial equations at complex frequencies
@@ -168,8 +162,8 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.5239751 - 0.0815126im, lambda = 1.6550030805786913 + 0.36026765638858793im),
     boundary_condition = UP,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = -5.821260188342159e-8 - 3.8053386080536867e-7im,
-    reflection_amplitude = 1.1011632105075442 + 2.13005973680996im,
+    incidence_amplitude = -5.8212734659171046e-8 - 3.805329485211967e-7im,
+    reflection_amplitude = 1.1011632105029665 + 2.1300597368117073im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -180,7 +174,7 @@ Rup.incidence_amplitude
 
 This should give
 ```julia
--5.821260188342159e-8 - 3.8053386080536867e-7im
+-5.8212734659171046e-8 - 3.805329485211967e-7im
 ```
 
 #### Solving the inhomogeneous radial Teukolsky/SN equation with a point-particle source on a generic timelike bound orbit
@@ -194,18 +188,18 @@ To have a glimpse of the output, one can do so with
 ```julia
 julia> mode_info
 TeukolskyPointParticleMode(
-    mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = 3.6067890121199833),
-    amplitude_inf = 0.00023429507956769735 - 6.558414441157074e-5im,
-    energy_flux_inf = 1.0917330113048381e-6,
-    angular_momentum_flux_inf = 3.324033375494676e-5,
-    Carter_const_flux_inf = 5.890504443058042e-5,
+    mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = 3.606789012119982),
+    amplitude_inf = 0.00023429507956770147 - 6.558414441157039e-5im,
+    energy_flux_inf = 1.0917330113048678e-6,
+    angular_momentum_flux_inf = 3.324033375494758e-5,
+    Carter_const_flux_inf = 5.890504443058213e-5,
     method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at infinity
 ```julia
 julia> mode_info.amplitude
-0.00023429507956769735 - 6.558414441157074e-5im
+0.00023429507956770147 - 6.558414441157039e-5im
 ```
 which is the value for $Z^{\infty}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near infinity for that particular frequency.
 
@@ -218,18 +212,18 @@ The output should be
 ```julia
 julia> mode_info
 TeukolskyPointParticleMode(
-    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732737, lambda = -0.39321098788001657),
-    amplitude_hor = 0.006089946888790547 - 0.0014130019665094177im,
-    energy_flux_hor = -2.8438148784299547e-9,
-    angular_momentum_flux_hor = -8.658651402627612e-8,
-    Carter_const_flux_hor = -1.5343956812851922e-7,
+    mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = -0.39321098788001757),
+    amplitude_hor = 0.006089946888790686 - 0.001413001966508359im,
+    energy_flux_hor = -2.8438148784298695e-9,
+    angular_momentum_flux_hor = -8.658651402627332e-8,
+    Carter_const_flux_hor = -1.534395681285149e-7,
     method = (method = "isem_trapezoidal", radial_method = "GSN-ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at the horizon
 ```julia
 julia> mode_info.amplitude
-0.006089946888790547 - 0.0014130019665094177im
+0.006089946888790686 - 0.001413001966508359im
 ```
 which is the value for $Z^{\mathrm{H}}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near the horizon for that particular frequency.
 
