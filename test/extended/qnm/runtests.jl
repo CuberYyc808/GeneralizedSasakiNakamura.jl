@@ -162,6 +162,15 @@ end
     end
 end
 
+# Mirror branch at a = 0.68: the (l, m) = (2, 2) mirror root is -conj of the (2, -2) ordinary root, in omega and in the
+# Teukolsky excitation factor.
+@testset "mirror = -conj(ordinary) at a = 0.68" begin
+    ordinary = qnm(0.68, -2, 2, -2, 0; detailed=true)
+    mirrored = qnm(0.68, -2, 2, 2, 0, mirror; detailed=true)
+    @test isapprox(mirrored.omega, -conj(ordinary.omega); rtol=1e-8)
+    @test isapprox(mirrored.teukolsky.excitation_factor, -conj(ordinary.teukolsky.excitation_factor); rtol=1e-8)
+end
+
 # ---------------------------------------------------------------------------------------------------
 # Residues of 1/(i omega B_inc^T) at a = 0.5 against arXiv:2609.09531v1 Table I (7 decimals): with the GSN
 # incidence derivative alpha, c_n = 1 / (i omega (B_inc/B_trans conversion) alpha)
