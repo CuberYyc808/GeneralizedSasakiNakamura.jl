@@ -18,7 +18,7 @@ Starting from v0.8.0, the code is also capable of computing the gravitational wa
 
 Starting from v0.9.0, the package includes the ISEM solver, short for _iterative series expansion matching_, and a high-level total-flux interface, `Teukolsky_pointparticle_flux`, which automatically selects the circular, eccentric, inclined, or generic mode-summation strategy.
 
-Version 0.10.0 adds a GSN-based solver that directly solves the generalized Sasaki–Nakamura equation using the iterative series expansion method (ISEM), along with a Kerr quasinormal-mode solver. To support large-scale parallel computations, the point-particle mode and flux solvers have been refined to provide thread-safe execution and synchronized cache sharing within each submission.
+Version 0.10.0 adds a GSN-based solver that directly solves the generalized Sasaki–Nakamura equation using iterative series expansion matching (ISEM), along with a Kerr quasinormal-mode solver. To support large-scale parallel computations, the point-particle mode and flux solvers now support thread-safe concurrent calls on the default route, sharing synchronized caches within each submission.
 
 For high-index tail modes in eccentric and generic flux summations, large radial indices n make the convolution integrands highly oscillatory. These integrals can now use adaptive Levin quadrature in the radial direction, combined with Clenshaw–Curtis quadrature in the polar direction for generic orbits, instead of trapezoidal quadrature. Method selection and refinement are handled automatically: users only need to specify the desired accuracy, and the solver adapts the computation to meet that target.
 
