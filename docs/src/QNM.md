@@ -68,24 +68,23 @@ labels follow the Python [`qnm`](https://github.com/duetosymmetry/qnm) package
 continuation of the `n`-th Schwarzschild root, the same mode that
 [`qnm_sequence`](@ref) follows from `a = 0`. For `s = -2`, `l = 2`, `|m| = 2`
 co-rotating modes the Schwarzschild algebraically special frequency `-2i` splits
-at `a > 0` into a pair, which Cook labels `8₀` and `8₁`. Both are overtone `n = 8`:
-the default `multiplet = 0` returns `8₀` (the less damped one), and
-`multiplet = 1` returns `8₁`:
+at `a > 0` into a pair, which Cook labels `8₀` and `8₁`. Overtone `n = 8`
+returns `8₀` (the less damped one); `8₁` is available as `n = 9` with
+`convention=:complete_spectrum`, which numbers the pair consecutively:
 
 ```julia
-qnm_frequency(QNMMode(-2, 2, 2, 8), 0.68)                 # 8₀
-qnm_frequency(QNMMode(-2, 2, 2, 8), 0.68; multiplet = 1)  # 8₁
-qnm(0.68, -2, 2, 2, 8; multiplet = 1)
+qnm_frequency(QNMMode(-2, 2, 2, 8), 0.68)                                    # 8₀
+qnm_frequency(QNMMode(-2, 2, 2, 9), 0.68; convention=:complete_spectrum)     # 8₁
 ```
 
 Overtones `n ≥ 9` therefore carry the same labels as the Python `qnm` package
-and the Cook catalogue. Some tables number the pair consecutively; for the
-co-rotating `(2, 2)` modes the correspondence is
+and the Cook catalogue. For the co-rotating `(2, 2)` modes the correspondence
+with tables that number the pair consecutively is
 
-| this package and Python `qnm` / Cook | Forteza & Mourier (2107.11829) |
+| this package and Python `qnm` / Cook | Forteza & Mourier (2107.11829), `convention=:complete_spectrum` |
 | :--- | :--- |
-| `n = 8, multiplet = 0` (`8₀`) | `n = 8` |
-| `n = 8, multiplet = 1` (`8₁`) | `n = 9` |
+| `n = 8` (`8₀`) | `n = 8` |
+| `8₁` | `n = 9` |
 | `n ≥ 9` | `n + 1` |
 
 The mirror branch and the counter-rotating modes have no such pair, and their

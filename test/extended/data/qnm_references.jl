@@ -57,8 +57,8 @@ const SCHWARZSCHILD_SCAN = [
 # LEGACY_OVERTONES: roots from the September-24 legacy bundle (a separate implementation; solver_success
 # True only) the high-precision overtone reference table (2026-09-24, not distributed); cross-checked against the
 # published tables below at n = 8, 9, 20. Used with atol 1e-9 (check_qnm_results.jl). Labels follow Python qnm /
-# Cook: co-rotating (2,2) roots split from -2i are n = 8 with multiplet 0 (8_0) and 1 (8_1); higher overtones
-# continue the Schwarzschild labels, so the bundle's own 9, 10, ..., 20 appear here as (8, 1), 9, ..., 19.
+# Cook: of the co-rotating (2,2) pair split from -2i, n = 8 is 8_0 and 8_1 is n = 9 with convention = :complete_spectrum;
+# higher overtones continue the Schwarzschild labels, so the bundle's own 10, ..., 20 appear here as 9, ..., 19.
 const LEGACY_OVERTONES = [
     (a = 0.5, l = 2, m = 2, n = 0, branch = ordinary, omega = complex(0.46412302597593824, -0.08563883498806327)),
     (a = 0.5, l = 2, m = 2, n = 1, branch = ordinary, omega = complex(0.4474070374531985, -0.26022455363703456)),
@@ -69,7 +69,7 @@ const LEGACY_OVERTONES = [
     (a = 0.5, l = 2, m = 2, n = 6, branch = ordinary, omega = complex(0.30956850092923505, -1.2339950080483961)),
     (a = 0.5, l = 2, m = 2, n = 7, branch = ordinary, omega = complex(0.30435388269998387, -1.446566972609844)),
     (a = 0.5, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.30101833878061446, -1.6659917852234734)),
-    (a = 0.5, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.2979502029620104, -1.8893002601882176)),
+    (a = 0.5, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.2979502029620104, -1.8893002601882176)),
     (a = 0.5, l = 2, m = 2, n = 9, branch = ordinary, omega = complex(0.2949285581907501, -2.1148649619370308)),
     (a = 0.5, l = 2, m = 2, n = 10, branch = ordinary, omega = complex(0.2919754359563622, -2.3418717300930494)),
     (a = 0.5, l = 2, m = 2, n = 11, branch = ordinary, omega = complex(0.2891237818155209, -2.5698885311289295)),
@@ -104,7 +104,7 @@ const LEGACY_OVERTONES = [
     (a = 0.5, l = 2, m = 2, n = 20, branch = mirror, omega = complex(-0.05016065009134441, -5.020065531392817)),
     (a = 0.68, l = 2, m = 2, n = 0, branch = ordinary, omega = complex(0.5239751042900848, -0.0815126236311956)),
     (a = 0.68, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.41076995074326095, -1.5086151268999948)),
-    (a = 0.68, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.409127640227235, -1.7127712991367263)),
+    (a = 0.68, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.409127640227235, -1.7127712991367263)),
     (a = 0.68, l = 2, m = 2, n = 19, branch = ordinary, omega = complex(0.39060396880066006, -4.024335178080966)),
     (a = 0.68, l = 2, m = 2, n = 0, branch = mirror, omega = complex(-0.31116285768546076, -0.08875466331996901)),
     (a = 0.68, l = 2, m = 2, n = 8, branch = mirror, omega = complex(-0.08969160784483808, -2.0895486857994756)),
@@ -112,7 +112,7 @@ const LEGACY_OVERTONES = [
     (a = 0.68, l = 2, m = 2, n = 20, branch = mirror, omega = complex(-0.11547128777155687, -4.965842650385596)),
     (a = 0.9, l = 2, m = 2, n = 0, branch = ordinary, omega = complex(0.6716142721321632, -0.06486923587579764)),
     (a = 0.9, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.6253445748665474, -1.0819705742653472)),
-    (a = 0.9, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.628269978407281, -1.2300085359259152)),
+    (a = 0.9, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.628269978407281, -1.2300085359259152)),
     (a = 0.9, l = 2, m = 2, n = 19, branch = ordinary, omega = complex(0.6261271060803835, -2.885957712347005)),
     (a = 0.9, l = 2, m = 2, n = 0, branch = mirror, omega = complex(-0.29724421359059017, -0.08828065931501533)),
     (a = 0.9, l = 2, m = 2, n = 8, branch = mirror, omega = complex(-0.07072426041680847, -2.1066341239170097)),
@@ -141,10 +141,10 @@ const PUBLISHED_QNM = [
     (source = "Forteza_Mourier_2107.11829", a = 0.5, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.3010183388, -1.6659917852), A = complex(4.1124145133, 2.3757319918), published_n = 8),
     (source = "Forteza_Mourier_2107.11829", a = 0.68, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.4107699507, -1.5086151269), A = complex(4.0267167671, 3.1111301008), published_n = 8),
     (source = "Forteza_Mourier_2107.11829", a = 0.9, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.6253445749, -1.0819705743), A = complex(3.0456475955, 3.410234276), published_n = 8),
-    (source = "Forteza_Mourier_2107.11829", a = 0.05, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.0602993164, -2.0888402014), A = complex(3.9999819629, 0.2789084091), published_n = 9),
-    (source = "Forteza_Mourier_2107.11829", a = 0.5, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.297950203, -1.8893002602), A = complex(4.2692751912, 2.6808721186), published_n = 9),
-    (source = "Forteza_Mourier_2107.11829", a = 0.68, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.4091276402, -1.7127712991), A = complex(4.2724313543, 3.509836304), published_n = 9),
-    (source = "Forteza_Mourier_2107.11829", a = 0.9, l = 2, m = 2, n = 8, multiplet = 1, branch = ordinary, omega = complex(0.6282699784, -1.2300085359), A = complex(3.2701312889, 3.866926239), published_n = 9),
+    (source = "Forteza_Mourier_2107.11829", a = 0.05, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.0602993164, -2.0888402014), A = complex(3.9999819629, 0.2789084091), published_n = 9),
+    (source = "Forteza_Mourier_2107.11829", a = 0.5, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.297950203, -1.8893002602), A = complex(4.2692751912, 2.6808721186), published_n = 9),
+    (source = "Forteza_Mourier_2107.11829", a = 0.68, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.4091276402, -1.7127712991), A = complex(4.2724313543, 3.509836304), published_n = 9),
+    (source = "Forteza_Mourier_2107.11829", a = 0.9, l = 2, m = 2, n = 9, convention = :complete_spectrum, branch = ordinary, omega = complex(0.6282699784, -1.2300085359), A = complex(3.2701312889, 3.866926239), published_n = 9),
     (source = "Forteza_Mourier_2107.11829", a = 0.05, l = 2, m = 2, n = 8, branch = mirror, omega = complex(-0.073582705, -2.0140897518), A = complex(4.0172532966, 0.2679404587), published_n = 8),
     (source = "Forteza_Mourier_2107.11829", a = 0.5, l = 2, m = 2, n = 8, branch = mirror, omega = complex(-0.0983563257, -2.0785062815), A = complex(4.9177309637, 2.6275806073), published_n = 8),
     (source = "Forteza_Mourier_2107.11829", a = 0.68, l = 2, m = 2, n = 8, branch = mirror, omega = complex(-0.0896916078, -2.0895486858), A = complex(5.6355775699, 3.4796496021), published_n = 8),

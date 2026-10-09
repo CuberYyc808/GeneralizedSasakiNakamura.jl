@@ -422,9 +422,7 @@ function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
         mirror_guess=nothing,
         root_options::NamedTuple=NamedTuple(),
         excitation_options::NamedTuple=NamedTuple(),
-        detailed::Bool=false,
-        multiplet::Integer=0)
-    root_options = merge(root_options, (; multiplet))
+        detailed::Bool=false)
     root = if branch == ordinary
         _ordinary_qnm_root(
             a, s, l, m, n, primary_guess, root_options;
@@ -456,9 +454,7 @@ function qnm_pair(a, s::Integer, l::Integer, m::Integer, n::Integer;
         mirror_guess=nothing,
         root_options::NamedTuple=NamedTuple(),
         excitation_options::NamedTuple=NamedTuple(),
-        detailed::Bool=false,
-        multiplet::Integer=0)
-    root_options = merge(root_options, (; multiplet))
+        detailed::Bool=false)
     ordinary_root = _ordinary_qnm_root(
         a, s, l, m, n, primary_guess, root_options;
         convention, inversion_index)

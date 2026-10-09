@@ -1418,7 +1418,7 @@ function _spin_reflected_result(
 end
 
 """
-    qnm_frequency(mode::QNMMode, a; guess=nothing, multiplet=0, kwargs...)
+    qnm_frequency(mode::QNMMode, a; guess=nothing, kwargs...)
 
 Solve the coupled angular/radial Leaver equations in `M=1` units. Without an
 explicit guess, the labeled Schwarzschild mode is continued in spin. The final
@@ -1429,14 +1429,13 @@ explicit `stop_reason`.
 With the default `convention=:overtone`, overtone labels follow the Python
 `qnm` package and Cook & Zalutskiy: overtone `n` is the Kerr continuation of
 the `n`-th Schwarzschild root. For `s=-2`, `l=2`, `|m|=2` co-rotating modes the
-algebraically special frequency `-2i` splits into the pair `n=8` with
-`multiplet=0` (Cook's 8₀, the less damped one, default) and `multiplet=1`
-(Cook's 8₁).
+algebraically special frequency `-2i` splits into a pair (Cook's 8₀ and 8₁);
+`n=8` returns the less damped 8₀, and 8₁ is `n=9` with
+`convention=:complete_spectrum`.
 """
-function qnm_frequency(mode::QNMMode, a; multiplet::Integer=0, kwargs...)
-    multiplet in (0, 1) || throw(ArgumentError("multiplet must be 0 or 1."))
+function qnm_frequency(mode::QNMMode, a; kwargs...)
     convention = _qnm_convention(get(kwargs, :convention, :overtone))
-    internal_n = _overtone_internal_index(mode, a, convention, Int(multiplet))
+    internal_n = _overtone_internal_index(mode, a, convention)
     internal_n == mode.n && return _qnm_frequency_labeled(mode, a; kwargs...)
     result = _qnm_frequency_labeled(
         QNMMode(mode.s, mode.l, mode.m, internal_n, mode.branch), a; kwargs...)
@@ -1446,11 +1445,10 @@ end
 # Public overtone label -> label of the internal complete-spectrum ordering. Only
 # s=-2, l=2, |m|=2 co-rotating Kerr modes differ: internally the pair split from
 # -2i is 8 (8_0) and 9 (8_1), and the Schwarzschild continuation n >= 9 is n+1.
-function _overtone_internal_index(mode::QNMMode, a, convention::Symbol, multiplet::Int)
+function _overtone_internal_index(mode::QNMMode, a, convention::Symbol)
     l2m2 = mode.s == -2 && mode.l == 2 && abs(mode.m) == 2
     corotating = a * mode.m * (mode.branch == :positive_real ? 1 : -1) > 0
     (convention == :overtone && l2m2 && corotating && !iszero(a)) || return mode.n
-    mode.n == 8 && return 8 + multiplet
     return mode.n >= 9 ? mode.n + 1 : mode.n
 end
 

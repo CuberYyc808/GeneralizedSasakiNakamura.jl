@@ -66,7 +66,7 @@ end
 
 # ---------------------------------------------------------------------------------------------------
 # Published tables: Forteza & Mourier (10 digits; atol 2e-10) and Cook's Zenodo catalogue (atol 5e-9).
-# Labels follow Python qnm and Cook: Forteza's ordinary (2,2) n = 9 is Cook's 8_1, i.e. n = 8 with multiplet = 1;
+# Labels follow Python qnm and Cook: Forteza's ordinary (2,2) n = 9 is Cook's 8_1, taken as n = 9 with convention = :complete_spectrum;
 # Cook's ordinary (2,2) label 19 is the package's overtone 19. A is Leaver's angular separation constant
 # (package convention assumed equal: A -> l(l+1) - s(s+1) as c -> 0; see README "API uncertainties").
 # ---------------------------------------------------------------------------------------------------
@@ -74,7 +74,7 @@ end
     rows = GSN_TEST_LEVEL === :quick ? PUBLISHED_QNM[1:6:end] : PUBLISHED_QNM
     for r in rows
         tol = startswith(r.source, "Forteza") ? 2e-10 : 5e-9
-        root = r.branch == ordinary ? qnm_frequency(QNMMode(-2, r.l, r.m, r.n), r.a; multiplet=get(r, :multiplet, 0)) :
+        root = r.branch == ordinary ? qnm_frequency(QNMMode(-2, r.l, r.m, r.n), r.a; convention=get(r, :convention, :overtone)) :
             mirror_root(r.a, -2, r.l, r.m, r.n)
         @testset "$(r.source) a=$(r.a) ($(r.l),$(r.m),$(r.n)) $(r.branch)" begin
             @test root.status == :accepted
@@ -113,7 +113,7 @@ end
 @testset "legacy overtone table" begin
     rows = GSN_TEST_LEVEL === :quick ? LEGACY_OVERTONES[1:9:end] : LEGACY_OVERTONES
     for r in rows
-        root = r.branch == ordinary ? qnm_frequency(QNMMode(-2, r.l, r.m, r.n), r.a; multiplet=get(r, :multiplet, 0)) :
+        root = r.branch == ordinary ? qnm_frequency(QNMMode(-2, r.l, r.m, r.n), r.a; convention=get(r, :convention, :overtone)) :
             mirror_root(r.a, -2, r.l, r.m, r.n)
         @test isapprox(root.omega, r.omega; atol=1e-9, rtol=0)
     end
