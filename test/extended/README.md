@@ -92,7 +92,7 @@ marked "frozen self-value", with looser tolerances.
 * `SCHWARZSCHILD_SCAN`: `.../results/qnm_schw_scan.json` (independent, dps 25, inversion index n; mirror roots
   stored for n >= 9).
 * `PUBLISHED_QNM`: Forteza & Mourier arXiv:2107.11829 (10 digits) and Cook, Zenodo 14024959, as copied in
-  `dev/legacy/data/processed/qnm_published_tables_20260924.tsv`.
+  the processed published QNM tables (2026-09-24 extraction, not distributed).
 * `N20_CF_ROOTS`: six independent radial/angular Leaver-CF roots, at decimal spins
   0.5, 0.68 and 0.9. Increasing precision from 50 to 75 digits, radial depth from
   16000 to 32000 and changing inversion index from 20 to 17/23 preserves at least
@@ -100,10 +100,10 @@ marked "frozen self-value", with looser tolerances.
   Cook rows differ by 8e-9--1.1e-8. The catalogue retains its 2e-8 coarse check;
   the solver must also agree with these independent roots within 1e-10.
 * `PUBLISHED_RESIDUES`: arXiv:2609.09531v1 Table I (a = 0.5), via
-  `dev/legacy/data/processed/qnm_published_residues_20260924.tsv` and the conversion in
-  `dev/legacy/code/julia/qnm_published_residues_20260924.jl`.
+  the processed published QNM residue table (2026-09-24, not distributed) and the conversion by
+  the residue conversion script (2026-09-24, not distributed).
 * `LEGACY_OVERTONES`: September-24 legacy bundle (separate implementation, cross-checked against the published
-  rows at n = 8, 9, 20): `dev/legacy/data/processed/qnm_overtone_reference_20260924.tsv`; atol 1e-9.
+  rows at n = 8, 9, 20): the high-precision overtone reference table (2026-09-24, not distributed); atol 1e-9.
 * `AXISYMMETRIC_N10`: `.../qnm_axisymmetric_reference_20260924.tsv` (legacy catalogue; The independent comparison confirmed the target).
 * `Q068`, `Q068_STENCIL`: `cloud_refs/qnm068_bridge_reference/{q068_root.json,stencil_reference.tsv}`
   (independent direct solver, dps 40/60). Its excitation factor uses a denominator 2 omega;

@@ -165,7 +165,7 @@ end
 # ---------------------------------------------------------------------------------------------------
 # Residues of 1/(i omega B_inc^T) at a = 0.5 against arXiv:2609.09531v1 Table I (7 decimals): with the GSN
 # incidence derivative alpha, c_n = 1 / (i omega (B_inc/B_trans conversion) alpha)
-# (dev/legacy/code/julia/qnm_published_residues_20260924.jl). Componentwise 6.5e-8 (printed rounding 5e-8).
+# (the residue conversion script (2026-09-24, not distributed)). Componentwise 6.5e-8 (printed rounding 5e-8).
 # ---------------------------------------------------------------------------------------------------
 @testset "published residues (a = 0.5)" begin
     rows = GSN_TEST_LEVEL === :quick ? filter(r -> r.n == 0, PUBLISHED_RESIDUES) : PUBLISHED_RESIDUES

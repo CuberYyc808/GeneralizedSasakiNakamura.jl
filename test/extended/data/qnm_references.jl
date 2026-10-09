@@ -55,7 +55,7 @@ const SCHWARZSCHILD_SCAN = [
     (index = 22, omega = complex(-0.08645284449817553, -5.583309211067706), residual = 8.084717329260619e-21),
 ]
 # LEGACY_OVERTONES: roots from the September-24 legacy bundle (a separate implementation; solver_success
-# True only) dev/legacy/data/processed/qnm_overtone_reference_20260924.tsv; cross-checked against the
+# True only) the high-precision overtone reference table (2026-09-24, not distributed); cross-checked against the
 # published tables below at n = 8, 9, 20. Used with atol 1e-9 (check_qnm_results.jl).
 const LEGACY_OVERTONES = [
     (a = 0.5, l = 2, m = 2, n = 0, branch = ordinary, omega = complex(0.46412302597593824, -0.08563883498806327)),
@@ -133,7 +133,7 @@ const LEGACY_OVERTONES = [
     (a = 0.5, l = 3, m = 1, n = 20, branch = ordinary, omega = complex(0.2456366047649981, -4.576237498297008)),
 ]
 # PUBLISHED_QNM: Forteza & Mourier arXiv:2107.11829 (10 digits) and Cook Zenodo 14024959 tables, copied in
-# dev/legacy/data/processed/qnm_published_tables_20260924.tsv. published_n is the source's own label.
+# the processed published QNM tables (2026-09-24 extraction, not distributed). published_n is the source's own label.
 const PUBLISHED_QNM = [
     (source = "Forteza_Mourier_2107.11829", a = 0.05, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.0617725879, -1.8876918643), A = complex(3.9983134577, 0.2520717908), published_n = 8),
     (source = "Forteza_Mourier_2107.11829", a = 0.5, l = 2, m = 2, n = 8, branch = ordinary, omega = complex(0.3010183388, -1.6659917852), A = complex(4.1124145133, 2.3757319918), published_n = 8),
@@ -161,8 +161,8 @@ const PUBLISHED_QNM = [
     (source = "Cook_Zenodo_14024959", a = 0.9, l = 3, m = 1, n = 20, branch = ordinary, omega = complex(0.35923508463631, -3.02246569088522), A = complex(12.358289136926906, 3.0183035342571585), published_n = 20),
 ]
 # PUBLISHED_RESIDUES: arXiv:2609.09531v1 Table I, a = 0.5, s=-2 l=m=2: residues of 1/(i*w*Binc_T) (7 decimals;
-# dev/legacy/code/julia/qnm_published_residues_20260924.jl). within_rounding: legacy comparison flag from
-# dev/legacy/data/processed/qnm_published_residues_20260924.tsv (n=11, 13 ordinary exceed the printed rounding).
+# the residue conversion script (2026-09-24, not distributed)). within_rounding: legacy comparison flag from
+# the processed published QNM residue table (2026-09-24, not distributed) (n=11, 13 ordinary exceed the printed rounding).
 const PUBLISHED_RESIDUES = [
     (branch = ordinary, n = 0, published = complex(0.0199051, 0.0071751), within_rounding = true),
     (branch = ordinary, n = 1, published = complex(-0.0401675, 0.0568486), within_rounding = true),
@@ -189,7 +189,7 @@ const PUBLISHED_RESIDUES = [
     (branch = mirror, n = 8, published = complex(-0.0010012, -0.0013438), within_rounding = true),
     (branch = mirror, n = 9, published = complex(-0.0008764, -0.0010197), within_rounding = true),
 ]
-# AXISYMMETRIC_N10: legacy axisymmetric catalogue (dev/legacy/data/processed/qnm_axisymmetric_reference_20260924.tsv),
+# AXISYMMETRIC_N10: legacy axisymmetric catalogue (the legacy axisymmetric catalogue table (2026-09-24, not distributed)),
 # a = 0.5, l = 2, m = 0, n = 10 sub-branch 1; the independent comparison confirmed the target root 0.05104369416307408-2.5823555488023175i.
 const AXISYMMETRIC_N10 = complex(0.05104369416376206, -2.582355548802519)
 # Q068: independent root and Teukolsky observables of qnm(0.68, -2, 2, 2, 0)
