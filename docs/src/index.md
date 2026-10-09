@@ -17,18 +17,9 @@ _iterative series expansion matching_, and a high-level total-flux interface,
 [`Teukolsky_pointparticle_flux`](@ref), which automatically selects the
 circular, eccentric, inclined, or generic mode-summation strategy.
 
-Version 0.10.0 adds the direct GSN-ISEM solver, used by default (`method = "auto"`,
-with a legacy fallback), Kerr quasinormal modes ([`qnm`](@ref)), and
-`with_pointparticle_submission`, which lets threaded point-particle calls on one
-orbit share its trajectory. It requires Julia 1.12, KerrGeodesics v0.5 and
-SpinWeightedSpheroidalHarmonics v1.4.
+Version 0.10.0 adds a GSN-based solver that directly solves the generalized Sasaki–Nakamura equation using the iterative series expansion method (ISEM), along with a Kerr quasinormal-mode solver. To support large-scale parallel computations, the point-particle mode and flux solvers have been refined to provide thread-safe execution and synchronized cache sharing within each submission.
 
-For high-index tail modes in eccentric and generic flux summations, the
-GSN-ISEM path can use adaptive Levin quadrature instead of globally densifying
-a trapezoidal grid. The radial phase interval is refined only where the
-oscillatory integral has not stabilized. In generic two-dimensional
-convolutions, this radial adaptive Levin rule is combined with a fixed
-Clenshaw-Curtis rule in the polar direction.
+For high-index tail modes in eccentric and generic flux summations, large radial indices n make the convolution integrands highly oscillatory. These integrals can now use adaptive Levin quadrature in the radial direction, combined with Clenshaw–Curtis quadrature in the polar direction for generic orbits, instead of trapezoidal quadrature. Method selection and refinement are handled automatically: users only need to specify the desired accuracy, and the solver adapts the computation to meet that target.
 
 ## Installation
 Julia 1.12 or later in the 1.x series is required.
