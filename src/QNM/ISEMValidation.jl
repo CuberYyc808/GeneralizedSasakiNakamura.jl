@@ -114,9 +114,25 @@ function _is_extremal_damped_simple_pole(result::LeaverResult)
         hasproperty(provenance, :family) && provenance.family == :DM
 end
 
+# At a = +-1 the horizon is an irregular singular point. The horizon state
+# e^{alpha/h} h^beta sum c_n h^n is asymptotic in h = r - 1 with
+# alpha = i(2 omega - m a); the integration starts at h = 2|alpha|/40 so that the
+# series is used inside its region of usefulness for every detuning, instead of
+# a fixed r* that fails when 2 omega is close to m. For damped frequencies with
+# Re(alpha) > 0 the outgoing solution still grows against the ingoing one by
+# e^{2 Re(alpha)/h}; in Float64 this limits the incidence closure for corotating
+# damped modes, which the incidence gate reports.
+function _extremal_qnm_horizon_start(m, a, omega; series_terms=40,
+        minimum_h=1.0e-6, maximum_h=0.05)
+    detuning = abs(2omega - m * sign(a))
+    h = clamp(2detuning / series_terms, minimum_h, maximum_h)
+    return rstar_from_r(a, one(h) + h)
+end
+
 function _extremal_qnm_radial_solver(s, l, m, a, omega, boundary)
+    rsin = _extremal_qnm_horizon_start(m, a, ComplexF64(omega))
     return GSN_radial(
-        s, l, m, a, omega, boundary, -40.0, 60.0;
+        s, l, m, a, omega, boundary, rsin, 60.0;
         method="GSN-ISEM",
         tolerance=1.0e-14,
         horizon_expansion_order=64,
@@ -213,6 +229,21 @@ function _polish_extremal_damped_root_with_gsn(result::LeaverResult;
     initial = _wronskian_incidence(
         result, result.omega; radial_solver)
     initial_scaled = T(_scaled_wronskian_incidence(initial))
+    if get(result.provenance, :root_equation, :none) ==
+            :richartz_extremal_recurrence
+        # The exact-extremal recurrence fixes the frequency; the radial
+        # incidence is only a closure check of the radial basis.
+        return _replace_extremal_damped_root_frequency(
+            result, result.omega, (
+                exact_gsn_root_polish=initial_scaled <= tolerance &&
+                    initial.wronskian_drift <= wronskian_gate ?
+                    :not_needed : :radial_closure_failed,
+                exact_gsn_initial_scaled_incidence=initial_scaled,
+                exact_gsn_selected_scaled_incidence=initial_scaled,
+                exact_gsn_root_shift=zero(T),
+                exact_gsn_polish_rows=NamedTuple[],
+            ))
+    end
     if initial_scaled <= tolerance &&
             initial.wronskian_drift <= wronskian_gate
         return _replace_extremal_damped_root_frequency(

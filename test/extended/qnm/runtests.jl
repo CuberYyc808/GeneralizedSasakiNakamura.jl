@@ -348,6 +348,47 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Exact-extremal a = +-1 (src/QNM/ExtremalLeaver.jl, RootPolishing.jl _extremal_damped_limit_result).
+# Damped frequencies are roots of the Richartz r = 2M recurrence at a = 1; zero-damping families
+# return the synchronous endpoint. Paper values: Richartz, PRD 93, 064062 (2016), Tables I, V, VI
+# (six printed decimals). The exact roots below were cross-checked against an independent Python
+# implementation of the same recurrence (test/extended/tools/richartz_extremal_reference.py).
+# ---------------------------------------------------------------------------------------------------
+@testset "exact extremal a = +-1" begin
+    paper = at_level(:full) ?
+        ((2, 0, 0, 0.425145 - 0.071806im), (2, -2, 0, 0.291553 - 0.088026im),
+         (4, 3, 0, 1.503222 - 0.004371im), (2, 1, 0, 0.581433 - 0.038255im),
+         (3, 2, 0, 1.028553 - 0.018572im), (7, 5, 0, 2.523730 - 0.010112im),
+         (2, -1, 0, 0.343862 - 0.083384im)) :
+        ((2, 0, 0, 0.425145 - 0.071806im),)
+    for (l, m, n, expected) in paper
+        root = qnm_frequency(QNMMode(-2, l, m, n), 1.0)
+        @test root.status == :accepted
+        @test root.stop_reason == :accepted_exact_extremal_root
+        @test root.provenance.root_equation == :richartz_extremal_recurrence
+        @test isapprox(root.omega, expected; atol=1e-6, rtol=0)
+        @test abs(Q.extremal_radial_residual(-2, m, root.omega, root.angular_A;
+            depth=root.provenance.exact_extremal_depth)) < 1e-10
+    end
+    # Damped s=-2, l=m=2, n=5 branch: not the synchronous endpoint.
+    dm = qnm_frequency(QNMMode(-2, 2, 2, 5), 1.0)
+    @test dm.status == :accepted
+    @test dm.provenance.family_classification == :DM
+    @test isapprox(dm.omega, 0.5034599508 - 0.7073988203im; atol=1e-9, rtol=0)
+    # Zero-damping families return the endpoint m/2, including |m| < l.
+    for (l, m, n) in (at_level(:full) ? ((2, 2, 0), (4, 3, 1)) : ((2, 2, 0),))
+        endpoint = qnm_frequency(QNMMode(-2, l, m, n), 1.0)
+        @test endpoint.provenance.family_classification == :ZDM
+        @test endpoint.omega == m / 2
+        @test !endpoint.provenance.simple_pole
+    end
+    # Spin reflection a = -1, m -> -m.
+    plus = qnm_frequency(QNMMode(-2, 2, 0, 0), 1.0)
+    minus = qnm_frequency(QNMMode(-2, 2, 0, 0), -1.0)
+    @test minus.omega == plus.omega
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Argument validation (src/QNM/Types.jl, RootPolishing.jl, ModeObservables.jl).
 # ---------------------------------------------------------------------------------------------------
 @testset "argument validation" begin

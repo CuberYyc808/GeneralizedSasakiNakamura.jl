@@ -330,9 +330,6 @@ function _spin_sequence_anchor(mode::QNMMode, ::Type{T}) where {
         # one cubic jump from a=0.9995.
         return T(0.99999)
     end
-    if mode.s == -2 && mode.l == 2 && abs(mode.m) == 2 && mode.n >= 7
-        return T(0.99)
-    end
     return T(0.9995)
 end
 
@@ -1188,7 +1185,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         stability_tolerance, maximum_root_iterations::Int,
         trust_radius, automatic_precision_fallback::Bool,
         fallback_precision_bits::Int) where {T<:AbstractFloat}
-    kappas = T[T(0.04), T(0.02), T(0.01), T(0.005)]
+    kappas = T[T(0.04), T(0.02), T(0.01), T(0.005), T(0.0025)]
     spins = T[copysign(sqrt(one(T) - kappa^2), a)
         for kappa in kappas]
     spin_defects = T[one(T) - abs(spin) for spin in spins]
@@ -1198,14 +1195,15 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
     selected_inversion = inversion_index
 
     for (index, spin) in pairs(spins)
-        source_guess = if length(roots) >= 2
-            first_index = max(1, length(roots) - 2)
-            _polynomial_predictor(
-                spin_defects[first_index:length(roots)],
-                roots[first_index:end], spin_defects[index])
-        else
-            previous
-        end
+        # Without a caller guess every ladder spin is reached by its own
+        # continuation in nu from the Schwarzschild label. Chaining polished
+        # predictions between ladder spins hops between the crowded
+        # zero-damping levels.
+        source_guess = guess === nothing ? nothing :
+            length(roots) >= 2 ? _polynomial_predictor(
+                spin_defects[max(1, length(roots) - 2):length(roots)],
+                roots[max(1, length(roots) - 2):end],
+                spin_defects[index]) : previous
         result = _qnm_frequency_labeled(
             mode, spin;
             guess=source_guess,
@@ -1263,6 +1261,27 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                 )
             end
         end
+        if !(result.status == :accepted ||
+                (mode.n >= 5 && result.status == :estimated)) &&
+                _extremal_zdm_endpoint_scope(mode, a)
+            endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
+                sheet_id, convention,
+                requested_inversion_index=inversion_index)
+            return LeaverResult(endpoint.mode, endpoint.convention,
+                endpoint.overtone_index, endpoint.inversion_index,
+                endpoint.a, endpoint.omega, endpoint.angular_A,
+                endpoint.lambda, endpoint.mixing, endpoint.cf_value,
+                endpoint.cf_error, endpoint.cf_iterations,
+                endpoint.root_residual, endpoint.angular_residual,
+                endpoint.precision_bits, :estimated,
+                :extremal_family_unverified,
+                merge(endpoint.provenance, (
+                    family_classification=:unverified_source_failure,
+                    failed_spin=spin,
+                    failed_source_reason=result.stop_reason,
+                    source_rows=rows,
+                )))
+        end
         (result.status == :accepted ||
             (mode.n >= 5 && result.status == :estimated)) ||
             return _failed_result(
@@ -1305,70 +1324,119 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         end
     end
 
-    cubic = _polynomial_predictor(spin_defects, roots, zero(T))
+    cubic = _polynomial_predictor(
+        spin_defects[2:end], roots[2:end], zero(T))
     quadratic = _polynomial_predictor(
-        spin_defects[2:4], roots[2:4], zero(T))
+        spin_defects[end-2:end], roots[end-2:end], zero(T))
     drift = abs(cubic - quadratic) /
         max(one(T), abs(cubic), abs(quadratic))
-    limit_tolerance = max(T(1.0e-8), T(100) * T(stability_tolerance))
-    angular = angular_branch(mode, a, cubic;
-        truncation_order=angular_order + 8,
-        sheet_id=Symbol(sheet_id, :_exact_extremal_limit))
-    all_sources_accepted = all(row.status == :accepted for row in rows)
-    angular_usable = angular.status in (
-        :continued, :predictor_corrected, :spherical_anchor,
-        :high_precision_refined)
-    accepted = drift <= limit_tolerance && all_sources_accepted &&
-        angular_usable
-    estimated = !accepted && isfinite(drift) && angular_usable &&
-        all(row.status in (:accepted, :estimated) for row in rows)
     contract = _schwarzschild_label_contract(mode, convention)
     selected_output_inversion = selected_inversion === :auto ? mode.n :
         Int(selected_inversion)
+    all_sources_accepted = all(row.status == :accepted for row in rows)
+    family = _extremal_ladder_family(mode, a, roots)
+    ladder = (
+        source_rows=rows,
+        extrapolation_coordinate=:one_minus_abs_a,
+        maximum_source_precision_bits=
+            maximum(row.precision_bits for row in rows),
+        quadratic_limit=quadratic,
+        cubic_limit=cubic,
+        limit_drift=drift,
+        all_sources_accepted,
+        family_classification=family.family,
+        family_ratios=family.ratios,
+    )
+
+    if family.family == :ZDM
+        endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
+            sheet_id, convention,
+            requested_inversion_index=inversion_index)
+        return LeaverResult(endpoint.mode, endpoint.convention,
+            endpoint.overtone_index, endpoint.inversion_index, endpoint.a,
+            endpoint.omega, endpoint.angular_A, endpoint.lambda,
+            endpoint.mixing, endpoint.cf_value, endpoint.cf_error,
+            endpoint.cf_iterations, endpoint.root_residual,
+            endpoint.angular_residual, endpoint.precision_bits,
+            endpoint.status, endpoint.stop_reason,
+            merge(endpoint.provenance, ladder))
+    end
+
+    # Damped family: solve the exact-extremal condition at a = 1, seeded by
+    # the analytic-in-(1 - |a|) limit of the near-extremal ladder.
+    exact = extremal_qnm_root(mode, quadratic;
+        angular_order=angular_order + 8,
+        sheet_id=Symbol(sheet_id, :_exact_extremal_root))
+    # Same branch as the ladder: the remaining distance from the smallest
+    # spin defect must not exceed the last ladder step.
+    last_step = abs(roots[end] - roots[end-1])
+    continuity = abs(exact.omega - roots[end]) <=
+        2 * last_step + sqrt(eps(T))
+    angular = exact.angular
+    angular_usable = angular !== nothing && angular.status in (
+        :continued, :predictor_corrected, :spherical_anchor,
+        :high_precision_refined)
+    exact_ok = exact.status == :accepted && angular_usable
+    accepted = exact_ok && continuity && family.family == :DM &&
+        all(row.status in (:accepted, :estimated) for row in rows)
+    estimated = !accepted && angular_usable && isfinite(exact.omega)
     nan_complex = complex(T(NaN), T(NaN))
+    omega = angular_usable ? exact.omega : quadratic
     return LeaverResult(
         mode, convention, convention == :leaver ? missing : mode.n,
-        selected_output_inversion, a, cubic, angular.angular_A,
-        angular.lambda, angular.mixing, nan_complex,
+        selected_output_inversion, a, omega,
+        angular_usable ? angular.angular_A : nan_complex,
+        angular_usable ? angular.lambda : nan_complex,
+        angular_usable ? angular.mixing : nothing, nan_complex,
         maximum(row.cf_error for row in rows),
-        maximum(row.cf_iterations for row in rows), drift,
-        T(angular.residual), _precision_bits(T),
+        maximum(row.cf_iterations for row in rows), exact.residual,
+        angular_usable ? T(angular.residual) : T(Inf), _precision_bits(T),
         accepted ? :accepted : estimated ? :estimated : :failed,
-        accepted ? :accepted_extremal_damped_limit :
-            estimated ? :estimated_extremal_damped_limit :
-            :extremal_limit_stability_gate,
-        (
+        accepted ? :accepted_exact_extremal_root :
+            !continuity ? :extremal_root_off_ladder_branch :
+            family.family != :DM ? :extremal_family_ambiguous :
+            exact.stop_reason,
+        merge(ladder, (
             input_type=string(typeof(a)),
             working_type=string(T),
             label_convention=contract.label_convention,
             branch_label=contract.branch_label,
             endpoint_kind=contract.endpoint_kind,
             extremal_endpoint=true,
-            endpoint_method=:spin_defect_richardson_extrapolation,
-            spectrum_object=:discrete_damped_pole_limit,
+            endpoint_method=:exact_extremal_recurrence,
+            spectrum_object=:discrete_damped_pole,
             simple_pole=true,
-            radial_observables=
-                :exact_extremal_gsn_scattering_basis,
+            radial_observables=:exact_extremal_gsn_scattering_basis,
             gsn_amplitude_limit_implemented=true,
-            source_rows=rows,
-            extrapolation_coordinate=:one_minus_abs_a,
-            maximum_source_precision_bits=
-                maximum(row.precision_bits for row in rows),
-            extrapolation_orders=(quadratic=2, cubic=3),
-            quadratic_limit=quadratic,
-            cubic_limit=cubic,
-            limit_drift=drift,
-            limit_tolerance,
-            all_sources_accepted,
-            angular_route=angular.metadata.route,
-            angular_sheet=angular.sheet_id,
-            angular_order=angular.truncation_order,
-            root_equation=:nonextremal_kappa_limit_extrapolation,
+            exact_extremal_depth=exact.depth,
+            exact_extremal_depth_drift=exact.depth_drift,
+            exact_extremal_depth_rows=exact.depth_rows,
+            exact_extremal_seed_shift=exact.seed_shift,
+            ladder_continuity=continuity,
+            ladder_last_step=last_step,
+            angular_route=angular_usable ? angular.metadata.route : :failed,
+            angular_sheet=angular_usable ? angular.sheet_id : :failed,
+            angular_order=angular_order + 8,
+            root_equation=:richartz_extremal_recurrence,
             family=:DM,
-            claim_boundary=
-                :frequency_limit_requires_separate_exact_gsn_simple_pole_gate,
-        ),
+            claim_boundary=:exact_extremal_frequency_root,
+        )),
     )
+end
+
+function _extremal_ladder_family(mode::QNMMode, a, roots)
+    # Zero-damping branches approach the synchronous frequency m a / 2 linearly
+    # in the surface gravity, so their distance halves along the kappa ladder;
+    # damped branches converge to a separate limit.
+    target = mode.m * a / 2
+    distances = [abs(root - target) for root in roots[end-2:end]]
+    ratios = (distances[2] / distances[1], distances[3] / distances[2])
+    synchronous = mode.m * a > 0 && (mode.branch == :positive_real ?
+        real(target) > 0 : real(target) < 0)
+    family = !synchronous ? :DM :
+        all(r -> r <= oftype(r, 0.7), ratios) ? :ZDM :
+        all(r -> r >= oftype(r, 0.8), ratios) ? :DM : :ambiguous
+    return (family=family, ratios=ratios)
 end
 
 function _spin_reflected_result(
@@ -1535,12 +1603,6 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         throw(ArgumentError(
             "convention=:leaver requires an explicit guess because a " *
             "continued-fraction inversion index does not uniquely label a root."))
-    if abs(aT) == one(T) && _extremal_zdm_endpoint_scope(mode, aT)
-        return _extremal_zdm_endpoint_result(
-            mode, aT; angular_order, sheet_id,
-            convention=selected_convention,
-            requested_inversion_index=inversion_index)
-    end
     if label_contract.algebraically_special_pair && iszero(aT)
         return near_as_role == :unconventional ?
             _unconventional_endpoint_result(
@@ -2037,6 +2099,7 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
              (final_primary !== nothing &&
               hasproperty(final_primary, :conditioned) &&
               final_primary.conditioned))
+        terminal_label_uncertain = false
         if !accepted && !conditioned_root && T === Float64 &&
                 automatic_precision_fallback &&
                 root_equation == :leaver_continued_fraction
@@ -2049,7 +2112,23 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                     float64_cf_error=final.error,
                 )))
         end
-        stop_reason = accepted ? :accepted : conditioned_root ?
+        # A cubic jump from the sequence anchor cannot resolve the overtone
+        # label once the predicted move exceeds a fraction of the local level
+        # spacing, which near extremality is set by the surface gravity.
+        if accepted && !isempty(terminal_extrapolation_rows)
+            terminal_row = last(terminal_extrapolation_rows)
+            kappa = sqrt(max(zero(T), one(T) - aT^2)) /
+                (2 * (one(T) + sqrt(max(zero(T), one(T) - aT^2))))
+            jump = abs(terminal_row.candidate - accepted_roots[end-1])
+            if jump > kappa / 4
+                accepted = false
+                conditioned_root = true
+                terminal_label_uncertain = true
+            end
+        end
+        stop_reason = terminal_label_uncertain ?
+            :terminal_extrapolation_label_uncertain :
+            accepted ? :accepted : conditioned_root ?
             :conditioned_near_extremal_cf_floor :
             (root_drift > tolerance_stability ? :root_stability_gate :
              final_root_residual > effective_root_tolerance ?

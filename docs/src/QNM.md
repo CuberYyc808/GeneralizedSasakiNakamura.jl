@@ -152,6 +152,24 @@ At the Schwarzschild algebraically-special frequency and at a synchronous
 extremal accumulation endpoint, the ordinary simple-zero excitation formula
 is not applied.
 
+## Exact extremal spin
+
+For `a = 1` or `a = -1` (exact equality) each mode is first followed to the
+near-extremal spins `a = sqrt(1 - κ²)`, `κ = 0.04, …, 0.0025`. A branch whose
+distance from `m a/2` halves with `κ` is a zero-damping branch and returns the
+synchronous endpoint `ω = m a/2` as a `QNMEndpointResult`. Every other branch is
+a damped mode: its frequency is the root of the exact-extremal radial
+recurrence of Richartz (Phys. Rev. D 93, 064062 (2016)), seeded by the
+near-extremal limit. The root is accepted only when it is stable under doubling
+of the recurrence depth and lies on the branch of the near-extremal ladder.
+The `P_3` coefficient of that paper is used with `-2im(1 + 6iω)`; the printed
+`-2im(1 - 6iω)` does not satisfy the Teukolsky equation for `m ≠ 0`.
+
+The radial amplitudes at `a = ±1` come from integrating out of an irregular
+singular horizon. For co-rotating damped modes this is ill-conditioned in
+`Float64`; `qnm` then keeps the exact frequency but reports the failed incidence
+gate instead of an excitation factor.
+
 ## Lower-level functions
 
 ```@docs
