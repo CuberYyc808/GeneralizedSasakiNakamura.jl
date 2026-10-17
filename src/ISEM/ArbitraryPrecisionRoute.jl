@@ -211,9 +211,13 @@ x (default 1/2). `infinity` selects the representation of the infinity side: `:s
 series seeds continued by Taylor patches; exact only for real frequencies), `:mst` (the convergent
 MST series of ManoSuzukiTakasugiGeneric, evaluated at every requested point), or `:auto` (`:series`
 for real, `:mst` for complex frequencies). Negative real frequencies are built from the mirror mode
-(m -> -m, omega -> -omega) and returned as a `ConjugatedRoute`.
+(m -> -m, omega -> -omega) and returned as a `ConjugatedRoute`. `max_rebuilds` caps the rebuilds that
+cover the measured cancellation of the matching (default $(MAX_REBUILDS)). `root_search=true` leaves
+the cancellation of the incidence numerator out of that measure: a root search evaluates the
+incidence amplitude where it vanishes by nature, and needs it accurate in absolute terms only.
 """
-function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing, xm=nothing, tol=nothing, controls=nothing, infinity::Symbol=:auto)
+function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing, xm=nothing, tol=nothing, controls=nothing, infinity::Symbol=:auto,
+        max_rebuilds::Integer=MAX_REBUILDS, root_search::Bool=false)
     route_branch = _normalized_branch(branch)
     iszero(params.omega) && throw(ArgumentError("the arbitrary-precision ISEM route requires a nonzero frequency."))
     infinity in (:auto, :series, :mst) || throw(ArgumentError("infinity must be :auto, :series or :mst."))
@@ -225,7 +229,7 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
         positive = GSNParameters(params.s, params.l, -params.m, params.a, -conj(params.omega),
             conj(params.lambda), params.nu, params.kappa)
         return ConjugatedRoute(
-            arbitrary_precision_route(positive, route_branch; N, xm, tol, controls, infinity), params)
+            arbitrary_precision_route(positive, route_branch; N, xm, tol, controls, infinity, max_rebuilds, root_search), params)
     end
     if controls !== nothing
         # Controls built by gsn_controls carry binary64 defaults; only explicit values are taken.
@@ -260,11 +264,15 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
     route = setprecision(BigFloat, working_k) do
         _build_route(params, route_branch, order_k, tolerance_k, xm, working_k, infinity_mode)
     end
-    for rebuild in 1:MAX_REBUILDS
+    for rebuild in 1:max_rebuilds
         d = route.diagnostics
         # The MST sums are already truncated MST_GUARD_BITS below the tolerance (and summed at a
         # precision raised by as much), so only their cancellation beyond that costs anything.
-        lost_bits = ceil(Int, log2(d.matching_condition)) +
+        # A root search on the incidence amplitude evaluates it where it vanishes by nature; there the
+        # cancellation of its numerator is not a loss, and only the determinant's and the other
+        # coefficient's are covered.
+        matching = root_search ? max(d.determinant_condition, d.reflection_condition) : d.matching_condition
+        lost_bits = ceil(Int, log2(matching)) +
             max(0, ceil(Int, log2(d.mst_condition)) - (infinity_mode == :mst ? MST_GUARD_BITS : 0))
         series_bits = ceil(Int, log2(d.series_condition))
         tolerance_bits_k = ceil(Int, -log2(Float64(tolerance_k)))
@@ -384,7 +392,7 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         det = Xdn * dXup - Xup * dXdn
         incidence = (Xin * dXup - Xup * dXin) / det
         reflection = (Xdn * dXin - Xin * dXdn) / det
-        condition = max(_cancellation(Xdn * dXup, Xup * dXdn), _cancellation(Xin * dXup, Xup * dXin),
+        conditions = (_cancellation(Xdn * dXup, Xup * dXdn), _cancellation(Xin * dXup, Xup * dXin),
             _cancellation(Xdn * dXin, Xin * dXdn))
     else
         t_infinity = time() - t_infinity
@@ -400,7 +408,7 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         det = Xout * dXin - Xin * dXout
         incidence = (Xup * dXin - Xin * dXup) / det
         reflection = (Xout * dXup - Xup * dXout) / det
-        condition = max(_cancellation(Xout * dXin, Xin * dXout), _cancellation(Xup * dXin, Xin * dXup),
+        conditions = (_cancellation(Xout * dXin, Xin * dXout), _cancellation(Xup * dXin, Xin * dXup),
             _cancellation(Xout * dXup, Xup * dXout))
     end
 
@@ -450,7 +458,10 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         infinity_patches = length(infinity_up_patches) + length(infinity_down_patches),
         infinity_chain_end_x = isempty(infinity_up_patches) ? Float64(match_x) : Float64(maximum(max(patch.x0, patch.xend) for patch in infinity_up_patches)),
         matching_determinant = det,
-        matching_condition = condition,
+        matching_condition = maximum(conditions),
+        determinant_condition = conditions[1],
+        incidence_condition = conditions[2],
+        reflection_condition = conditions[3],
         mst_condition = mst_condition,
         series_condition = series_condition,
         rebuilds = rebuilds,

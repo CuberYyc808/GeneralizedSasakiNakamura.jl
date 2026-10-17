@@ -123,18 +123,18 @@ tables of the Float64 routes, evaluated in the working type.
 
 ## Measured
 
-Against the paclet (120-digit run; 200/400-digit runs for ``\omega = 10`` and ``2 - 2i``), for
-``a = 0.4`` and ``0.9``, ``(l, m) = (2, 2)`` and ``(3, 1)``, ``s = -2``, 540 checks
+Against the paclet's 120- and 200-digit runs (200 and 400 digits for ``\omega = 10``), which agree
+with each other to 85-99 digits on the amplitudes and 54-60 digits on the radial values, for
+``a = 0.4`` and ``0.9``, ``(l, m) = (2, 2)`` and ``(3, 1)``, ``s = -2``, 800 checks
 (test/arbitrary_precision, `GSN_AP_CASES=all`; digits agreed, range over the cases):
 
 | quantity | 113 bits (34.0 digits) | 256 bits (77.1 digits) |
 |---|---|---|
 | Inc/Trans, Ref/Trans of IN and UP, ``\omega \in \{1/20, 1/2, 2\}`` | 31.2-33.4 | 73.5-75.5 |
-| same, ``\omega \in \{1/2 \pm 0.3i, 0.3 - 1.5i, 10^{-30} - i/10, i/10\}`` | 32.1-34.2 | 75.2-77.1 |
+| same, ``\omega \in \{1/2 \pm 0.3i, 0.3 - 1.5i, 2 - 2i\}`` | 31.1-34.2 | 74.4-77.3 |
+| same, ``\omega = \pm\delta \mp i\sigma`` (``\delta`` from ``10^{-6}`` to ``10^{-30}``, ``\sigma = 1/10, 1/2``) and ``i/10`` | 30.4-34.4 | 76.0-78.1 |
 | same, ``\omega = 10`` (reflections ``10^{-53}`` to ``10^{-62}``) | 29.4-34.3 | 73.7-76.8 |
-| same, ``\omega = 2 - 2i`` (paclet certified to 8-35 digits) | 32.0-34.2 | 54.3-76.7 |
-| ``R(r')``, ``dR(r')`` at ``\omega = 10`` | 32.4-34.5 | 75.5-77.9 |
-| ``R(r')``, ``dR(r')`` elsewhere (paclet values certified to 8-34 digits) | 31.4-35.8 | 54-77 |
+| ``R(r')``, ``dR(r')``, all of the above | 30.2-35.8 | 74.1-77.9 |
 
 The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. A route costs 0.3-2.4 s at 113 bits
 (3-6 s at ``\omega = 10`` with its three builds) and 1.5-5 s (real) or 9-24 s (complex frequency, MST

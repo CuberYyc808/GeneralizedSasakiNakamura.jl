@@ -7,7 +7,7 @@
 # each quantity is
 #     digits agreed >= min(N log10(2) - 6 - input conditioning, certified reference digits - 1),
 # where the certified reference digits are the agreement between the two stored paclet working
-# precisions of the same case (60 and 120 digits; 200 and 400 for omega = 10), and the input
+# precisions of the same case (120 and 200 digits; 200 and 400 for omega = 10), and the input
 # conditioning is the loss that rounding a and omega to N bits costs: the paclet works with the exact
 # rationals, the route with their N-bit roundings, and a strongly damped amplitude (B_inc near a
 # quasinormal frequency, a small reflection) is sensitive to that at the level of its condition number.
@@ -40,12 +40,18 @@ const RPRIME = 3.1126842514806725      # the binary double, as the paclet's SetP
 const ACCEPTANCE_MARGIN_DIGITS = 6     # N log10(2) - 6, as in the brief
 const KEYS = ("Incidence/Transmission", "Reflection/Transmission", "R(rprime)/Transmission", "dR(rprime)/Transmission")
 
-# Reference pairs (lower, higher working precision) per case group.
+# Reference pairs (lower, higher working precision), in order of priority: a case is tested against
+# the first pair that holds it. omega = 10 needs the paclet at 200 digits, so it is taken from the
+# 200/400 pair; the regular cases from the 120/200 pair; the axis cases (omega = +-delta -+ i sigma)
+# from the 120/200 snapshot where present, else from the 60/120 files of the first axis run.
 const REFERENCE_PAIRS = (
-    ("bhpt_60_a04l2.txt", "bhpt_120_a04l2.txt"),
-    ("bhpt_60_a09l2.txt", "bhpt_120_a09l2.txt"),
-    ("bhpt_60_l3m1.txt", "bhpt_120_l3m1.txt"),
-    ("bhpt_200_omega10.txt", "bhpt_400_omega10.txt"),
+    ("bhpt_200_a04l2.txt", "bhpt_400_omega10.txt"),
+    ("bhpt_200_a09l2.txt", "bhpt_400_omega10.txt"),
+    ("bhpt_200_l3m1.txt", "bhpt_400_omega10.txt"),
+    ("bhpt_120_a04l2.txt", "bhpt_200_a04l2.txt"),
+    ("bhpt_120_a09l2.txt", "bhpt_200_a09l2.txt"),
+    ("bhpt_120_l3m1.txt", "bhpt_200_l3m1.txt"),
+    ("bhpt_120_axis_delta.txt", "bhpt_200_axis_delta.txt"),
     ("bhpt_60_axis.txt", "bhpt_120_axis.txt"),
 )
 
@@ -160,16 +166,15 @@ end
 
 @testset "arbitrary-precision ISEM vs BHPT" begin
     selection = get(ENV, "GSN_AP_CASES", "quick")
-    # Cases with a dedicated higher-precision pair (omega = 10, where the paclet needs 200 digits, and
-    # 2 - 2i) are taken from that pair only.
-    dedicated = Set(keys(load_bhpt_refs(joinpath(REFERENCE_DIR, "bhpt_400_omega10.txt"))))
+    tested = Set{String}()
     for (low_file, high_file) in REFERENCE_PAIRS
         low = load_bhpt_refs(joinpath(REFERENCE_DIR, low_file))
         high = load_bhpt_refs(joinpath(REFERENCE_DIR, high_file))
         for tag in sort(collect(keys(high)))
             selected(tag, selection) || continue
             haskey(low, tag) || continue
-            high_file != "bhpt_400_omega10.txt" && tag in dedicated && continue
+            tag in tested && continue
+            push!(tested, tag)
             for bits in bits_list()
                 run_case(tag, high[tag], low[tag], bits)
             end

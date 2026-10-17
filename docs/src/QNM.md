@@ -370,15 +370,23 @@ fourth-order central difference evaluated at a raised working precision. `residu
 `|B_inc(omega)|` at the returned root; dividing it by `|incidence_derivative|` bounds the root error.
 
 ```julia
-r = QNM.qnm_arbitrary_precision(0.4, -2, 2, 2, 0; bits=128)
-r.omega                          # 0.43984192173538717839355676582997... - 0.08688196202939836318163996164680...im
+r = QNM.qnm_arbitrary_precision(2 // 5, -2, 2, 2, 0; bits=128)   # a = 2/5 exactly; 0.4 would be the binary double
+r.omega                          # 0.43984192173538717348945862919377... - 0.08688196202939836340751756727816...im
 r.incidence_derivative_teukolsky # dA_inc/domega at the root
 ```
 
-At 128 bits the roots of the (2, 2, 0) modes at `a = 0.4` and `0.9` agree with the 192-bit ones to
-34 digits (the Float64 seeds are accurate to about 1e-15) and the derivatives to 33 digits; each
-polish takes a few route builds at complex frequency. Frequencies with negative real part are
-handled through the mirror mode, so both branches can be polished.
+Against 22 independently computed roots of the s = -2, (2, 2) modes at `a = 2/5` and `9/10`
+(n = 0..9 and the second n = 8 root; each obtained on another machine by the MST incidence zero of
+the QNM paclet at 120 digits and by a Leaver continued fraction at 100 digits, agreeing to 80-89
+digits, with the Teukolsky incidence derivative by central differences certified to 38-45 digits;
+`test/arbitrary_precision/qnm_runtests.jl`), the polished frequencies agree to 30.7-34.8 digits at
+113 bits and the derivatives to 29.0-33.3; at 256 bits the two quick cases agree to 74.8-77.0 digits
+on the frequency and 53-57 on the derivative, beyond the reference's own certification. A polish
+costs 40-100 s at 113 bits and 5-8 min at 256 bits. Near the root the incidence amplitude vanishes by
+nature, so the route is built in its root-search mode (the cancellation of the incidence numerator
+is not counted as a loss) and the secant estimates its own root error, |B_ref| tol / |dB_inc/domega|,
+tightening the route tolerance when that exceeds the requested one. Frequencies with negative real
+part are handled through the mirror mode, so both branches can be polished.
 
 ## Result types
 

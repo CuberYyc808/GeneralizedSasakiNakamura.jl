@@ -13,16 +13,33 @@ the renormalized angular momentum, `Incidence/Transmission`, `Reflection/Transmi
 `R(rprime)/Transmission` and `dR(rprime)/Transmission` of the In and Up solutions at
 `rprime = 3.1126842514806725` (the binary double).
 
-Each group exists at two working precisions (60 and 120 digits; 200 and 400 for `omega = 10`, where
-the paclet needs the higher precision). The digits on which the two agree are the certified accuracy
-of the reference; the tests require agreement with the higher-precision run to
-`min(N log10(2) - 6, certified digits - 1)` at `N` working bits.
+Each group exists at several working precisions (60, 120 and 200 digits; 400 for `omega = 10`, where
+the paclet needs at least 200). A case is tested against the first pair of `REFERENCE_PAIRS` in
+`runtests.jl` that holds it: 200/400 for `omega = 10`, 120/200 for the other real and complex cases,
+120/200 of `bhpt_<prec>_axis_delta.txt` (omega = +-delta -+ i sigma, delta from 1e-6 to 1e-30,
+sigma = 1/10 and 1/2) for the axis, and the 60/120 files of the first axis run for the cases the
+snapshot lacks (omega = i/10, 1e-30 - i/2). The digits on which the two agree are the certified
+accuracy of the reference; the tests require agreement with the higher-precision run to
+`min(N log10(2) - 6, certified digits - 1)` at `N` working bits. A reference without a counterpart is
+reported but not tested. The 120/200 pairs certify the amplitudes to 85-99 digits and the radial values
+to 54-60; the files were produced on another machine by the job described in
+`references/codex_task_specification.txt` with `bhpt_acceptance_reference_batch.wls`.
+
+`references/qnm_reference.txt` (report in `qnm_reference_report.txt`, generator `qnm_reference_worker.wls`)
+holds 22 quasinormal frequencies of the s = -2, (2, 2) modes at a = 2/5 and 9/10 (n = 0..9 and the
+second n = 8 root "8_1"), each obtained twice independently of this package, by the MST
+incidence-amplitude zero of the QNM paclet at 120 digits and by a Leaver continued fraction at 100
+digits (the two agree to 80-89 digits), with the frequency derivative of the Teukolsky incidence
+amplitude by central differences at 120 digits (two step sizes agree to 38-45 digits).
+`qnm_runtests.jl` polishes the reference's binary64 seed with `QNM.qnm_arbitrary_precision` and
+compares the frequency and the derivative with the same pass rule.
 
 ## Running
 
 ```sh
 GSN_AP_BITS=113,256 julia --project=<env> test/arbitrary_precision/runtests.jl
 GSN_AP_BITS=53,113,192,256 GSN_AP_CASES=all julia --project=<env> test/arbitrary_precision/runtests.jl
+GSN_AP_BITS=113,256 GSN_AP_QNM_CASES=all julia --project=<env> test/arbitrary_precision/qnm_runtests.jl
 ```
 
 `GSN_AP_CASES` is `quick` (default), `real`, `complex`, `axis` or `all`; `GSN_SOURCE=<checkout>` loads the
