@@ -45,6 +45,7 @@ include("ExcitationFactors.jl")
 include("VariationalExcitation.jl")
 include("VariationalObservables.jl")
 include("ModeObservables.jl")
+include("ArbitraryPrecisionRoots.jl")
 
 export QNMMode, QNMBranch, QNMResult, QNMEstimate, QNMFailure,
     QNMEndpointResult,

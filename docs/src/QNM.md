@@ -357,6 +357,29 @@ B^{\mathrm{T}}_{\ell m\omega_q}
 To compare it with a reference defined with $2\omega_q$ in place of
 $2i\omega_q$, divide the reference value by $i$.
 
+## Arbitrary precision
+
+`QNM.qnm_arbitrary_precision(a, s, l, m, n; bits=256)` polishes the binary64 Leaver root of
+`qnm_frequency` to `bits` bits by the secant method on the GSN incidence amplitude of the
+arbitrary-precision ISEM route (complex frequency, MST infinity side; see
+[Arbitrary precision](arbitrary_precision.md)), and returns the root together with the frequency
+derivative of the incidence amplitude at the root, `incidence_derivative` in the GSN normalization
+(`dB_inc/domega`, the quantity the excitation factors use) and `incidence_derivative_teukolsky`
+(`Binc/Btrans(omega_n)` times it, the Teukolsky-normalized derivative). The derivative is a
+fourth-order central difference evaluated at a raised working precision. `residual` is
+`|B_inc(omega)|` at the returned root; dividing it by `|incidence_derivative|` bounds the root error.
+
+```julia
+r = QNM.qnm_arbitrary_precision(0.4, -2, 2, 2, 0; bits=128)
+r.omega                          # 0.43984192173538717839355676582997... - 0.08688196202939836318163996164680...im
+r.incidence_derivative_teukolsky # dA_inc/domega at the root
+```
+
+At 128 bits the roots of the (2, 2, 0) modes at `a = 0.4` and `0.9` agree with the 192-bit ones to
+34 digits (the Float64 seeds are accurate to about 1e-15) and the derivatives to 33 digits; each
+polish takes a few route builds at complex frequency. Frequencies with negative real part are
+handled through the mirror mode, so both branches can be polished.
+
 ## Result types
 
 `qnm` returns one of four types:
