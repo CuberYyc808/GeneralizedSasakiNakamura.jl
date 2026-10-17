@@ -229,6 +229,21 @@ function _swsh_eigenvalue(s::Int, l::Int, m::Int, c)
     return spin_weighted_spheroidal_eigenvalue(s, l, m, c)
 end
 
+# Whether the mode parameters are binary64 (Float64 routes) or wider (arbitrary-precision ISEM).
+_binary64_inputs(a, omega) =
+    ISEM.Parameters._binary64_compatible(a) && ISEM.Parameters._binary64_compatible(omega)
+
+# A `data_type` wider than binary64 (e.g. Complex{BigFloat}) with the ISEM methods promotes the
+# mode parameters to its real type, so that the arbitrary-precision ISEM route is taken; a Float64
+# value is then used exactly (0.4 is the binary double; pass BigFloat("0.4") for 4/10).
+_is_binary64_data_type(::Type{T}) where {T} =
+    real(T) <: Union{Float16,Float32,Float64,Integer,Rational}
+function _promote_isem_inputs(data_type, method, a, omega)
+    (_use_isem_method(method) && !_is_binary64_data_type(data_type)) || return a, omega
+    R = real(data_type)
+    return R(a), omega isa Complex ? Complex{R}(omega) : R(omega)
+end
+
 # ISEM takes the matching point xm in the compact coordinate, strictly inside (0, 1).
 function _check_radial_options(method, xm)
     if (_is_auto_method(method) || _is_isem_method(method)) && xm !== nothing
@@ -587,6 +602,7 @@ For $|a| < 1$ they are used, together with `rsmp`, `lambda`, the expansion order
 An ISEM solution stores `rsin = rsout = missing`. For `IN` and `UP`, its `rsmp` is the tortoise coordinate of the ISEM matching point, or `missing` when a complex-frequency solution has no matching point at real $r > r_+$; for `OUT` and `DOWN`, its `rsmp` is `missing`.
 At $|a| = 1$ the exact-extremal solver uses, with every `method`, `rsin` and `rsout` as given, `lambda`, and the expansion orders raised to at least 48 at the horizon and to at least 12 (real `omega`) or 18 (complex `omega`) at infinity.
 It uses `data_type` and `ODE_algorithm` only with `"linear"` or `"Riccati"`, and it ignores `rsmp`, `xm`, `N`, `sfe` and `lfe`.
+Inputs wider than binary64 (e.g. `BigFloat` `a` and `omega`) are solved by ISEM at that precision; the ODE methods are not used for them (see the tuple form).
 The ODE solver is `ODE_algorithm` (from `DifferentialEquations.jl`; default: `AutoVern9(Rosenbrock23(autodiff=false))`), working in the number type `data_type` (default: `ComplexF64`; e.g. `Complex{BigFloat}` for complex arbitrary precision numbers).
 A precomputed spin-weighted spheroidal eigenvalue can be passed as `lambda`; by default it is computed from `s`, `l`, `m` and `a*omega`.
 
@@ -628,8 +644,10 @@ function GSN_radial(
                 s, l, m, a, omega, boundary_condition;
                 xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
         catch err
-            # The legacy route cannot honor a requested ISEM junction.
+            # The legacy route cannot honor a requested ISEM junction, and the ODE routes are
+            # binary64: arbitrary-precision inputs report the ISEM failure instead.
             xm === nothing || rethrow()
+            _binary64_inputs(a, omega) || rethrow()
             _warn_low_frequency_fallback(omega)
             @warn "ISEM failed under method=\"auto\"; falling back to the legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err)
         end
@@ -1114,12 +1132,19 @@ With `method="linear"` or `"Riccati"` and $|a| < 1$, _real_ frequencies use `rsi
 _complex_ frequencies use $\rho$ from `-5000` to `5000`, widened in steps of `5000` up to `50000` until the crossing point `rsmp` is found, and expansion orders `25`.
 In both cases the ODE methods then adjust these values as described for the method with explicit `rsin, rsout`.
 At $|a| = 1$ every `method` uses the exact-extremal solver with its own bounds.
-`data_type` and `ODE_algorithm` take effect only with `method="linear"` or `"Riccati"`, also at $|a| = 1$.
+`data_type` and `ODE_algorithm` take effect only with `method="linear"` or `"Riccati"`, also at $|a| = 1$,
+except that a `data_type` wider than binary64 (e.g. `Complex{BigFloat}`) with `method="auto"` or `"ISEM"` promotes `a` and `omega` to its real type.
+
+Arbitrary precision: when `a`, `omega` (or `data_type`) are wider than binary64, e.g. `BigFloat("0.4")` and `BigFloat("0.5")` under `setprecision(BigFloat, 256)`,
+ISEM solves the mode in that type (series orders, seed radii and tolerances follow the precision; the infinity side uses the MST series for complex `omega`),
+with no fallback to the ODE methods. A binary64 value among the inputs is used exactly (`0.4` is the binary double; `BigFloat("0.4")` is 4/10),
+and the separation constant is taken from `SpinWeightedSpheroidalHarmonics` at that precision.
 
 Return the tuple `(Xin, Xup)` of `GSNRadialFunction`s.
 """
 function GSN_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=nothing, tol=nothing, method="auto", xm=nothing, sfe=nothing, lfe=nothing, N=nothing)
     _check_radial_options(method, xm)
+    a, omega = _promote_isem_inputs(data_type, method, a, omega)
     if a < zero(a)
         positive = GSN_radial(
             s, l, -m, -a, omega;
@@ -1400,7 +1425,9 @@ function Teukolsky_radial(
             s, l, m, a, omega, boundary_condition, rsin, rsout;
             method, tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol)
     elseif !_is_static_frequency(omega) && (_is_isem_method(method) ||
-            (_is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP))
+            (_is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP) ||
+            (_is_auto_method(method) && !_binary64_inputs(a, omega)))
+        # Arbitrary-precision inputs stay on the ISEM route (the ODE routes are binary64).
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
     elseif !_is_static_frequency(omega)
         return Teukolsky_radial(s, l, m, a, omega, boundary_condition,
@@ -1439,7 +1466,8 @@ end
 Compute the Teukolsky function for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `a` the Kerr spin parameter, and `omega` the frequency)
 with the purely-ingoing boundary condition at the horizon (`IN`) and the purely-outgoing boundary condition at infinity (`UP`).
 When `method` is `"auto"`, this overload tries `ISEM` first and falls back to the ODE methods only if ISEM fails and `xm` was not supplied. Explicit `method="ISEM"` is strict.
-The keywords are those of the tuple form of `GSN_radial`; `data_type` and `ODE_algorithm` take effect only with `method="linear"` or `"Riccati"`.
+The keywords are those of the tuple form of `GSN_radial`; `data_type` and `ODE_algorithm` take effect only with `method="linear"` or `"Riccati"`,
+except that a wider `data_type` with the ISEM methods promotes the inputs as described there. Arbitrary-precision inputs (e.g. `BigFloat`) are solved by ISEM in their type.
 With these two methods, for nonzero `omega` away from the superradiant threshold, `Rin` and `Rup` are computed again from the `rsin`, `rsout`, `rsmp` and expansion orders stored in the `Xin` and `Xup` of that form.
 For $|a| < 1$ the ODE methods then adjust `rsin` and `rsout` once more, so for $|a| > 0.9$ or $|\omega| < 0.03$ the integration domain of `Rin` and `Rup` is wider than that of `Xin` and `Xup`.
 
@@ -1447,6 +1475,7 @@ Return the tuple `(Rin, Rup)` of `TeukolskyRadialFunction`s.
 """
 function Teukolsky_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAULTDATATYPE, ODE_algorithm=Solutions._DEFAULTSOLVER, tolerance=nothing, tol=nothing, method="auto", xm=nothing, sfe=nothing, lfe=nothing, N=nothing)
     _check_radial_options(method, xm)
+    a, omega = _promote_isem_inputs(data_type, method, a, omega)
     if a < zero(a)
         positive = Teukolsky_radial(
             s, l, -m, -a, omega;

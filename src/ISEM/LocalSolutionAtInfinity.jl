@@ -31,7 +31,7 @@ end
 # exp(sigma / y) y^rho. With `guarded`, stops at the first ill-conditioned
 # denominator or suspicious coefficient and returns (effective order, reason).
 function _infinity_coefficients!(
-    coeffs::Vector{ComplexF64},
+    coeffs::AbstractVector{<:Complex},
     a_power,
     b_power,
     rho,
@@ -41,19 +41,20 @@ function _infinity_coefficients!(
 )
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("coefficient buffer is too short."))
-    rho = ComplexF64(rho)
-    sigma = ComplexF64(sigma)
+    C = eltype(coeffs)
+    rho = convert(C, rho)
+    sigma = convert(C, sigma)
     p(j) = j == 0 ? -2 * sigma : (j == 1 ? 2 * rho - a_power(-1) : -a_power(j - 2))
     q(j) = b_power(j - 2) + sigma * a_power(j) - rho * a_power(j - 1) +
-        (j == 0 ? rho^2 - rho : 0.0 + 0.0im)
-    coeffs[1] = 1.0 + 0.0im
+        (j == 0 ? rho^2 - rho : zero(C))
+    coeffs[1] = one(C)
     p0 = p(0)
-    if !isfinite(real(p0)) || !isfinite(imag(p0)) || abs(p0) <= floatmin(Float64)
+    if !isfinite(real(p0)) || !isfinite(imag(p0)) || abs(p0) <= floatmin(real(C))
         guarded || error("invalid p0 in ISEM GSN infinity recurrence")
         return 0, :small_recurrence_denominator
     end
     @inbounds for n in 0:(order - 1)
-        numerator = 0.0 + 0.0im
+        numerator = zero(C)
         if n >= 1
             numerator += (n - 1) * n * coeffs[n + 1]
         end
@@ -78,8 +79,8 @@ function _infinity_coefficients!(
 end
 
 function infinity_guarded(
-    a_coeffs::Vector{ComplexF64},
-    b_coeffs::Vector{ComplexF64},
+    a_coeffs::AbstractVector{<:Complex},
+    b_coeffs::AbstractVector{<:Complex},
     rho,
     sigma,
     order::Integer;
@@ -88,7 +89,7 @@ function infinity_guarded(
 )
     a_power = endpoint_power_lookup(a_coeffs, a_first_power)
     b_power = endpoint_power_lookup(b_coeffs, b_first_power)
-    coeffs = Vector{ComplexF64}(undef, order + 1)
+    coeffs = Vector{promote_type(eltype(a_coeffs), typeof(complex(rho)), typeof(complex(sigma)))}(undef, order + 1)
     effective_order, reason = _infinity_coefficients!(
         coeffs,
         a_power,
@@ -100,7 +101,7 @@ function infinity_guarded(
     )
     minimum_order = min(2, Int(order))
     effective_order >= minimum_order || error(
-        "ISEM GSN infinity recurrence lost Float64 credibility before order $minimum_order: $reason")
+        "ISEM GSN infinity recurrence lost floating-point credibility before order $minimum_order: $reason")
     effective_order < order && resize!(coeffs, effective_order + 1)
     return (
         coefficients=coeffs,
@@ -112,7 +113,7 @@ end
 
 # Laurent coefficients of A and B rewritten for the scaled variable y / variable_scale.
 function _scale_infinity_ab(a_coeffs, b_coeffs, variable_scale)
-    scale = ComplexF64(variable_scale)
+    scale = convert(eltype(a_coeffs), variable_scale)
     iszero(scale) && throw(DomainError(
         variable_scale, "scaled infinity variable requires a nonzero scale."))
     a_scaled = similar(a_coeffs)
@@ -139,8 +140,9 @@ function infinity_local_solution(
 )
     a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :I, order)
     rho, sigma = infinity_exponents(coefficients.params, branch)
+    C = eltype(a_coeffs)
     scale = variable_scale === nothing ?
-        1.0 + 0.0im : ComplexF64(variable_scale)
+        one(C) : convert(C, variable_scale)
     recurrence_a, recurrence_b, recurrence_sigma = if isone(scale)
         a_coeffs, b_coeffs, sigma
     else

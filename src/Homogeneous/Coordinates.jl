@@ -141,6 +141,21 @@ function r_from_rstar(a, rstar)
     # The root-finding algorithm might try a negative x, which is not allowed
     # We rectify this by taking an absolute value, i.e. we solve for distance from rp
     f(x) = rstar_from_rp(a, abs(x)) - rstar
+    # Beyond binary64 (BigFloat rstar or a): start from the binary64 root and polish it by
+    # Newton's method in the wider type, with drstar/dh = (r^2 + a^2) / Delta.
+    T = promote_type(typeof(float(rstar)), typeof(float(a)))
+    if !(T <: Union{Float16,Float32,Float64})
+        h = T(r_from_rstar(Float64(a), Float64(rstar)) - Float64(r_plus(Float64(a))))
+        h = max(h, eps(T))
+        for _ in 1:16
+            r = rp + h
+            step = (rstar_from_rp(a, h) - rstar) * Delta(a, r) / (r^2 + a^2)
+            h -= step
+            h > 0 || error("tortoise inversion stepped to a nonpositive distance from the horizon")
+            abs(step) <= 4 * eps(T) * max(h, one(T)) && break
+        end
+        return rp + h
+    end
     if rstar <= 0
         #=
         When rstar <= 0, it is more efficient to use bisection method,

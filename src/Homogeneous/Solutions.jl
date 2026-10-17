@@ -18,6 +18,17 @@ _DEFAULTSOLVER = AutoVern9(Rosenbrock23(autodiff=false))
 _DEFAULTTOLERANCE = 1e-12
 
 # First-order non-linear ODE form of the GSN equation
+# Step budget of the ODE solves. The historical budget, 50 steps per unit r* capped at 1e5, is kept
+# unchanged for tolerances down to the default 1e-12; tighter tolerances (arbitrary-precision runs)
+# need more steps, otherwise the solve stops with MaxIters and the partial solution would be returned
+# as valid. The budget then grows like tol^(-1/8) (ninth-order method), capped at 1e7.
+function _ode_maxiters(rsin, rsout, reltol, abstol)
+    base = min(50 * floor(rsout - rsin), 1e5)
+    tol = max(min(float(reltol), float(abstol)), 1e-300)
+    tol >= 1e-12 && return base
+    return min(base * (1e-12 / tol)^(1 / 8), 1e7)
+end
+
 function GSN_Riccati_eqn(u, p, rs)
     r = r_from_rstar(p.a, rs)
     _sF = sF(p.s, p.m, p.a, p.omega, p.lambda, r)
@@ -73,7 +84,7 @@ function solve_Phiup(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialcondi
     if rsin > rsout
         throw(DomainError(rsout, "rsout ($rsout) must be larger than rsin ($rsin)"))
     end
-    maxiters = min(50 * floor(rsout - rsin), 1e5)
+    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
     # Initial conditions at rs = rsout, the outer boundary
     Xup_rsout, Xupprime_rsout = Xup_initialconditions(s, m, a, omega, lambda, rsout; order=initialconditions_order, dtype=dtype)
     # Convert initial conditions for Xup for Phi
@@ -91,7 +102,7 @@ function solve_Phiin(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialcondi
     if rsin > rsout
         throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
     end
-    maxiters = min(50 * floor(rsout - rsin), 1e5) 
+    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
     # Initial conditions at rs = rsin, the inner boundary; this should be very close to EH
     Xin_rsin, Xinprime_rsin = Xin_initialconditions(s, m, a, omega, lambda, rsin; order=initialconditions_order, dtype=dtype)
     # Convert initial conditions for Xin for PhiRe PhiIm
@@ -109,7 +120,7 @@ function solve_Xup(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditi
     if rsin > rsout
         throw(DomainError(rsout, "rsout ($rsout) must be larger than rsin ($rsin)"))
     end
-    maxiters = min(50 * floor(rsout - rsin), 1e5)
+    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
     # Initial conditions at rs = rsout, the outer boundary
     Xup_rsout, Xupprime_rsout = Xup_initialconditions(s, m, a, omega, lambda, rsout; order=initialconditions_order, dtype=dtype)
     u0 = SA[dtype(Xup_rsout); dtype(Xupprime_rsout)]
@@ -125,7 +136,7 @@ function solve_Xin(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditi
     if rsin > rsout
         throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
     end
-    maxiters = min(50 * floor(rsout - rsin), 1e5)
+    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
     # Initial conditions at rs = rsin, the inner boundary; this should be very close to EH
     Xin_rsin, Xinprime_rsin = Xin_initialconditions(s, m, a, omega, lambda, rsin; order=initialconditions_order, dtype=dtype)
     u0 = SA[dtype(Xin_rsin); dtype(Xinprime_rsin)]

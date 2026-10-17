@@ -9,8 +9,9 @@ export evaluate_ordinary_variable!
 export register_coefficient_backend!
 export gsn_coefficients
 
-# Numerator and denominator polynomial coefficients of one rational ODE coefficient.
-struct RationalCoefficients{N<:AbstractVector{ComplexF64},D<:AbstractVector{ComplexF64}}
+# Numerator and denominator polynomial coefficients of one rational ODE coefficient; the element
+# type is ComplexF64 for binary64 inputs and the promoted complex type of the inputs otherwise.
+struct RationalCoefficients{N<:AbstractVector{<:Complex},D<:AbstractVector{<:Complex}}
     numerator::N
     denominator::D
 end
@@ -41,7 +42,7 @@ end
     @inbounds for j in eachindex(ranges)
         block = ranges[j]
         if isempty(block)
-            out[j] = 0.0 + 0.0im
+            out[j] = zero(eltype(out))
         else
             value = coefficients[last(block)]
             for k in (last(block)-1):-1:first(block)
@@ -55,19 +56,19 @@ end
 
 # Fill the first `e.value_count` entries of `out` with the ordinary-point coefficients
 # at expansion point `x0`; returns `out`.
-function evaluate_ordinary_coefficients!(out::Vector{ComplexF64}, e::OrdinaryCoefficientEvaluator, x0)
+function evaluate_ordinary_coefficients!(out::AbstractVector{<:Complex}, e::OrdinaryCoefficientEvaluator, x0)
     length(out) >= e.value_count || throw(ArgumentError("ordinary output buffer is too short."))
     return e.eval!(out, e.coefficients, x0)
 end
 
 # As `evaluate_ordinary_coefficients!`, at the already transformed expansion variable `value`.
-function evaluate_ordinary_variable!(out::Vector{ComplexF64}, e::OrdinaryCoefficientEvaluator, value)
+function evaluate_ordinary_variable!(out::AbstractVector{<:Complex}, e::OrdinaryCoefficientEvaluator, value)
     length(out) >= e.value_count || throw(ArgumentError("ordinary output buffer is too short."))
     return e.eval_variable!(out, e.coefficients, value)
 end
 
 function (e::OrdinaryCoefficientEvaluator)(x0)
-    out = Vector{ComplexF64}(undef, e.value_count)
+    out = Vector{eltype(e.coefficients)}(undef, e.value_count)
     evaluate_ordinary_coefficients!(out, e, x0)
     return out
 end
