@@ -37,9 +37,18 @@ tables of the Float64 routes, evaluated in the working type.
   decimal digit (`N` overrides it), the horizon series uses twice and the asymptotic series three
   times that order. The patch step is at most half the empirical radius of the solution series
   (ratio of its last coefficients) and is shrunk until the last four terms are below the tolerance.
-- **Working precision.** The BigFloat precision is raised internally by 24 guard bits above the bits
-  needed for the tolerance, plus the continuation loss below when the asymptotic seed is used at a
-  complex frequency. The returned amplitudes and the stored series keep that precision.
+- **Working precision.** The BigFloat precision is raised internally above the bits needed for the
+  tolerance by 24 guard bits, by the cancellation of a Taylor step (the tail criterion lets a step
+  reach ``k h \approx N\,\mathrm{tol}^{1/N}/e`` for a solution of local wavenumber ``k``, whose terms
+  grow to about ``e^{kh}`` before they cancel to the value: 13 bits at 113 bits, 31 bits at 256 bits),
+  and by the continuation loss below when the asymptotic seed is used at a complex frequency. The
+  endpoint series are seeded where their own cancellation stays below the same bound. The derived
+  parameters ``\kappa = \sqrt{1 - a^2}`` and ``\nu = \arctan(a/\kappa)`` are recomputed at the working
+  precision: the coefficient tables take ``\nu``, the local solutions ``\kappa`` and ``a``, and rounded
+  separately at the input precision they describe two slightly different equations, so that every
+  solution carries a generic error of that size, which the matching below amplifies. Evaluations of
+  the stored series and the GSN-to-Teukolsky conversion run at the working precision as well (their
+  sums cancel by the same factors), and the returned amplitudes and radial values keep it.
 - **Real frequencies.** The infinity side is the asymptotic series ``e^{\sigma/y} y^{\rho} \sum d_n y^n``
   (``y = 1 - x``), optimally truncated at the largest ``y`` where a term falls below the tolerance,
   and continued inward by Taylor patches. At 256 bits (77 digits) the IN and UP amplitude ratios of
@@ -64,15 +73,30 @@ tables of the Float64 routes, evaluated in the working type.
   amplitude ratios at ``\omega = 1/2 - 0.3i`` agree with the paclet to the certified digits of the
   reference; at ``2 - 2i`` to 46-72 digits, where the paclet's own 120-digit run is the limit.
 - **Matching conditioning.** The connection coefficients are ratios of ``2 \times 2`` determinants
-  whose terms cancel when the two basis solutions differ in size at the matching point; at complex
+  whose terms cancel when the two basis solutions differ in size at the matching point: at complex
   frequency the infinity branches differ by ``e^{2|\operatorname{Im}\omega| r^*_m}``, which is why the
-  matching stays at ``x = 1/2`` rather than far out. The cancellation actually met,
-  ``(|u| + |v|)/|u - v|``, is recorded as `matching_condition` in the solution's metadata, and the
-  route is rebuilt once at a working precision raised by its bits (plus 8) when it exceeds the guard.
-- **Negative real part.** The principal-branch MST formulas are not on the physical sheet for
-  ``\operatorname{Re}\omega < 0``; those frequencies are solved for the mirror mode
-  ``(m, \omega) \to (-m, -\bar\omega)`` and complex-conjugated, as the Float64 routes do for real
-  negative frequencies.
+  matching stays at ``x = 1/2`` rather than far out, and an exponentially small reflection costs
+  ``|B_{\rm inc}/B_{\rm ref}|`` (``10^{54}`` for the IN solution at ``\omega = 10``, ``a = 0.4``,
+  ``l = m = 2``, where ``|B_{\rm ref}/B_{\rm trans}| = 3 \times 10^{-53}``). The cancellation actually
+  met, ``(|u| + |v|)/|u - v|``, is recorded as `matching_condition` in the solution's metadata, the
+  largest cancellation of any series sum as `series_condition`, and the route is rebuilt with the
+  series tolerance tightened by the measured bits (plus 8) and the working precision raised to cover
+  both. The measurement is repeated after every rebuild (`rebuilds` counts them), because a build
+  cannot see a cancellation beyond its own noise, about ``1/\mathrm{tol}``: at ``\omega = 10`` the
+  first build at 113 bits measures ``10^{34}``, the second ``4 \times 10^{55}``, and the third, at a
+  tolerance of ``10^{-90}`` and 361 working bits, returns the reflection to 32 digits in 5 s. Without
+  the loop the reflection came out as ``10^{-31}``, pure noise, and its measured sensitivity to the
+  inputs was the noise as well.
+- **Negative real part and the negative imaginary axis.** The principal-branch MST formulas are
+  not on the physical sheet for ``\operatorname{Re}\omega < 0``; those frequencies are solved for the
+  mirror mode ``(m, \omega) \to (-m, -\bar\omega)`` and complex-conjugated, as the Float64 routes do
+  for real negative frequencies. The negative imaginary axis is a branch cut of the physical
+  amplitudes: the two-sided limits ``\omega = \pm\delta - i\sigma`` are obtained directly (the
+  ``+\delta`` side and the axis point itself on the principal branch, the ``-\delta`` side through the
+  mirror mode), and they differ by O(1) already at ``\sigma = 0.1``. The Float64 rotated-contour
+  route converges to both limits as ``\delta \to 0``; the paclet's principal branch, which is
+  continuous across the axis, gives the ``+\delta`` value on both sides, so its values at
+  ``\operatorname{Re}\omega < 0`` are not references.
 - **Horizon side.** The IN solution is always the horizon Frobenius series continued by Taylor
   patches (the "hybrid" of the design brief): at ``x = 1/2`` that side costs a few patches and a
   small fraction of the build, so a pure-MST IN solution (the hypergeometric series, whose convergence
@@ -81,10 +105,48 @@ tables of the Float64 routes, evaluated in the working type.
   binary64 tables and are not used; the Taylor patches cover ``|\omega| \le 10`` at the cost of more
   patches. The superradiant threshold (logarithmic horizon companion) is not built for the UP route.
 
+- **Evaluation outside the matching point.** With the MST side the two branches are continued
+  outward by Taylor patches to ``r_m + 25/|\operatorname{Im}\omega|`` (at most 120), built at a
+  precision raised by ``2|\operatorname{Im}\omega|(r^*_{\rm end} - r^*_m)/\ln 2`` bits so that the
+  branch that decays outward keeps the tolerance despite the admixture of the growing one that
+  rounding leaves; a request beyond the chain extends it on demand, to twice the distance from the
+  matching radius, at a precision raised by the growth over the new stretch. A radial function is
+  then evaluated in about a millisecond per point at 113 bits wherever it is requested.
+- **Conditioning with respect to the inputs.** `BigFloat("0.4")` at ``N`` bits is not 4/10; the
+  route solves the problem defined by the rounded inputs exactly to its tolerance, and a quantity
+  that is ill-conditioned with respect to ``a`` and ``\omega`` (an incidence amplitude in the strongly
+  damped region near the quasinormal frequencies, a small reflection amplitude) differs from the
+  exact-rational answer by its condition number times ``2^{-N}``. The acceptance tests measure this
+  loss by one-ulp perturbations when a quantity misses its plain requirement, and report it. The
+  measurement is meaningful only once the route's own cancellations are covered: a value that is
+  noise changes completely under any perturbation.
+
+## Measured
+
+Against the paclet (120-digit run; 200/400-digit runs for ``\omega = 10`` and ``2 - 2i``), for
+``a = 0.4`` and ``0.9``, ``(l, m) = (2, 2)`` and ``(3, 1)``, ``s = -2``, 540 checks
+(test/arbitrary_precision, `GSN_AP_CASES=all`; digits agreed, range over the cases):
+
+| quantity | 113 bits (34.0 digits) | 256 bits (77.1 digits) |
+|---|---|---|
+| Inc/Trans, Ref/Trans of IN and UP, ``\omega \in \{1/20, 1/2, 2\}`` | 31.2-33.4 | 73.5-75.5 |
+| same, ``\omega \in \{1/2 \pm 0.3i, 0.3 - 1.5i, 10^{-30} - i/10, i/10\}`` | 32.1-34.2 | 75.2-77.1 |
+| same, ``\omega = 10`` (reflections ``10^{-53}`` to ``10^{-62}``) | 29.4-34.3 | 73.7-76.8 |
+| same, ``\omega = 2 - 2i`` (paclet certified to 8-35 digits) | 32.0-34.2 | 54.3-76.7 |
+| ``R(r')``, ``dR(r')`` at ``\omega = 10`` | 32.4-34.5 | 75.5-77.9 |
+| ``R(r')``, ``dR(r')`` elsewhere (paclet values certified to 8-34 digits) | 31.4-35.8 | 54-77 |
+
+The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. A route costs 0.3-2.4 s at 113 bits
+(3-6 s at ``\omega = 10`` with its three builds) and 1.5-5 s (real) or 9-24 s (complex frequency, MST
+side) at 256 bits; a Float64 route costs 0.4-0.8 ms, so the factor is about 1000 at 113 bits, the
+price of BigFloat arithmetic rather than of the algorithm. Evaluating a radial function costs 0.1-2 ms
+per point. The quasinormal frequencies of the ``(2, 2, 0)`` modes at ``a = 0.4`` and ``0.9`` polished
+at 128 bits agree with the 192-bit ones to 34 digits.
+
 ## Precision bookkeeping
 
 The acceptance tests in `test/arbitrary_precision` compare every stored paclet case at the requested
-working bits and print, per quantity, the digits agreed, the digits expected (``N\log_{10}2 - 6``)
-and the certified accuracy of the reference (the agreement between two paclet working precisions).
-Reported precision is always the agreement with that independent reference, never a
-self-consistency figure between tolerances.
+working bits and print, per quantity, the digits agreed, the digits expected (``N\log_{10}2 - 6``),
+the input conditioning where it was measured, and the certified accuracy of the reference (the
+agreement between two paclet working precisions). Reported precision is always the agreement with
+that independent reference, never a self-consistency figure between tolerances.

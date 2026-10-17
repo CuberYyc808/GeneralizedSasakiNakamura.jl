@@ -240,16 +240,19 @@ end
 # ---------------------------------------------------------------------------------------------
 # Confluent hypergeometric functions in the working type
 # ---------------------------------------------------------------------------------------------
-# Kummer M(a, b, z) by its power series (entire in z), summed at the current precision.
+# Kummer M(a, b, z) by its power series (entire in z), summed at the current precision; also returns
+# the sum of the term magnitudes, whose ratio to |M| is the cancellation of the series.
 function _kummer_M(a::C, b::C, z::C) where {C<:Complex}
     T = real(C)
     term = one(C)
     total = one(C)
+    absolute = one(T)
     threshold = eps(T) / 4
     for k in 0:KUMMER_MAX_TERMS
         term *= (a + k) / (b + k) * z / (k + 1)
         total += term
-        k > 2 * abs(z) && abs(term) <= threshold * abs(total) && return total
+        absolute += abs(term)
+        k > 2 * abs(z) && abs(term) <= threshold * abs(total) && return total, absolute
     end
     error("MST generic: the Kummer series did not converge for |z| = $(Float64(abs(z))).")
 end
@@ -261,16 +264,34 @@ _integer_distance(b) = abs(b - round(real(b)))
 #   U = Gamma(1-b)/Gamma(a-b+1) M(a,b,z) + Gamma(b-1)/Gamma(a) z^(1-b) M(a-b+1,2-b,z),
 # evaluated at a working precision raised by the cancellation of the Kummer series (|z| / ln 2 bits
 # plus a half) and by the closeness of b to an integer, then rounded to the caller's precision.
+# The cancellation of the connection formula (the two terms against their sum) and of the two Kummer
+# series is measured, and the evaluation is repeated at a higher precision until it is covered with a
+# margin of U_CANCELLATION_MARGIN_BITS.
+const U_CANCELLATION_MARGIN_BITS = 32
+const U_MAX_ATTEMPTS = 6
+
 function _tricomi_U(a::Complex{BigFloat}, b::Complex{BigFloat}, z::Complex{BigFloat})
     bits = precision(BigFloat)
     distance = Float64(_integer_distance(b))
     distance > 0 || error("MST generic: Tricomi U with an integer second parameter is not implemented.")
     extra = ceil(Int, 1.5 * Float64(abs(z))) + U_GUARD_BITS + ceil(Int, max(0.0, -log2(distance)))
-    value = setprecision(BigFloat, bits + extra) do
-        aa = Complex{BigFloat}(a); bb = Complex{BigFloat}(b); zz = Complex{BigFloat}(z)
-        t1 = exp(loggamma(1 - bb) - loggamma(aa - bb + 1)) * _kummer_M(aa, bb, zz)
-        t2 = exp(loggamma(bb - 1) - loggamma(aa) + (1 - bb) * log(zz)) * _kummer_M(aa - bb + 1, 2 - bb, zz)
-        t1 + t2
+    local value
+    for _ in 1:U_MAX_ATTEMPTS
+        value, cancellation = setprecision(BigFloat, bits + extra) do
+            aa = Complex{BigFloat}(a); bb = Complex{BigFloat}(b); zz = Complex{BigFloat}(z)
+            m1, abs1 = _kummer_M(aa, bb, zz)
+            m2, abs2 = _kummer_M(aa - bb + 1, 2 - bb, zz)
+            f1 = exp(loggamma(1 - bb) - loggamma(aa - bb + 1))
+            f2 = exp(loggamma(bb - 1) - loggamma(aa) + (1 - bb) * log(zz))
+            t1 = f1 * m1
+            t2 = f2 * m2
+            total = t1 + t2
+            magnitude = abs(f1) * abs1 + abs(f2) * abs2       # every term of both series, in magnitude
+            total, Float64(magnitude / max(abs(total), floatmin(BigFloat)))
+        end
+        lost = isfinite(cancellation) && cancellation > 0 ? ceil(Int, log2(cancellation)) : extra
+        lost + U_CANCELLATION_MARGIN_BITS <= extra && break
+        extra = lost + U_CANCELLATION_MARGIN_BITS + U_GUARD_BITS
     end
     return Complex{BigFloat}(value)
 end

@@ -2,6 +2,9 @@
 # `load_bhpt_refs(path)` returns Dict{String,Dict{String,Complex{BigFloat}}} (case tag -> key -> value);
 # values are parsed at the current BigFloat precision from the printed digits (precision marks removed).
 function _parse_mathematica_number(text::AbstractString)
+    # "0``acc" is a number known only to be below 10^-acc in absolute value (the paclet's zero with an
+    # accuracy mark), not an exact zero: no usable reference.
+    occursin(r"(^|[^0-9.])0``", strip(text)) && return nothing
     t = replace(strip(text), r"`+-?[0-9.]*" => "")     # drop precision marks  `41.7, ``55.0, ``-6.8
     t = replace(t, "*^" => "e")
     t = replace(t, " " => "")
