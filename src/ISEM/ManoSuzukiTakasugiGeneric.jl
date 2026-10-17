@@ -11,10 +11,17 @@
 #   UpTrans   = (eps/2)^(-1-2s) exp(i eps (log eps - (1 - kappa)/2)) 2^(-s-1+i eps) exp(-pi eps/2 - i pi (nu+1+s)/2) sum_n fUp_n,
 #
 # with zhat = omega (r - r_-), eps = 2 omega, tau = (eps - m a)/kappa, f_n the MST series coefficients
-# (f_0 = 1) and nu the renormalized angular momentum. The DOWN solution is R_+^nu of ST Eq. (154)
-# normalized to a unit ingoing wave r^-1 e^{-i omega r*} (ST Eqs. 156-157). Both solutions converge
-# at every finite r > r_+, so they are free of the Stokes ambiguity of the asymptotic series at
-# complex frequencies (see ArbitraryPrecisionRoute.jl).
+# (f_0 = 1) and nu the renormalized angular momentum. The DOWN solution (ingoing at infinity) is the
+# companion Coulomb-type series
+#
+#   R_down(r) = e^{-i zhat} zhat^{nu + i eps_+} (zhat - eps kappa)^{-s - i eps_+} sum_n f_n (2 i zhat)^n U(n + nu + 1 - s + i eps, 2n + 2nu + 2, 2 i zhat) / DownTrans,
+#   DownTrans = (sum_n f_n) (2 i)^{-nu-1+s-i eps} omega^{-1-i eps} e^{i omega r_-} e^{-i eps log 2},
+#
+# eps_+ = (eps + tau)/2, normalized to a unit ingoing wave r^-1 e^{-i omega r*}; its form was fixed by
+# comparison with the asymptotic-series DOWN solution at real frequency (constant ratio at every r),
+# and DownTrans is the leading large-r coefficient of that series. Both solutions converge at every
+# finite r > r_+, so they are free of the Stokes ambiguity of the asymptotic series at complex
+# frequencies (see ArbitraryPrecisionRoute.jl).
 #
 # The confluent hypergeometric U is built from Kummer's M by the connection formula at a working
 # precision raised by the cancellation of the Kummer series (about |z| / ln 2 bits) and by the
@@ -32,10 +39,15 @@ const NU_CF_DEPTH_MAX = 20000
 const NU_MAX_ITERATIONS = 100
 const COEFFICIENT_CAP = 2000
 const SERIES_MIN_TERMS = 4
+const COEFFICIENT_MIN_TERMS = 32
+const COEFFICIENT_EXTENSION = 64
 const U_GUARD_BITS = 64
 const KUMMER_MAX_TERMS = 200000
 
 _real_type(::GSNParameters{R}) where {R} = R
+
+# pi in the real type of a complex working value (a bare pi next to im is rounded to Float64).
+_pi(z) = convert(real(typeof(z)), pi)
 _complex_type(::GSNParameters{R}) where {R} = Complex{R}
 
 """
@@ -45,20 +57,47 @@ MST data of one mode in the floating type of its parameters: the renormalized an
 the series coefficients `f_n` for `nmin <= n <= nmax` (`coefficient(data, n)`), the tolerance of the
 sums, and the derived quantities eps = 2 omega and tau = (eps - m a)/kappa.
 """
-struct MSTGenericData{P<:GSNParameters,R,C}
-    params::P
-    epsilon::C
-    tau::C
-    nu::C
+mutable struct MSTGenericData{P<:GSNParameters,R,C}
+    const params::P
+    const epsilon::C
+    const tau::C
+    const nu::C
     coefficients::Vector{C}
     nmin::Int
     nmax::Int
-    tolerance::R
-    nu_residual::R
-    nu_depth::Int
+    const tolerance::R
+    const nu_residual::R
+    const nu_depth::Int
 end
 
 coefficient(data::MSTGenericData, n::Integer) = data.coefficients[n - data.nmin + 1]
+
+# Extend the stored coefficients to |n| <= N (the Tricomi sums at small zhat need more terms than the
+# decay of f_n alone suggests, because the U factors grow with n); the ratios are recomputed from a
+# deeper continued fraction, which also refreshes the stored ones.
+function _extend_coefficients!(data::MSTGenericData, N::Int)
+    N <= max(-data.nmin, data.nmax) && return data
+    N <= COEFFICIENT_CAP || error("MST generic: more than $COEFFICIENT_CAP series coefficients would be needed.")
+    p = data.params
+    C = typeof(data.nu)
+    ratios_R, ratios_L = _ratios(p, data.epsilon, p.kappa, data.tau, data.nu, N, 60)
+    positive = Vector{C}(undef, N)
+    negative = Vector{C}(undef, N)
+    f = one(C)
+    for n in 1:N
+        f *= ratios_R[n]
+        positive[n] = f
+    end
+    f = one(C)
+    for n in 1:N
+        f *= ratios_L[n]
+        negative[n] = f
+    end
+    data.coefficients = vcat(reverse(negative), [one(C)], positive)
+    data.nmin = -N
+    data.nmax = N
+    return data
+end
 
 # ---------------------------------------------------------------------------------------------
 # Three-term recurrence alpha_n f_(n+1) + beta_n f_n + gamma_n f_(n-1) = 0 (ST Eq. 124)
@@ -183,14 +222,14 @@ function mst_generic_data(p::GSNParameters, nu; tol=nothing, N=nothing, nu_resid
     for n in 1:count
         f *= ratios_R[n]
         push!(positive, f)
-        N === nothing && abs(f) < margin && n >= SERIES_MIN_TERMS && break
+        N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
     end
     negative = C[]
     f = one(C)
     for n in 1:count
         f *= ratios_L[n]
         push!(negative, f)
-        N === nothing && abs(f) < margin && n >= SERIES_MIN_TERMS && break
+        N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
     end
     nmin = -length(negative)
     nmax = length(positive)
@@ -279,7 +318,8 @@ function mst_up_transmission(data::MSTGenericData)
     for n in data.nmin:data.nmax
         total += _fup(data, n)
     end
-    aminus = 2^(-p.s - 1 + im * e) * exp(-pi * e / 2 - im * pi * (nu + 1 + p.s) / 2) * total
+    pi_ = _pi(nu)
+    aminus = 2^(-p.s - 1 + im * e) * exp(-pi_ * e / 2 - im * pi_ * (nu + 1 + p.s) / 2) * total
     prefactor = (e / 2)^(-1 - 2 * p.s) * exp(im * e * (log(e) - (1 - k) / 2))
     return prefactor * aminus
 end
@@ -291,7 +331,8 @@ function _up_prefactor(data::MSTGenericData, zhat)
     k = p.kappa
     nu = data.nu
     eplus = (e + data.tau) / 2
-    value = 2^nu * exp(-pi * e) * exp(-im * pi * (nu + 1 + p.s)) * exp(im * zhat) *
+    pi_ = _pi(nu)
+    value = 2^nu * exp(-pi_ * e) * exp(-im * pi_ * (nu + 1 + p.s)) * exp(im * zhat) *
         zhat^(nu + im * eplus) * (zhat - e * k)^(-p.s - im * eplus)
     dlog = im + (nu + im * eplus) / zhat + (-p.s - im * eplus) / (zhat - e * k)
     return value, dlog
@@ -308,9 +349,12 @@ function _tricomi_sum(data::MSTGenericData, weight, a, b, c, dc_dzhat)
     nused = (0, 0)
     for direction in (1, -1)
         n = direction == 1 ? 0 : -1
-        last = direction == 1 ? data.nmax : data.nmin
         streak = 0
-        while direction == 1 ? n <= last : n >= last
+        while true
+            # more coefficients when the sum has not converged within the stored range
+            if direction == 1 ? n > data.nmax : n < data.nmin
+                _extend_coefficients!(data, max(-data.nmin, data.nmax) + COEFFICIENT_EXTENSION)
+            end
             U0 = _tricomi_U(n + a, 2n + b, c)
             U1 = _tricomi_U(n + a + 1, 2n + b + 1, c)
             cn = c^n
@@ -356,12 +400,9 @@ function mst_up_state(data::MSTGenericData, r)
 end
 
 # ---------------------------------------------------------------------------------------------
-# DOWN solution (ST Eq. 154, R_+^nu): the ingoing branch at infinity
-#   R_+ = 2^nu e^{-pi eps} e^{i pi (nu+1-s)} Gamma(nu+1-s+i eps)/Gamma(nu+1+s-i eps) e^{-i zhat}
-#         zhat^{nu + i eps_+} (zhat - eps kappa)^{-s - i eps_+}
-#         sum_n i^n (nu+1+s-i eps)_n/(nu+1-s+i eps)_n f_n (2 zhat)^n U(n+nu+1+s-i eps, 2n+2nu+2, 2 i zhat),
-# normalized to a unit ingoing wave r^-1 e^{-i omega r*} through A_+ (ST Eq. 157) and the same
-# frequency factors as the "In incidence" normalization of the BHPT paclet.
+# DOWN solution: the ingoing branch at infinity (see the module header)
+#   R_down^raw = e^{-i zhat} zhat^{nu + i eps_+} (zhat - eps kappa)^{-s - i eps_+}
+#                sum_n f_n (2 i zhat)^n U(n+nu+1-s+i eps, 2n+2nu+2, 2 i zhat).
 # ---------------------------------------------------------------------------------------------
 function _down_prefactor(data::MSTGenericData, zhat)
     p = data.params
@@ -369,29 +410,17 @@ function _down_prefactor(data::MSTGenericData, zhat)
     k = p.kappa
     nu = data.nu
     eplus = (e + data.tau) / 2
-    gamma_ratio = exp(loggamma(nu + 1 - p.s + im * e) - loggamma(nu + 1 + p.s - im * e))
-    value = 2^nu * exp(-pi * e) * exp(im * pi * (nu + 1 - p.s)) * gamma_ratio * exp(-im * zhat) *
-        zhat^(nu + im * eplus) * (zhat - e * k)^(-p.s - im * eplus)
+    value = exp(-im * zhat) * zhat^(nu + im * eplus) * (zhat - e * k)^(-p.s - im * eplus)
     dlog = -im + (nu + im * eplus) / zhat + (-p.s - im * eplus) / (zhat - e * k)
     return value, dlog
-end
-
-# i^n (nu+1+s-i eps)_n / (nu+1-s+i eps)_n f_n (2 zhat)^n = (-1)^n fUp_n (2 i zhat)^n / (2 i zhat)^n ... written
-# directly: with c = 2 i zhat, i^n (2 zhat)^n = c^n, so the weight is the Pochhammer ratio times f_n.
-function _fdown(data::MSTGenericData, n::Integer)
-    p = data.params
-    nu = data.nu
-    e = data.epsilon
-    ratio = exp(_log_pochhammer(nu + 1 + p.s - im * e, n) - _log_pochhammer(nu + 1 - p.s + im * e, n))
-    return ratio * coefficient(data, n)
 end
 
 """
     mst_down_transmission(data)
 
-Normalization of the raw DOWN series to a unit ingoing wave r^-1 exp(-i omega r*): the amplitude
-A_+ (ST Eq. 157, BHPT prefacAplus * sum f_n) times the frequency factors of the ingoing wave,
-(eps/2)^-1 exp(-i eps (log eps - (1 - kappa)/2)).
+Normalization of the raw DOWN series to a unit ingoing wave r^-1 exp(-i omega r*): its leading
+large-r coefficient, (sum_n f_n) (2 i)^(-nu-1+s-i eps) omega^(-1-i eps) e^{i omega r_-} e^{-i eps log 2}
+(with U(a, b, z) -> z^-a, zhat -> omega r and r* -> r + 2 log r - 2 log 2).
 """
 function mst_down_transmission(data::MSTGenericData)
     p = data.params
@@ -399,14 +428,16 @@ function mst_down_transmission(data::MSTGenericData)
     k = p.kappa
     nu = data.nu
     C = typeof(nu)
+    R = real(C)
     total = zero(C)
     for n in data.nmin:data.nmax
         total += coefficient(data, n)
     end
-    aplus = 2^(-1 + p.s - im * e) * exp(-pi * e / 2 + im * pi * (1 - p.s + nu) / 2) *
-        exp(loggamma(1 - p.s + im * e + nu) - loggamma(1 + p.s - im * e + nu)) * total
-    prefactor = (e / 2)^(-1) * exp(-im * e * (log(e) - (1 - k) / 2))
-    return prefactor * aplus
+    pi_ = _pi(nu)
+    omega = e / 2
+    power = -nu - 1 + p.s - im * e
+    two_i_power = exp(power * (log(R(2)) + im * pi_ / 2))      # (2 i)^power, principal branch
+    return total * two_i_power * omega^(-1 - im * e) * exp(im * omega * (1 - k)) * exp(-im * e * log(R(2)))
 end
 
 """
@@ -419,10 +450,10 @@ function mst_down_state(data::MSTGenericData, r)
     R = _real_type(p)
     zhat = _zhat(data, R(r))
     c = 2im * zhat
-    a = data.nu + p.s + 1 - im * data.epsilon
+    a = data.nu + 1 - p.s + im * data.epsilon
     b = 2 * data.nu + 2
     prefactor, dlog = _down_prefactor(data, zhat)
-    total, dtotal, absolute, nused = _tricomi_sum(data, n -> _fdown(data, n), a, b, c, 2im)
+    total, dtotal, absolute, nused = _tricomi_sum(data, n -> coefficient(data, n), a, b, c, 2im)
     norm = mst_down_transmission(data)
     value = prefactor * total / norm
     derivative = prefactor * (dlog * total + dtotal) * p.omega / norm

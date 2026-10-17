@@ -5,9 +5,11 @@ using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
 using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
 using ..Parameters:
+    _binary64_compatible,
     _require_binary64_input,
     gsn_parameters,
     gsn_controls
+using ..ArbitraryPrecisionRoute: arbitrary_precision_route
 using ..CoefficientTables: gsn_coefficients
 using ..ComplexRational:
     ComplexRationalEvaluator,
@@ -4583,6 +4585,15 @@ function radial_route(
     iszero(imag(omega)) && return radial_route(
         s, l, m, a, real(omega), branch;
         lambda, nu, controls, small_frequency_expansion, large_frequency_expansion, kwargs...)
+    # Inputs beyond binary64 take the arbitrary-precision series route with the MST infinity side
+    # (ArbitraryPrecisionRoute.jl); the rotated-contour route below is binary64.
+    if !(_binary64_compatible(a) && _binary64_compatible(omega) &&
+            (lambda === nothing || _binary64_compatible(lambda)))
+        params = gsn_parameters(s, l, m, a, omega; lambda, nu)
+        return arbitrary_precision_route(params, branch;
+            N=get(kwargs, :N, nothing), xm=get(kwargs, :xm, nothing),
+            tol=get(kwargs, :tol, nothing), controls=controls)
+    end
     complex_small_frequency_expansion = small_frequency_expansion === :auto ? nothing : small_frequency_expansion
     complex_large_frequency_expansion = large_frequency_expansion === :auto ? nothing : large_frequency_expansion
     omegac = ComplexF64(omega)

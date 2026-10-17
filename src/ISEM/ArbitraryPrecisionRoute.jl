@@ -216,9 +216,19 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
     return _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
 end
 
+# Target |2 omega (r_m - r_-)| of the MST Tricomi arguments at the matching radius: larger arguments
+# need fewer terms of the n-sums (and more Kummer cancellation, which the working precision absorbs).
+const MST_MATCH_ARGUMENT = 18
+
 function _default_match_x(p::GSNParameters, tolerance, infinity_mode::Symbol)
     R = _real_type(p)
-    (isreal(p.omega) || infinity_mode == :mst) && return R(1 // 2)
+    if infinity_mode == :mst
+        r_target = r_minus(p) + R(MST_MATCH_ARGUMENT) / (2 * abs(p.omega))
+        lo = r_from_x(p, R(1 // 2))
+        hi = r_from_x(p, R(19 // 20))
+        return x_from_r(p, clamp(r_target, lo, hi))
+    end
+    isreal(p.omega) && return R(1 // 2)
     # Asymptotic seed at complex frequency: match at half the seed radius so that both sides share
     # the continuation loss.
     r0 = _complex_seed_radius(p, tolerance)
