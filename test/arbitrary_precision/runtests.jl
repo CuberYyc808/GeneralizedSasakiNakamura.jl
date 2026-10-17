@@ -41,6 +41,7 @@ const REFERENCE_PAIRS = (
     ("bhpt_60_a09l2.txt", "bhpt_120_a09l2.txt"),
     ("bhpt_60_l3m1.txt", "bhpt_120_l3m1.txt"),
     ("bhpt_200_omega10.txt", "bhpt_400_omega10.txt"),
+    ("bhpt_60_axis.txt", "bhpt_120_axis.txt"),
 )
 
 bits_list() = parse.(Int, split(get(ENV, "GSN_AP_BITS", "113,256"), ","))
@@ -74,9 +75,9 @@ function _parse_exact(text::AbstractString)
 end
 function _parse_rational(t::AbstractString)
     t = replace(t, "(" => "", ")" => "")
-    occursin("/", t) || return parse(Int, t) // 1
+    occursin("/", t) || return parse(BigInt, t) // 1
     num, den = split(t, "/")
-    return parse(Int, num) // parse(Int, den)
+    return parse(BigInt, num) // parse(BigInt, den)      # 10^-30 appears in the axis cases
 end
 
 function selected(tag, selection)
@@ -84,6 +85,7 @@ function selected(tag, selection)
     selection == "all" && return true
     selection == "real" && return isreal(omega)
     selection == "complex" && return !isreal(omega)
+    selection == "axis" && return !isreal(omega) && iszero(real(omega)) || abs(real(omega)) < 1 // 10^20
     # quick
     return a == 2 // 5 && l == 2 && m == 2 && (omega == 1 // 2 || omega == 1 // 2 - 3im // 10)
 end

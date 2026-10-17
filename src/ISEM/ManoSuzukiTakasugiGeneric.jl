@@ -338,42 +338,121 @@ function _up_prefactor(data::MSTGenericData, zhat)
     return value, dlog
 end
 
-# Sum over n of weight_n (c)^n U(n + a, 2n + b, c) and its zhat-derivative, c = sign * 2 i zhat,
-# adding terms on each side of n = 0 until they fall below the tolerance relative to the sum.
+# h_n = c^n U(a + n, b + 2n, c) and dh_n/dc by direct evaluation (two Tricomi functions).
+function _h_direct(a, b, c, n::Integer)
+    U0 = _tricomi_U(a + n, b + 2n, c)
+    U1 = _tricomi_U(a + n + 1, b + 2n + 1, c)
+    cn = c^n
+    return cn * U0, n * cn / c * U0 - cn * (a + n) * U1
+end
+
+# Three-term recurrences of h_n in n (DLMF 13.3.7 arranged as in the BHPT paclet), with the
+# c-derivatives of the c-dependent coefficients:
+#   increasing n:  h_n = A_n h_(n-2) + B_n(c) h_(n-1)
+#   decreasing n:  h_n = C_n(c) h_(n+1) + D_n h_(n+2)
+function _forward_coefficients(a, b, c, n)
+    den = (a + n - 1) * (b + 2n - 4)
+    A = (b + n - a - 2) * (b + 2n - 2) / den
+    bn = b + 2n
+    B = (bn - 3) * ((8 + bn^2 - 6bn) / c + (2(a + n) - bn)) / den
+    dB = -(bn - 3) * (8 + bn^2 - 6bn) / (c^2 * den)
+    return A, B, dB
+end
+function _backward_coefficients(a, b, c, n)
+    den = (b + n - a) * (b + 2n + 2)
+    C = -(b + 2n + 1) * ((b^2 + 4n * (n + 1) + b * (2 + 4n)) / c + (2a - b)) / den
+    dC = (b + 2n + 1) * (b^2 + 4n * (n + 1) + b * (2 + 4n)) / (c^2 * den)
+    D = (a + n + 1) * (b + 2n) / den
+    return C, dC, D
+end
+
+# The recurrences lose about log2(condition) bits per step, where the condition is the ratio of the
+# sum of the term magnitudes to the result; they run at a precision raised by RECURRENCE_EXTRA_BITS
+# and are re-anchored by two direct evaluations once the accumulated loss exceeds the re-anchor budget.
+const RECURRENCE_EXTRA_BITS = 160
+const RECURRENCE_REANCHOR_BITS = 120
+
+@inline function _step_condition(h, t1, t2, dh, s1, s2, s3)
+    R = real(typeof(h))
+    cond_value = (abs(t1) + abs(t2)) / max(abs(h), floatmin(R))
+    cond_deriv = (abs(s1) + abs(s2) + abs(s3)) / max(abs(dh), floatmin(R))
+    return Float64(max(cond_value, cond_deriv, one(R)))
+end
+
+# Sum over n of weight_n h_n and weight_n dh_n/dzhat, adding terms on each side of n = 0 until they fall
+# below the tolerance relative to the sum (the stored coefficients are extended as needed). The h_n
+# come from the recurrences above with direct anchors.
 function _tricomi_sum(data::MSTGenericData, weight, a, b, c, dc_dzhat)
     C = typeof(c)
     R = real(C)
-    total = zero(C)
-    dtotal = zero(C)
-    absolute = zero(R)
-    nused = (0, 0)
-    for direction in (1, -1)
-        n = direction == 1 ? 0 : -1
-        streak = 0
-        while true
-            # more coefficients when the sum has not converged within the stored range
-            if direction == 1 ? n > data.nmax : n < data.nmin
-                _extend_coefficients!(data, max(-data.nmin, data.nmax) + COEFFICIENT_EXTENSION)
+    outer_bits = R === BigFloat ? precision(BigFloat) : precision(R)
+    work_bits = R === BigFloat ? outer_bits + RECURRENCE_EXTRA_BITS : outer_bits
+    total, dtotal, absolute, nused = setprecision(BigFloat, work_bits) do
+        aa = C(a); bb = C(b); cc = C(c)
+        total = zero(C)
+        dtotal = zero(C)
+        absolute = zero(R)
+        nused = (0, 0)
+        for direction in (1, -1)
+            n = direction == 1 ? 0 : -1
+            # anchors: h at n and at n - direction (0 and 1 going up; -1 and 0 going down)
+            h_prev1, dh_prev1 = _h_direct(aa, bb, cc, n - direction)   # h_(n-dir)
+            h_curr, dh_curr = _h_direct(aa, bb, cc, n)                 # h_n
+            loss = 0.0
+            streak = 0
+            first_step = true
+            while true
+                if direction == 1 ? n > data.nmax : n < data.nmin
+                    _extend_coefficients!(data, max(-data.nmin, data.nmax) + COEFFICIENT_EXTENSION)
+                end
+                if !first_step
+                    # advance the recurrence from (h_prev1, h_curr) = (h_(n-2dir), h_(n-dir)) to h_n
+                    if direction == 1
+                        A, B, dB = _forward_coefficients(aa, bb, cc, n)
+                        t1 = A * h_prev1; t2 = B * h_curr
+                        h_next = t1 + t2
+                        s1 = A * dh_prev1; s2 = dB * h_curr; s3 = B * dh_curr
+                        dh_next = s1 + s2 + s3
+                    else
+                        Cn, dCn, Dn = _backward_coefficients(aa, bb, cc, n)
+                        t1 = Cn * h_curr; t2 = Dn * h_prev1
+                        h_next = t1 + t2
+                        s1 = dCn * h_curr; s2 = Cn * dh_curr; s3 = Dn * dh_prev1
+                        dh_next = s1 + s2 + s3
+                    end
+                    loss += log2(_step_condition(h_next, t1, t2, dh_next, s1, s2, s3))
+                    if loss > RECURRENCE_REANCHOR_BITS || !isfinite(loss)
+                        # re-anchor with two direct values
+                        h_prev1, dh_prev1 = h_curr, dh_curr
+                        h_prev1, dh_prev1 = _h_direct(aa, bb, cc, n - direction)
+                        h_next, dh_next = _h_direct(aa, bb, cc, n)
+                        loss = 0.0
+                    else
+                        h_prev1, dh_prev1 = h_curr, dh_curr
+                    end
+                    h_curr, dh_curr = h_next, dh_next
+                end
+                first_step = false
+                w = C(weight(n))
+                term = w * h_curr
+                total += term
+                dtotal += w * dh_curr * dc_dzhat
+                absolute += abs(term)
+                if abs(n) >= SERIES_MIN_TERMS && abs(term) <= data.tolerance * abs(total)
+                    streak += 1
+                    streak >= 2 && break
+                else
+                    streak = 0
+                end
+                n += direction
             end
-            U0 = _tricomi_U(n + a, 2n + b, c)
-            U1 = _tricomi_U(n + a + 1, 2n + b + 1, c)
-            cn = c^n
-            H = cn * U0
-            dH = (n * cn / c * U0 - cn * (n + a) * U1) * dc_dzhat
-            w = weight(n)
-            term = w * H
-            total += term
-            dtotal += w * dH
-            absolute += abs(term)
-            if abs(n) >= SERIES_MIN_TERMS && abs(term) <= data.tolerance * abs(total)
-                streak += 1
-                streak >= 2 && break
-            else
-                streak = 0
-            end
-            n += direction
+            nused = direction == 1 ? (nused[1], n) : (n, nused[2])
         end
-        nused = direction == 1 ? (nused[1], n) : (n, nused[2])
+        total, dtotal, absolute, nused
+    end
+    if R === BigFloat
+        round_(x) = Complex{BigFloat}(BigFloat(real(x), precision=outer_bits), BigFloat(imag(x), precision=outer_bits))
+        return round_(total), round_(dtotal), BigFloat(absolute, precision=outer_bits), nused
     end
     return total, dtotal, absolute, nused
 end

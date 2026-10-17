@@ -25,7 +25,7 @@ GSN_AP_BITS=113,256 julia --project=<env> test/arbitrary_precision/runtests.jl
 GSN_AP_BITS=53,113,192,256 GSN_AP_CASES=all julia --project=<env> test/arbitrary_precision/runtests.jl
 ```
 
-`GSN_AP_CASES` is `quick` (default), `real`, `complex` or `all`; `GSN_SOURCE=<checkout>` loads the
+`GSN_AP_CASES` is `quick` (default), `real`, `complex`, `axis` or `all`; `GSN_SOURCE=<checkout>` loads the
 package by `include` as in `test/extended`. The environment must provide a
 `SpinWeightedSpheroidalHarmonics` that accepts BigFloat at complex `c` (the `ArbitraryPrecision`
 branch, v1.4.1 or later); the registered 1.4.0 rejects it.

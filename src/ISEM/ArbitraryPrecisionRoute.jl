@@ -44,6 +44,10 @@ const TOLERANCE_ULPS = 64
 const ORDER_PER_DIGIT = 2.2
 const MINIMUM_ORDER = 24
 const GUARD_BITS = 24
+const MATCHING_GUARD_BITS = 8
+# The MST side (nu iteration, series coefficients, recurrences) costs about two decimal digits
+# relative to the asymptotic series at the same working precision; this covers them.
+const MST_GUARD_BITS = 16
 const HORIZON_SEED_XMAX = 1 // 2
 const INFINITY_SEED_YMAX = 1 // 2
 const MAX_PATCHES = 2000
@@ -206,29 +210,32 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
         r0 = _complex_seed_radius(params, tolerance)
         loss_bits = ceil(Int, Float64(abs(imag(params.omega))) * r0 / log(2))
     end
-    needed = ceil(Int, -log2(Float64(tolerance))) + GUARD_BITS + loss_bits
+    needed = ceil(Int, -log2(Float64(tolerance))) + GUARD_BITS + loss_bits +
+        (infinity_mode == :mst ? MST_GUARD_BITS : 0)
     working_bits = R === BigFloat ? max(bits, needed) : precision(R)
-    if R === BigFloat
-        return setprecision(BigFloat, working_bits) do
-            _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
-        end
+    R === BigFloat || return _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
+    # The connection coefficients come from 2 x 2 determinants whose terms can cancel (at complex
+    # frequency by exp(2 |Im omega| r*_m)); the measured cancellation is absorbed by rebuilding at a
+    # working precision raised by its bits, once.
+    route = setprecision(BigFloat, working_bits) do
+        _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
     end
-    return _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
+    lost_bits = ceil(Int, log2(route.diagnostics.matching_condition))
+    lost_bits + MATCHING_GUARD_BITS <= GUARD_BITS && return route
+    working_bits += lost_bits + MATCHING_GUARD_BITS
+    return setprecision(BigFloat, working_bits) do
+        _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
+    end
 end
 
-# Target |2 omega (r_m - r_-)| of the MST Tricomi arguments at the matching radius: larger arguments
-# need fewer terms of the n-sums (and more Kummer cancellation, which the working precision absorbs).
-const MST_MATCH_ARGUMENT = 18
-
+# The matching point stays at x = 1/2 for the MST side too: at complex frequency the two infinity
+# branches differ in size by exp(2 |Im omega| r*) at the matching radius, and extracting the smaller
+# coefficient loses that factor, which grows with r_m (the MST sums need more terms at small zhat,
+# but the recurrence makes them cheap). The remaining loss is measured and absorbed by the working
+# precision (see `arbitrary_precision_route`).
 function _default_match_x(p::GSNParameters, tolerance, infinity_mode::Symbol)
     R = _real_type(p)
-    if infinity_mode == :mst
-        r_target = r_minus(p) + R(MST_MATCH_ARGUMENT) / (2 * abs(p.omega))
-        lo = r_from_x(p, R(1 // 2))
-        hi = r_from_x(p, R(19 // 20))
-        return x_from_r(p, clamp(r_target, lo, hi))
-    end
-    isreal(p.omega) && return R(1 // 2)
+    (isreal(p.omega) || infinity_mode == :mst) && return R(1 // 2)
     # Asymptotic seed at complex frequency: match at half the seed radius so that both sides share
     # the continuation loss.
     r0 = _complex_seed_radius(p, tolerance)
@@ -250,10 +257,14 @@ function _nu_seed(p::GSNParameters)
     end
 end
 
-# MST data and the two infinity branches in GSN unit-transmission normalization.
+# MST data and the two infinity branches in GSN unit-transmission normalization. The MST sums are
+# truncated MST_GUARD_BITS below the route tolerance: their Teukolsky states pass through the inverse
+# conversion matrix, whose conditioning would otherwise cost about two digits (the working precision
+# is raised by the same bits).
 function _mst_branches(p::GSNParameters, tolerance)
-    nu, residual, depth = mst_nu_generic(p, _nu_seed(p); tol=tolerance)
-    data = mst_generic_data(p, nu; tol=tolerance, nu_residual=residual, nu_depth=depth)
+    mst_tolerance = tolerance * ldexp(one(tolerance), -MST_GUARD_BITS)
+    nu, residual, depth = mst_nu_generic(p, _nu_seed(p); tol=mst_tolerance)
+    data = mst_generic_data(p, nu; tol=mst_tolerance, nu_residual=residual, nu_depth=depth)
     up = MSTInfinityBranch(data, :up, ConversionFactors.Ctrans(p.s, p.m, p.a, p.omega, p.lambda))
     down = MSTInfinityBranch(data, :down, ConversionFactors.Binc(p.s, p.m, p.a, p.omega, p.lambda))
     return data, up, down
@@ -270,10 +281,13 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
     0 < match_x < 1 || throw(ArgumentError("xm must lie in (0, 1)."))
     work = _Workspace(C, coefficients, order)
 
+    t_horizon = time()
     horizon_in = _horizon_expansion(coefficients, :in, 2order, tolerance)
     Xh, dXh = _horizon_state(horizon_in, horizon_in.x_seed)
     horizon_in_patches, Xin, dXin = _continue(work, coefficients, horizon_in.x_seed, Xh, dXh, match_x, order, tolerance)
+    t_horizon = time() - t_horizon
 
+    t_infinity = time()
     mst = nothing
     infinity_up_patches = SeriesPatch{R,C}[]
     infinity_down_patches = SeriesPatch{R,C}[]
@@ -299,20 +313,28 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
             Xd, dXd = _infinity_state(infinity_down, one(R) - infinity_down.y_seed)
             infinity_down_patches, Xdn, dXdn = _continue(work, coefficients, one(R) - infinity_down.y_seed, Xd, dXd, match_x, order, tolerance)
         end
+        t_infinity = time() - t_infinity
         # X_in = B_inc X_down + B_ref X_up at the matching point.
         det = Xdn * dXup - Xup * dXdn
         incidence = (Xin * dXup - Xup * dXin) / det
         reflection = (Xdn * dXin - Xin * dXdn) / det
+        condition = max(_cancellation(Xdn * dXup, Xup * dXdn), _cancellation(Xin * dXup, Xup * dXin),
+            _cancellation(Xdn * dXin, Xin * dXdn))
     else
+        t_infinity = time() - t_infinity
         is_horizon_threshold(p) && throw(ArgumentError(
             "the arbitrary-precision UP route does not build the logarithmic horizon companion at the superradiant threshold."))
+        t_out = time()
         horizon_out = _horizon_expansion(coefficients, :out, 2order, tolerance)
         Xo, dXo = _horizon_state(horizon_out, horizon_out.x_seed)
         horizon_out_patches, Xout, dXout = _continue(work, coefficients, horizon_out.x_seed, Xo, dXo, match_x, order, tolerance)
+        t_horizon += time() - t_out
         # X_up = C_inc X_out + C_ref X_in at the matching point.
         det = Xout * dXin - Xin * dXout
         incidence = (Xup * dXin - Xin * dXup) / det
         reflection = (Xout * dXup - Xup * dXout) / det
+        condition = max(_cancellation(Xout * dXin, Xin * dXout), _cancellation(Xup * dXin, Xin * dXup),
+            _cancellation(Xout * dXup, Xup * dXout))
     end
 
     r_m = r_from_x(p, match_x)
@@ -336,9 +358,12 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         horizon_patches = length(horizon_in_patches) + length(horizon_out_patches),
         infinity_patches = length(infinity_up_patches) + length(infinity_down_patches),
         matching_determinant = det,
+        matching_condition = condition,
         complex_loss_digits = loss,
         frequency_regime = :arbitrary_precision_series,
         infinity_representation = series ? :asymptotic_series : :mst,
+        horizon_seconds = t_horizon,
+        infinity_seconds = t_infinity,
         mst_nu = mst === nothing ? missing : ComplexF64(mst.nu),
         mst_nu_residual = mst === nothing ? missing : Float64(mst.nu_residual),
         mst_depth = mst === nothing ? missing : mst.nu_depth,
@@ -348,6 +373,12 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         horizon_in, horizon_in_patches, horizon_out, horizon_out_patches,
         infinity_up, infinity_up_patches, infinity_down, infinity_down_patches,
         incidence, reflection, diagnostics)
+end
+
+# Cancellation of a difference u - v: (|u| + |v|) / |u - v|, as a Float64 (1 when there is none).
+function _cancellation(u, v)
+    R = real(typeof(u))
+    return Float64(max((abs(u) + abs(v)) / max(abs(u - v), floatmin(R)), one(R)))
 end
 
 # Buffers of the ordinary-point expansions: packed P/Q values and the A, B Taylor coefficients.
