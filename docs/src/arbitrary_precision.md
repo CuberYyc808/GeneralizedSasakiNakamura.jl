@@ -136,12 +136,14 @@ with each other to 85-99 digits on the amplitudes and 54-60 digits on the radial
 | same, ``\omega = 10`` (reflections ``10^{-53}`` to ``10^{-62}``) | 29.4-34.3 | 73.7-76.8 |
 | ``R(r')``, ``dR(r')``, all of the above | 29.6-35.8 | 72.4-77.9 |
 
-The axis cases (146 frequencies for the four modes, 2336 checks) were run on the Mac in two parts: all
-of them at 113 bits, and 122 of them at 256 bits (the run was interrupted; the remaining 24, the
-``a = 0.9``, ``(3, 1)`` cases with ``\delta \le 10^{-10}``, are covered at 113 bits only). The
-``-\delta`` side of the negative axis is the mirror of the ``+\delta`` side of the mode ``-m`` and is
-not in the paclet references (see above); the exact point ``-i/10`` is a branch-cut point whose
-paclet value is a principal-value diagnostic, not a reference.
+The whole suite was also run on an independent machine (Windows 11, Julia 1.12.6, this commit, the
+`ArbitraryPrecision` SWSH at 7cbc9b1) at 64, 113, 192 and 256 bits: 1424 checks per precision (2848
+for the 113/256 run), all passing, with digits agreed of 14.1-19.4 at 64 bits (19.3 digits),
+29.4-35.2 at 113, 53.3-59.2 at 192 (57.8 digits) and 72.4-78.4 at 256, the lowest values being the
+``\omega = 10`` reflections and the ``\sigma = 3`` axis cases; the 22 quasinormal roots passed at 113 and
+256 bits (88 checks). The ``-\delta`` side of the negative axis is the mirror of the ``+\delta`` side
+of the mode ``-m`` and is not in the paclet references (see above); the exact point ``-i/10`` is a
+branch-cut point whose paclet value is a principal-value diagnostic, not a reference.
 
 The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. A route costs 0.3-2.4 s at 113 bits
 (3-6 s at ``\omega = 10`` with its three builds) and 1.5-5 s (real) or 9-24 s (complex frequency, MST
