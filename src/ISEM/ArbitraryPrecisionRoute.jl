@@ -431,28 +431,10 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
     end
 
     # Evaluation outside the matching point: the MST branches are continued outward by Taylor patches
-    # up to x_end, at a precision raised by the growth exp(2 |Im omega| (r*_end - r*_m)) of the branch
-    # that decays outward (the admixture of the growing branch that rounding leaves), so that both
-    # chains carry the tolerance; a request beyond x_end extends the chain (_extend_mst_chain!).
-    if infinity_mode == :mst
-        x_end, chain_bits = _mst_chain_end(p, match_x)
-        if R === BigFloat
-            chain_work_bits = precision(BigFloat) + chain_bits
-            infinity_up_patches, infinity_down_patches = setprecision(BigFloat, chain_work_bits) do
-                chain_coefficients = gsn_coefficients(_working_parameters(p); controls=controls)
-                chain_work = _Workspace(C, chain_coefficients, order)
-                up_chain, _, _, _ = _continue(chain_work, chain_coefficients, match_x, Xup, dXup, x_end, order, tolerance)
-                down_chain = SeriesPatch{R,C}[]
-                if branch == :IN
-                    down_chain, _, _, _ = _continue(chain_work, chain_coefficients, match_x, Xdn, dXdn, x_end, order, tolerance)
-                end
-                up_chain, down_chain
-            end
-        else
-            infinity_up_patches, _, _, _ = _continue(work, coefficients, match_x, Xup, dXup, x_end, order, tolerance)
-            branch == :IN && ((infinity_down_patches, _, _, _) = _continue(work, coefficients, match_x, Xdn, dXdn, x_end, order, tolerance))
-        end
-    end
+    # on demand (_extend_mst_chain!), at a precision raised by the growth exp(2 |Im omega| (r*_end - r*_m))
+    # of the branch that decays outward (the admixture of the growing branch that rounding leaves), so
+    # that both chains carry the tolerance. Nothing is built here: the amplitudes and the horizon side
+    # are what most callers need, and a chain costs as much as the rest of the route.
 
     r_m = r_from_x(p, match_x)
     series = infinity_up isa InfinityExpansion
@@ -499,24 +481,8 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
         incidence, reflection, diagnostics)
 end
 
-# End of the outward Taylor chains of the MST branches and the bits lost along them: the chains run
-# to r_m + L with L = MST_CHAIN_LENGTH / max(|Im omega|, MST_CHAIN_MIN_DAMPING) (at most
-# MST_CHAIN_MAX_LENGTH), and the decaying branch loses 2 |Im omega| (r*_end - r*_m) / ln 2 bits.
-const MST_CHAIN_LENGTH = 25.0
-const MST_CHAIN_MIN_DAMPING = 0.05
-const MST_CHAIN_MAX_LENGTH = 120.0
+# Guard bits of the outward MST chains above the loss of the decaying branch along them.
 const MST_CHAIN_GUARD_BITS = 16
-
-function _mst_chain_end(p::GSNParameters, match_x)
-    R = _real_type(p)
-    damping = Float64(abs(imag(p.omega)))
-    length_ = min(MST_CHAIN_LENGTH / max(damping, MST_CHAIN_MIN_DAMPING), MST_CHAIN_MAX_LENGTH)
-    r_m = r_from_x(p, match_x)
-    r_end = r_m + R(length_)
-    x_end = x_from_r(p, r_end)
-    loss = 2 * damping * Float64(rstar_from_r(p.a, r_end) - rstar_from_r(p.a, r_m)) / log(2)
-    return x_end, ceil(Int, loss) + MST_CHAIN_GUARD_BITS
-end
 
 # Extend the outward Taylor chain of an MST branch so that it covers x_target: from the end state of
 # the chain (or the MST state at the matching point), to at least twice the present distance from

@@ -63,14 +63,39 @@ mutable struct MSTGenericData{P<:GSNParameters,R,C}
     const tau::C
     const nu::C
     coefficients::Vector{C}
+    up_factors::Vector{C}       # (-1)^n (nu+1+s-i eps)_n / (nu+1-s+i eps)_n, aligned with coefficients
     nmin::Int
     nmax::Int
     const tolerance::R
     const nu_residual::R
     const nu_depth::Int
+    up_normalization::Union{Nothing,C}      # cached mst_up_transmission
+    down_normalization::Union{Nothing,C}    # cached mst_down_transmission
 end
 
 coefficient(data::MSTGenericData, n::Integer) = data.coefficients[n - data.nmin + 1]
+
+# The Pochhammer ratios of the UP series, (-1)^n (x)_n / (y)_n with x = nu+1+s-i eps, y = nu+1-s+i eps,
+# for nmin <= n <= nmax by the recurrence g(n)/g(n-1) = (x+n-1)/(y+n-1) in both directions from n = 0
+# (two complex loggammas per term otherwise, the whole cost of an UP evaluation).
+function _up_factors(p::GSNParameters, nu, eps_, nmin::Int, nmax::Int)
+    C = typeof(nu)
+    x = nu + 1 + p.s - im * eps_
+    y = nu + 1 - p.s + im * eps_
+    factors = Vector{C}(undef, nmax - nmin + 1)
+    factors[1 - nmin] = one(C)
+    g = one(C)
+    for n in 1:nmax
+        g *= -(x + n - 1) / (y + n - 1)
+        factors[n - nmin + 1] = g
+    end
+    g = one(C)
+    for n in -1:-1:nmin
+        g *= -(y + n) / (x + n)
+        factors[n - nmin + 1] = g
+    end
+    return factors
+end
 
 # Extend the stored coefficients to |n| <= N (the Tricomi sums at small zhat need more terms than the
 # decay of f_n alone suggests, because the U factors grow with n); the ratios are recomputed from a
@@ -96,6 +121,9 @@ function _extend_coefficients!(data::MSTGenericData, N::Int)
     data.coefficients = vcat(reverse(negative), [one(C)], positive)
     data.nmin = -N
     data.nmax = N
+    data.up_factors = _up_factors(p, data.nu, data.epsilon, -N, N)
+    data.up_normalization = nothing
+    data.down_normalization = nothing
     return data
 end
 
@@ -234,7 +262,8 @@ function mst_generic_data(p::GSNParameters, nu; tol=nothing, N=nothing, nu_resid
     nmin = -length(negative)
     nmax = length(positive)
     coefficients = vcat(reverse(negative), [one(C)], positive)
-    return MSTGenericData{typeof(p),R,C}(p, eps_, tau, nu_c, coefficients, nmin, nmax, tolerance, R(nu_residual), nu_depth)
+    return MSTGenericData{typeof(p),R,C}(p, eps_, tau, nu_c, coefficients, _up_factors(p, nu_c, eps_, nmin, nmax),
+        nmin, nmax, tolerance, R(nu_residual), nu_depth, nothing, nothing)
 end
 
 # ---------------------------------------------------------------------------------------------
@@ -313,14 +342,8 @@ _log_pochhammer(x, n::Integer) = loggamma(x + n) - loggamma(x)
 # ---------------------------------------------------------------------------------------------
 _zhat(data::MSTGenericData, r) = data.params.omega * (r - (one(data.params.kappa) - data.params.kappa))
 
-# fUp_n = (-1)^n (nu + 1 + s - i eps)_n / (nu + 1 - s + i eps)_n f_n
-function _fup(data::MSTGenericData, n::Integer)
-    p = data.params
-    nu = data.nu
-    e = data.epsilon
-    ratio = exp(_log_pochhammer(nu + 1 + p.s - im * e, n) - _log_pochhammer(nu + 1 - p.s + im * e, n))
-    return (isodd(n) ? -1 : 1) * ratio * coefficient(data, n)
-end
+# fUp_n = (-1)^n (nu + 1 + s - i eps)_n / (nu + 1 - s + i eps)_n f_n (the ratio from the stored recurrence)
+_fup(data::MSTGenericData, n::Integer) = data.up_factors[n - data.nmin + 1] * coefficient(data, n)
 
 """
     mst_up_transmission(data)
@@ -330,6 +353,11 @@ transmission amplitude of the raw series; dividing by it gives the unit-transmis
 R_up -> r^(-2s-1) exp(i omega r*).
 """
 function mst_up_transmission(data::MSTGenericData)
+    data.up_normalization === nothing || return data.up_normalization
+    data.up_normalization = _mst_up_transmission(data)
+    return data.up_normalization
+end
+function _mst_up_transmission(data::MSTGenericData)
     p = data.params
     e = data.epsilon
     k = p.kappa
@@ -523,6 +551,11 @@ large-r coefficient, (sum_n f_n) (2 i)^(-nu-1+s-i eps) omega^(-1-i eps) e^{i ome
 (with U(a, b, z) -> z^-a, zhat -> omega r and r* -> r + 2 log r - 2 log 2).
 """
 function mst_down_transmission(data::MSTGenericData)
+    data.down_normalization === nothing || return data.down_normalization
+    data.down_normalization = _mst_down_transmission(data)
+    return data.down_normalization
+end
+function _mst_down_transmission(data::MSTGenericData)
     p = data.params
     e = data.epsilon
     k = p.kappa
