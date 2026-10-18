@@ -57,7 +57,14 @@ const REFERENCE_PAIRS = (
     ("bhpt_60_axis.txt", "bhpt_120_axis.txt"),
 )
 
-bits_list() = parse.(Int, split(get(ENV, "GSN_AP_BITS", "113,256"), ","))
+# Working precisions: integers are BigFloat bits; "double64" runs the route in Double64 (DoubleFloats.jl
+# must be in the environment), a fixed type of 106 bits.
+bits_list() = [lowercase(strip(s)) == "double64" ? :double64 : parse(Int, s) for s in split(get(ENV, "GSN_AP_BITS", "113,256"), ",")]
+if :double64 in bits_list()
+    using DoubleFloats
+end
+_precision_bits(bits) = bits === :double64 ? 106 : bits
+_precision_label(bits) = bits === :double64 ? "   d64" : @sprintf("%6d", bits)
 
 # Parse the case tag written by bhpt_acceptance_reference.wls into (a, l, m, omega) as exact numbers.
 function parse_tag(tag::AbstractString)
@@ -128,7 +135,7 @@ function input_conditioning(l, m, ab, wb, bc, rprime, values)
         R = GSN.Teukolsky_radial(-2, l, m, a_p, w_p, bc)
         Rv = R.Teukolsky_solution(rprime)
         for (quantity, value, new_value) in zip(KEYS, values, (R.incidence_amplitude, R.reflection_amplitude, Rv[1], Rv[2]))
-            sensitivity = Float64(abs(new_value - value) / abs(value)) / relative
+            sensitivity = Float64(abs(Complex{BigFloat}(new_value) - Complex{BigFloat}(value)) / abs(Complex{BigFloat}(value))) / relative
             loss[quantity] = max(get(loss, quantity, 0.0), log10(max(sensitivity, 1.0)))
         end
     end
@@ -137,13 +144,14 @@ end
 
 function run_case(tag, ref_high, ref_low, bits)
     a, l, m, omega = parse_tag(tag)
-    setprecision(BigFloat, bits) do
-        ab = BigFloat(numerator(a)) / BigFloat(denominator(a))
-        wb = isreal(omega) ? BigFloat(numerator(real(omega))) / BigFloat(denominator(real(omega))) :
-            Complex{BigFloat}(BigFloat(numerator(real(omega))) / BigFloat(denominator(real(omega))),
-                BigFloat(numerator(imag(omega))) / BigFloat(denominator(imag(omega))))
-        rprime = BigFloat(RPRIME)
-        expected = bits * log10(2) - ACCEPTANCE_MARGIN_DIGITS
+    T = bits === :double64 ? Double64 : BigFloat
+    setprecision(BigFloat, _precision_bits(bits)) do
+        ab = T(numerator(a)) / T(denominator(a))
+        wb = isreal(omega) ? T(numerator(real(omega))) / T(denominator(real(omega))) :
+            Complex{T}(T(numerator(real(omega))) / T(denominator(real(omega))),
+                T(numerator(imag(omega))) / T(denominator(imag(omega))))
+        rprime = T(RPRIME)
+        expected = _precision_bits(bits) * log10(2) - ACCEPTANCE_MARGIN_DIGITS
         for (bc, key) in ((GSN.IN, "In"), (GSN.UP, "Up"))
             t0 = time()
             R = GSN.Teukolsky_radial(-2, l, m, ab, wb, bc)
@@ -156,7 +164,7 @@ function run_case(tag, ref_high, ref_low, bits)
                 ref = get(ref_high, refkey, nothing)
                 ref === nothing && continue
                 certified = certified_digits(get(ref_low, refkey, nothing), ref)
-                agreed = digits_agreed(value, ref)
+                agreed = digits_agreed(Complex{BigFloat}(value), ref)
                 required = min(expected, certified - 1)
                 loss = 0.0
                 if agreed < required
@@ -164,8 +172,8 @@ function run_case(tag, ref_high, ref_low, bits)
                     loss = conditioning[quantity]
                     required = min(expected - loss, certified - 1)
                 end
-                @printf("%-42s %3s %-26s %4d bits  agreed %6.1f  expected %6.1f  conditioning %5.1f  reference %6.1f  %6.2f s\n",
-                    tag, key, quantity, bits, agreed, expected, loss, certified, dt)
+                @printf("%-42s %3s %-26s %s bits  agreed %6.1f  expected %6.1f  conditioning %5.1f  reference %6.1f  %6.2f s\n",
+                    tag, key, quantity, _precision_label(bits), agreed, expected, loss, certified, dt)
                 # A reference without a lower-precision counterpart is uncertified: reported, not tested.
                 isnan(certified) ? (@test_skip agreed >= expected) : (@test agreed >= required)
             end

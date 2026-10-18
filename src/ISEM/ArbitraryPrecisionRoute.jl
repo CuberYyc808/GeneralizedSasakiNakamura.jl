@@ -221,11 +221,14 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
     route_branch = _normalized_branch(branch)
     iszero(params.omega) && throw(ArgumentError("the arbitrary-precision ISEM route requires a nonzero frequency."))
     infinity in (:auto, :series, :mst) || throw(ArgumentError("infinity must be :auto, :series or :mst."))
-    # :auto takes the MST side at every frequency (since the UP-series factors are stored, it is faster
-    # than the asymptotic series with its inward Taylor chain, 1.5-4 times at 256 bits, with the same
-    # digits); at a real frequency the asymptotic series remains the fallback should the MST data fail.
-    infinity_mode = infinity === :auto ? :mst : infinity
-    if infinity === :auto && isreal(params.omega)
+    # :auto takes the MST side at every frequency for BigFloat (since the UP-series factors are stored,
+    # it is faster than the asymptotic series with its inward Taylor chain, 1.5-4 times at 256 bits, with
+    # the same digits); at a real frequency the asymptotic series remains the fallback should the MST
+    # data fail. For a fixed-precision type (Double64) the MST data live in BigFloat and the asymptotic
+    # series, in the type itself, is 20 times faster, so it is taken at real frequencies.
+    R = _real_type(params)
+    infinity_mode = infinity === :auto ? ((R === BigFloat || !isreal(params.omega)) ? :mst : :series) : infinity
+    if infinity === :auto && isreal(params.omega) && R === BigFloat
         try
             return arbitrary_precision_route(params, branch; N, xm, tol, controls, infinity=:mst, max_rebuilds, root_search)
         catch err
@@ -263,7 +266,22 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
     tolerance_bits = ceil(Int, -log2(Float64(tolerance)))
     extra_bits = GUARD_BITS + loss_bits + (infinity_mode == :mst ? MST_GUARD_BITS : 0)
     working_bits = R === BigFloat ? max(bits, tolerance_bits + extra_bits + _taylor_cancellation_bits(order, tolerance)) : precision(R)
-    R === BigFloat || return _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
+    if R !== BigFloat
+        # A fixed-precision type is built once at its own precision; when the measured cancellation of
+        # the matching or of the series sums exceeds the guard, the route is rebuilt in BigFloat at the
+        # type's precision with the full loop below, and that route is returned (its values are BigFloat).
+        route = _build_route(params, route_branch, order, tolerance, xm, working_bits, infinity_mode)
+        d = route.diagnostics
+        matching = root_search ? max(d.determinant_condition, d.reflection_condition) : d.matching_condition
+        lost_bits = ceil(Int, log2(matching)) +
+            max(0, ceil(Int, log2(d.mst_condition)) - (infinity_mode == :mst ? MST_GUARD_BITS : 0))
+        series_bits = ceil(Int, log2(d.series_condition))
+        # Without guard bits every bit of cancellation is a bit of the result: the type's slack is the
+        # 64-ulp tolerance plus half the guard, beyond which BigFloat takes over.
+        lost_bits + series_bits <= GUARD_BITS ÷ 2 && return route
+        return arbitrary_precision_route(_bigfloat_parameters(params, precision(R)), route_branch;
+            N, xm, tol, controls, infinity, max_rebuilds, root_search)
+    end
     # The connection coefficients come from 2 x 2 determinants whose terms cancel (by
     # exp(2 |Im omega| r*_m) at complex frequency, by |B_inc / B_ref| when the reflection is
     # exponentially small), and the MST states cancel in their sums and in the Teukolsky -> GSN
@@ -347,7 +365,32 @@ _nu_seed(p::GSNParameters) = first(_nu_seeds(p))
 # truncated MST_GUARD_BITS below the route tolerance: their Teukolsky states pass through the inverse
 # conversion matrix, whose conditioning would otherwise cost about two digits (the working precision
 # is raised by the same bits).
+# The parameters in BigFloat at `bits` (exact values of a, omega, lambda; kappa and nu recomputed).
+function _bigfloat_parameters(p::GSNParameters, bits::Int)
+    return setprecision(BigFloat, bits) do
+        omega = isreal(p.omega) ? BigFloat(real(p.omega)) : Complex{BigFloat}(p.omega)
+        lambda = isreal(p.lambda) ? BigFloat(real(p.lambda)) : Complex{BigFloat}(p.lambda)
+        _working_parameters(GSNParameters(p.s, p.l, p.m, BigFloat(p.a), omega, lambda, BigFloat(p.nu), BigFloat(p.kappa)))
+    end
+end
+
+# Precision of the MST data of a branch whose GSN states are of type C: that of the type for BigFloat
+# routes (set by the caller), the type's precision plus the MST guard for fixed-precision types, whose
+# MST data live in BigFloat.
+_mst_bits(::Type{Complex{BigFloat}}) = precision(BigFloat)
+_mst_bits(::Type{C}) where {C<:Complex} = precision(real(C)) + MST_GUARD_BITS
+
 function _mst_branches(p::GSNParameters, tolerance)
+    R = _real_type(p)
+    if R !== BigFloat
+        # A fixed-precision type cannot carry the guard bits of the MST sums: the data are built in
+        # BigFloat at the type's precision plus the guard, and the states are converted on evaluation.
+        C = _complex_type(p)
+        data, up, down = setprecision(BigFloat, _mst_bits(C)) do
+            _mst_branches(_bigfloat_parameters(p, _mst_bits(C)), BigFloat(tolerance))
+        end
+        return data, MSTInfinityBranch(data, :up, C(up.gsn_scale)), MSTInfinityBranch(data, :down, C(down.gsn_scale))
+    end
     mst_tolerance = tolerance * ldexp(one(tolerance), -MST_GUARD_BITS)
     seeds = _nu_seeds(p)
     local nu, residual, depth
@@ -649,7 +692,14 @@ end
 # normalization, and converted with the inverse of the GSN -> Teukolsky conversion matrix. The third
 # value is the cancellation met on the way (the Tricomi sums and the conversion), by which the
 # truncation error of the series is amplified in the GSN state.
-function _mst_gsn_state(e::MSTInfinityBranch, x)
+function _mst_gsn_state(e::MSTInfinityBranch{<:MSTGenericData,C}, x) where {C}
+    real(C) === BigFloat && return _mst_gsn_state_at_precision(e, x)
+    X, dXdx, condition = setprecision(BigFloat, _mst_bits(C)) do
+        _mst_gsn_state_at_precision(e, x)
+    end
+    return C(X), C(dXdx), condition
+end
+function _mst_gsn_state_at_precision(e::MSTInfinityBranch, x)
     p = e.data.params
     r = r_from_x(p, x)
     state = e.branch == :up ? mst_up_state(e.data, r) : mst_down_state(e.data, r)
@@ -880,8 +930,24 @@ end
 
 function _teukolsky_amplitude_factors(route::ArbitraryPrecisionRadialRoute)
     p = route.params
+    R = _real_type(p)
+    if R !== BigFloat
+        # The closed-form factors cancel by several digits at some frequencies (Cref at a = 0.9 near the
+        # positive imaginary axis); a fixed-precision type has no guard, so they are evaluated in
+        # BigFloat at the type's precision plus the guard and converted.
+        C = _complex_type(p)
+        factors = setprecision(BigFloat, precision(R) + GUARD_BITS) do
+            _teukolsky_amplitude_factors_of(_bigfloat_parameters(p, precision(R) + GUARD_BITS), route.branch)
+        end
+        return (trans=C(factors.trans), incidence=C(factors.incidence), reflection=C(factors.reflection))
+    end
     return _at_working_precision(route) do
-        if route.branch == :IN
+        _teukolsky_amplitude_factors_of(p, route.branch)
+    end
+end
+function _teukolsky_amplitude_factors_of(p::GSNParameters, branch::Symbol)
+    begin
+        if branch == :IN
             (
                 trans = ConversionFactors.Btrans(p.s, p.m, p.a, p.omega, p.lambda),
                 incidence = ConversionFactors.Binc(p.s, p.m, p.a, p.omega, p.lambda),

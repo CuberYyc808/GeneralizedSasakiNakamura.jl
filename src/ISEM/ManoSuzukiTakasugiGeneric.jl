@@ -430,17 +430,20 @@ end
 
 # Sum over n of weight_n h_n and weight_n dh_n/dzhat, adding terms on each side of n = 0 until they fall
 # below the tolerance relative to the sum (the stored coefficients are extended as needed). The h_n
-# come from the recurrences above with direct anchors.
+# come from the recurrences above with direct anchors. The sum runs in BigFloat at the caller's
+# precision raised by RECURRENCE_EXTRA_BITS whatever the working type (a fixed-precision type such as
+# Double64 cannot carry the extra bits of the recurrence), and the totals are returned in that type.
 function _tricomi_sum(data::MSTGenericData, weight, a, b, c, dc_dzhat)
     C = typeof(c)
     R = real(C)
+    CB = Complex{BigFloat}
     outer_bits = R === BigFloat ? precision(BigFloat) : precision(R)
-    work_bits = R === BigFloat ? outer_bits + RECURRENCE_EXTRA_BITS : outer_bits
+    work_bits = outer_bits + RECURRENCE_EXTRA_BITS
     total, dtotal, absolute, nused = setprecision(BigFloat, work_bits) do
-        aa = C(a); bb = C(b); cc = C(c)
-        total = zero(C)
-        dtotal = zero(C)
-        absolute = zero(R)
+        aa = CB(a); bb = CB(b); cc = CB(c)
+        total = zero(CB)
+        dtotal = zero(CB)
+        absolute = zero(BigFloat)
         nused = (0, 0)
         for direction in (1, -1)
             n = direction == 1 ? 0 : -1
@@ -482,10 +485,10 @@ function _tricomi_sum(data::MSTGenericData, weight, a, b, c, dc_dzhat)
                     h_curr, dh_curr = h_next, dh_next
                 end
                 first_step = false
-                w = C(weight(n))
+                w = CB(weight(n))
                 term = w * h_curr
                 total += term
-                dtotal += w * dh_curr * dc_dzhat
+                dtotal += w * dh_curr * CB(dc_dzhat)
                 absolute += abs(term)
                 if abs(n) >= SERIES_MIN_TERMS && abs(term) <= data.tolerance * abs(total)
                     streak += 1
@@ -503,7 +506,7 @@ function _tricomi_sum(data::MSTGenericData, weight, a, b, c, dc_dzhat)
         round_(x) = Complex{BigFloat}(BigFloat(real(x), precision=outer_bits), BigFloat(imag(x), precision=outer_bits))
         return round_(total), round_(dtotal), BigFloat(absolute, precision=outer_bits), nused
     end
-    return total, dtotal, absolute, nused
+    return C(total), C(dtotal), R(absolute), nused
 end
 
 """

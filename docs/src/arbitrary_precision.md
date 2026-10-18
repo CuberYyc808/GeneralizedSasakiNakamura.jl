@@ -25,6 +25,24 @@ that accepts `BigFloat` at complex `c` (v1.4.1 or later). `data_type=Complex{Big
 frequency derivative of the incidence amplitude at arbitrary precision are provided by
 `QNM.qnm_arbitrary_precision` (see [Quasinormal modes](QNM.md)).
 
+## Fixed-precision wide types (Double64)
+
+The routes also run in a fixed-precision type wider than binary64, such as `Double64` of
+DoubleFloats.jl (106 bits, 31.9 digits), which is not a dependency of the package: `Teukolsky_radial(-2, 2, 2,
+Double64(2) / 5, Double64(1) / 2)` returns `Complex{Double64}` amplitudes and radial values. The separation
+constant comes from SpinWeightedSpheroidalHarmonics in that type, the series and the Taylor patches are
+summed in it, the MST data of a complex frequency are built in BigFloat at the type's precision plus the
+MST guard (the recurrences of the MST sums need more bits than the type has) and converted on evaluation,
+and the asymptotic series is the infinity side at real frequencies (20 times faster than MST here). The
+working precision cannot be raised in such a type, so the route is built once with a tolerance of 64 ulps
+(``3 \times 10^{-30}``) and no guard; when the measured cancellation of the matching and of the series sums
+exceeds 12 bits (an exponentially small reflection, a strongly damped frequency, the horizon chain at
+``a = 0.9``, ``\omega = 3i``), the route is rebuilt in BigFloat at the type's precision with the full rebuild
+loop, and that route is returned, with BigFloat values. Over the 178 reference cases (`GSN_AP_BITS=double64`)
+the amplitudes agree with the paclet to 26.4-32.9 digits and the radial values to 27.2-32.7, all passing
+the ``N\log_{10}2 - 6 = 25.9`` requirement; a real-frequency route costs 10-15 ms, a complex one 0.2-1.2 s
+(the MST data in BigFloat), against 0.3-0.7 s for BigFloat at 113 bits and 0.4-0.8 ms for Float64.
+
 ## What is computed and how
 
 The route is the ISEM construction in the compact coordinate ``x = (r - r_+)/(r - r_-)``: the
