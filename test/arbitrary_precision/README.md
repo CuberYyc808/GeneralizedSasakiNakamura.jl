@@ -16,9 +16,12 @@ the renormalized angular momentum, `Incidence/Transmission`, `Reflection/Transmi
 Each group exists at several working precisions (60, 120 and 200 digits; 400 for `omega = 10`, where
 the paclet needs at least 200). A case is tested against the first pair of `REFERENCE_PAIRS` in
 `runtests.jl` that holds it: 200/400 for `omega = 10`, 120/200 for the other real and complex cases,
-120/200 of `bhpt_<prec>_axis_delta.txt` (omega = +-delta -+ i sigma, delta from 1e-6 to 1e-30,
-sigma = 1/10 and 1/2) for the axis, and the 60/120 files of the first axis run for the cases the
-snapshot lacks (omega = i/10, 1e-30 - i/2). The digits on which the two agree are the certified
+120/200 of `bhpt_<prec>_axis.txt` (omega = +-delta -+ i sigma, delta from 1e-6 to 1e-30, sigma =
+1/10, 1/2, 1 and 3, both axes, and the exact point i/10; the paclet's one-hour runs at the other exact
+axis points -i sigma and i sigma timed out, see `bhpt_axis_report.txt`; the records at the exact point
+-i/10 are principal-value diagnostics whose Up radial values are on another branch of the normalization
+and are not tested) for the axis, and 60/120 for
+the few axis cases whose 200-digit run did not finish. The digits on which the two agree are the certified
 accuracy of the reference; the tests require agreement with the higher-precision run to
 `min(N log10(2) - 6, certified digits - 1)` at `N` working bits. A reference without a counterpart is
 reported but not tested. The 120/200 pairs certify the amplitudes to 85-99 digits and the radial values

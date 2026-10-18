@@ -132,9 +132,16 @@ with each other to 85-99 digits on the amplitudes and 54-60 digits on the radial
 |---|---|---|
 | Inc/Trans, Ref/Trans of IN and UP, ``\omega \in \{1/20, 1/2, 2\}`` | 31.2-33.4 | 73.5-75.5 |
 | same, ``\omega \in \{1/2 \pm 0.3i, 0.3 - 1.5i, 2 - 2i\}`` | 31.1-34.2 | 74.4-77.3 |
-| same, ``\omega = \pm\delta \mp i\sigma`` (``\delta`` from ``10^{-6}`` to ``10^{-30}``, ``\sigma = 1/10, 1/2``) and ``i/10`` | 30.4-34.4 | 76.0-78.1 |
+| same, ``\omega = \delta \pm i\sigma`` (``\delta`` from ``10^{-6}`` to ``10^{-30}``, ``\sigma = 1/10, 1/2, 1, 3``) and ``i/10`` | 30.4-35.3 | 73.6-78.1 |
 | same, ``\omega = 10`` (reflections ``10^{-53}`` to ``10^{-62}``) | 29.4-34.3 | 73.7-76.8 |
-| ``R(r')``, ``dR(r')``, all of the above | 30.2-35.8 | 74.1-77.9 |
+| ``R(r')``, ``dR(r')``, all of the above | 29.6-35.8 | 72.4-77.9 |
+
+The axis cases (146 frequencies for the four modes, 2336 checks) were run on the Mac in two parts: all
+of them at 113 bits, and 122 of them at 256 bits (the run was interrupted; the remaining 24, the
+``a = 0.9``, ``(3, 1)`` cases with ``\delta \le 10^{-10}``, are covered at 113 bits only). The
+``-\delta`` side of the negative axis is the mirror of the ``+\delta`` side of the mode ``-m`` and is
+not in the paclet references (see above); the exact point ``-i/10`` is a branch-cut point whose
+paclet value is a principal-value diagnostic, not a reference.
 
 The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. A route costs 0.3-2.4 s at 113 bits
 (3-6 s at ``\omega = 10`` with its three builds) and 1.5-5 s (real) or 9-24 s (complex frequency, MST

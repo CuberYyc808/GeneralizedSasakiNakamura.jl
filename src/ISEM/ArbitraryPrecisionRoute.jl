@@ -307,20 +307,29 @@ function _default_match_x(p::GSNParameters, tolerance, infinity_mode::Symbol)
     return max(R(1 // 2), x_from_r(p, R(max(r0 / 2, Float64(r_plus(p)) + 2))))
 end
 
-# Binary64 seed of the renormalized angular momentum from the Float64 MST module; `l` when it fails.
-function _nu_seed(p::GSNParameters)
+# Binary64 seeds of the renormalized angular momentum from the Float64 MST module, in the order to try:
+# at the frequency itself, then (the Float64 routine rejects some frequencies within 1e-15 of the
+# positive imaginary axis) at the frequency with its real part moved to 1e-6 and 1e-3 of |omega|,
+# which changes nu by that much and still seeds the generic iteration; `l` last.
+function _nu_seeds(p::GSNParameters)
     a = Float64(p.a)
     omega = ComplexF64(p.omega)
     lambda = ComplexF64(p.lambda)
-    try
-        if isreal(p.omega)
-            return ComplexF64(mano_suzuki_takasugi_nu(p.s, p.l, p.m, a, real(omega), lambda))
+    seeds = ComplexF64[]
+    shifts = isreal(p.omega) ? (omega,) :
+        (omega, ComplexF64(1e-6 * abs(omega), imag(omega)), ComplexF64(1e-3 * abs(omega), imag(omega)))
+    for w in shifts
+        try
+            seed = isreal(p.omega) ? ComplexF64(mano_suzuki_takasugi_nu(p.s, p.l, p.m, a, real(w), lambda)) :
+                ComplexF64(mano_suzuki_takasugi_nu_complex(p.s, p.l, p.m, a, w, lambda))
+            isfinite(seed) && push!(seeds, seed)
+        catch
         end
-        return ComplexF64(mano_suzuki_takasugi_nu_complex(p.s, p.l, p.m, a, omega, lambda))
-    catch
-        return ComplexF64(p.l)
     end
+    push!(seeds, ComplexF64(p.l))
+    return seeds
 end
+_nu_seed(p::GSNParameters) = first(_nu_seeds(p))
 
 # MST data and the two infinity branches in GSN unit-transmission normalization. The MST sums are
 # truncated MST_GUARD_BITS below the route tolerance: their Teukolsky states pass through the inverse
@@ -328,7 +337,16 @@ end
 # is raised by the same bits).
 function _mst_branches(p::GSNParameters, tolerance)
     mst_tolerance = tolerance * ldexp(one(tolerance), -MST_GUARD_BITS)
-    nu, residual, depth = mst_nu_generic(p, _nu_seed(p); tol=mst_tolerance)
+    seeds = _nu_seeds(p)
+    local nu, residual, depth
+    for (k, seed) in enumerate(seeds)
+        try
+            nu, residual, depth = mst_nu_generic(p, seed; tol=mst_tolerance)
+            break
+        catch err
+            k == length(seeds) && rethrow(err)
+        end
+    end
     data = mst_generic_data(p, nu; tol=mst_tolerance, nu_residual=residual, nu_depth=depth)
     up = MSTInfinityBranch(data, :up, ConversionFactors.Ctrans(p.s, p.m, p.a, p.omega, p.lambda))
     down = MSTInfinityBranch(data, :down, ConversionFactors.Binc(p.s, p.m, p.a, p.omega, p.lambda))

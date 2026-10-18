@@ -1,4 +1,4 @@
-# QNM reference UTC 2026-10-17T12:19:43.033174+00:00
+# QNM reference UTC 2026-10-18T00:48:56.890661+00:00
 # Method1: official QNM0.4.1 MST incidence zero, WP120, original double seed. Method2: separately implemented Cook/Leaver radial CF FindRoot WP100 with internal guard220 and SWSH eigenvalue.
 ## The two methods share SWSH angular eigenvalues; radial implementations differ. CF residual alone is not an independent accuracy estimate.
 ## Original official Leaver80 diagnostic failed; not used for certification. Warm CF-seeded MST comparisons retained only in raw qnm logs.

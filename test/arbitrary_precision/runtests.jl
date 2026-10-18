@@ -20,7 +20,8 @@
 #     GSN_AP_BITS=113,256 julia --project=<env> test/arbitrary_precision/runtests.jl
 #     GSN_AP_BITS=53,113,192,256 GSN_AP_CASES=all julia --project=<env> test/arbitrary_precision/runtests.jl
 # GSN_AP_CASES selects "quick" (default: a = 2/5, l = m = 2, omega = 1/2 and 1/2 - 3i/10), "real",
-# "complex" or "all". GSN_SOURCE=<checkout> loads the package by include as in test/extended.
+# "complex", "axis", "all", or a comma-separated list of tag substrings. GSN_SOURCE=<checkout> loads the
+# package by include as in test/extended.
 
 using Test
 using Printf
@@ -42,8 +43,9 @@ const KEYS = ("Incidence/Transmission", "Reflection/Transmission", "R(rprime)/Tr
 
 # Reference pairs (lower, higher working precision), in order of priority: a case is tested against
 # the first pair that holds it. omega = 10 needs the paclet at 200 digits, so it is taken from the
-# 200/400 pair; the regular cases from the 120/200 pair; the axis cases (omega = +-delta -+ i sigma)
-# from the 120/200 snapshot where present, else from the 60/120 files of the first axis run.
+# 200/400 pair; the regular cases from the 120/200 pair; the axis cases (omega = +-delta -+ i sigma,
+# delta from 1e-6 to 1e-30, sigma = 1/10, 1/2, 1, 3, and the exact point i/10) from the 120/200 axis
+# files, else from 60/120 where the 200-digit run did not finish.
 const REFERENCE_PAIRS = (
     ("bhpt_200_a04l2.txt", "bhpt_400_omega10.txt"),
     ("bhpt_200_a09l2.txt", "bhpt_400_omega10.txt"),
@@ -51,7 +53,7 @@ const REFERENCE_PAIRS = (
     ("bhpt_120_a04l2.txt", "bhpt_200_a04l2.txt"),
     ("bhpt_120_a09l2.txt", "bhpt_200_a09l2.txt"),
     ("bhpt_120_l3m1.txt", "bhpt_200_l3m1.txt"),
-    ("bhpt_120_axis_delta.txt", "bhpt_200_axis_delta.txt"),
+    ("bhpt_120_axis.txt", "bhpt_200_axis.txt"),
     ("bhpt_60_axis.txt", "bhpt_120_axis.txt"),
 )
 
@@ -96,10 +98,17 @@ function selected(tag, selection)
     # The paclet's principal branch is not on the physical sheet for Re omega < 0 (the -delta side of
     # the negative imaginary axis): those references are kept in the files for the record only.
     real(omega) < 0 && return false
+    # The exact points of the negative imaginary axis are on the branch cut: the paclet's principal
+    # value there matches its +delta side in the amplitudes but not in the Up radial values (another
+    # branch of the Up normalization), so those records are diagnostics, not references; the route gives
+    # the +delta limit there, which is tested through the +delta cases.
+    iszero(real(omega)) && imag(omega) < 0 && return false
     selection == "all" && return true
+    # a comma-separated list of tag substrings selects those cases
+    occursin(";", selection) && return any(occursin(strip(part), tag) for part in split(selection, ","))
     selection == "real" && return isreal(omega)
     selection == "complex" && return !isreal(omega)
-    selection == "axis" && return !isreal(omega) && iszero(real(omega)) || abs(real(omega)) < 1 // 10^20
+    selection == "axis" && return !isreal(omega) && abs(real(omega)) <= 1 // 10^6
     # quick
     return a == 2 // 5 && l == 2 && m == 2 && (omega == 1 // 2 || omega == 1 // 2 - 3im // 10)
 end
