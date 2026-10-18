@@ -31,7 +31,12 @@ include(joinpath(@__DIR__, "bhpt_references.jl"))
 const QNM_REFERENCE = joinpath(@__DIR__, "references", "qnm_reference.txt")
 const ACCEPTANCE_MARGIN_DIGITS = 6
 
-bits_list() = parse.(Int, split(get(ENV, "GSN_AP_BITS", "113,256"), ","))
+# Working precisions: integers are BigFloat bits; "double64" polishes in Double64 (DoubleFloats.jl in the environment).
+bits_list() = [lowercase(strip(s)) == "double64" ? :double64 : parse(Int, s) for s in split(get(ENV, "GSN_AP_BITS", "113,256"), ",")]
+if :double64 in bits_list()
+    using DoubleFloats
+end
+_precision_bits(bits) = bits === :double64 ? 106 : bits
 
 # tag "a=2/5;l=2;m=2;n=8_1" -> (a::Rational, l, m, label)
 function parse_qnm_tag(tag::AbstractString)
@@ -62,14 +67,15 @@ function run_root(tag, ref, bits)
     derivative_ref = ref["dA_inc.h1e-15"]
     certified_root = Float64(real(ref["digits.independent_cold_MST120_CF100"]))
     certified_derivative = Float64(real(ref["digits.derivative_steps"]))
-    expected = bits * log10(2) - ACCEPTANCE_MARGIN_DIGITS
+    expected = _precision_bits(bits) * log10(2) - ACCEPTANCE_MARGIN_DIGITS
     t0 = time()
-    result = GSN.QNM.qnm_arbitrary_precision(a, -2, l, m, 0; bits=bits, guess=seed)
+    result = bits === :double64 ? GSN.QNM.qnm_arbitrary_precision(a, -2, l, m, 0; type=Double64, guess=seed) :
+        GSN.QNM.qnm_arbitrary_precision(a, -2, l, m, 0; bits=bits, guess=seed)
     dt = time() - t0
-    agreed_root = digits_agreed(result.omega, omega_ref)
-    agreed_derivative = digits_agreed(result.incidence_derivative_teukolsky, derivative_ref)
-    @printf("%-22s %4d bits  omega agreed %6.1f  expected %6.1f  reference %6.1f | dA_inc/domega agreed %6.1f  reference %6.1f | %d secant steps  %6.1f s\n",
-        tag, bits, agreed_root, expected, certified_root, agreed_derivative, certified_derivative, result.iterations, dt)
+    agreed_root = digits_agreed(Complex{BigFloat}(result.omega), omega_ref)
+    agreed_derivative = digits_agreed(Complex{BigFloat}(result.incidence_derivative_teukolsky), derivative_ref)
+    @printf("%-22s %s bits  omega agreed %6.1f  expected %6.1f  reference %6.1f | dA_inc/domega agreed %6.1f  reference %6.1f | %d secant steps  %6.1f s\n",
+        tag, bits === :double64 ? " d64" : @sprintf("%4d", bits), agreed_root, expected, certified_root, agreed_derivative, certified_derivative, result.iterations, dt)
     @test agreed_root >= min(expected, certified_root - 1)
     @test agreed_derivative >= min(expected, certified_derivative - 1)
 end

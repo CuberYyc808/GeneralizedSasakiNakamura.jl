@@ -382,7 +382,9 @@ digits, with the Teukolsky incidence derivative by central differences certified
 `test/arbitrary_precision/qnm_runtests.jl`), the polished frequencies agree to 30.7-34.8 digits at
 113 bits and the derivatives to 29.0-33.3; at 256 bits the two quick cases agree to 74.8-77.0 digits
 on the frequency and 53-57 on the derivative, beyond the reference's own certification. A polish
-costs 40-100 s at 113 bits and 5-8 min at 256 bits. Near the root the incidence amplitude vanishes by
+costs 5-15 s at 113 bits and 13-35 s at 256 bits; `type=Double64` (DoubleFloats.jl) polishes in that
+fixed-precision type to about 30 digits in a similar time (the complex-frequency routes keep their MST
+data in BigFloat). Near the root the incidence amplitude vanishes by
 nature, so the route is built in its root-search mode (the cancellation of the incidence numerator
 is not counted as a loss) and the secant estimates its own root error, |B_ref| tol / |dB_inc/domega|,
 tightening the route tolerance when that exceeds the requested one. Frequencies with negative real
