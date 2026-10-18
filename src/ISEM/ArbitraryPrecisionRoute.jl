@@ -209,8 +209,8 @@ precision), `N` the Taylor order of the patches (default: $(ORDER_PER_DIGIT) per
 digit, at least $(MINIMUM_ORDER); the endpoint series use 2N and 3N terms), `xm` the matching point in
 x (default 1/2). `infinity` selects the representation of the infinity side: `:series` (asymptotic
 series seeds continued by Taylor patches; exact only for real frequencies), `:mst` (the convergent
-MST series of ManoSuzukiTakasugiGeneric, evaluated at every requested point), or `:auto` (`:series`
-for real, `:mst` for complex frequencies). Negative real frequencies are built from the mirror mode
+MST series of ManoSuzukiTakasugiGeneric, evaluated at every requested point), or `:auto` (`:mst`,
+falling back to `:series` at a real frequency if the MST data cannot be built). Negative real frequencies are built from the mirror mode
 (m -> -m, omega -> -omega) and returned as a `ConjugatedRoute`. `max_rebuilds` caps the rebuilds that
 cover the measured cancellation of the matching (default $(MAX_REBUILDS)). `root_search=true` leaves
 the cancellation of the incidence numerator out of that measure: a root search evaluates the
@@ -221,7 +221,19 @@ function arbitrary_precision_route(params::GSNParameters, branch=:IN; N=nothing,
     route_branch = _normalized_branch(branch)
     iszero(params.omega) && throw(ArgumentError("the arbitrary-precision ISEM route requires a nonzero frequency."))
     infinity in (:auto, :series, :mst) || throw(ArgumentError("infinity must be :auto, :series or :mst."))
-    infinity_mode = infinity === :auto ? (isreal(params.omega) ? :series : :mst) : infinity
+    # :auto takes the MST side at every frequency (since the UP-series factors are stored, it is faster
+    # than the asymptotic series with its inward Taylor chain, 1.5-4 times at 256 bits, with the same
+    # digits); at a real frequency the asymptotic series remains the fallback should the MST data fail.
+    infinity_mode = infinity === :auto ? :mst : infinity
+    if infinity === :auto && isreal(params.omega)
+        try
+            return arbitrary_precision_route(params, branch; N, xm, tol, controls, infinity=:mst, max_rebuilds, root_search)
+        catch err
+            err isa ArgumentError && rethrow(err)
+            @debug "arbitrary-precision route: MST side failed at a real frequency, using the asymptotic series" exception=err
+            return arbitrary_precision_route(params, branch; N, xm, tol, controls, infinity=:series, max_rebuilds, root_search)
+        end
+    end
     # Re omega < 0 (real or complex): the principal-branch MST formulas are not on the physical sheet
     # there, so the route is built for the mirror mode (m, omega) -> (-m, -conj(omega)), whose
     # separation constant is conj(lambda), and complex-conjugated on evaluation.

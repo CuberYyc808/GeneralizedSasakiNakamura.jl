@@ -49,11 +49,14 @@ tables of the Float64 routes, evaluated in the working type.
   solution carries a generic error of that size, which the matching below amplifies. Evaluations of
   the stored series and the GSN-to-Teukolsky conversion run at the working precision as well (their
   sums cancel by the same factors), and the returned amplitudes and radial values keep it.
-- **Real frequencies.** The infinity side is the asymptotic series ``e^{\sigma/y} y^{\rho} \sum d_n y^n``
-  (``y = 1 - x``), optimally truncated at the largest ``y`` where a term falls below the tolerance,
-  and continued inward by Taylor patches. At 256 bits (77 digits) the IN and UP amplitude ratios of
-  ``a = 0.4, s = -2, l = m = 2, \omega = 1/2`` agree with the Black Hole Perturbation Toolkit
-  Teukolsky paclet to 74 digits.
+- **Real frequencies.** Two representations of the infinity side exist: the asymptotic series
+  ``e^{\sigma/y} y^{\rho} \sum d_n y^n`` (``y = 1 - x``), optimally truncated at the largest ``y`` where a
+  term falls below the tolerance and continued inward by Taylor patches (`infinity=:series`), and the
+  MST series below (`infinity=:mst`). Both give the same digits (at 256 bits the IN and UP amplitude
+  ratios of ``a = 0.4, s = -2, l = m = 2, \omega = 1/2`` agree with the Black Hole Perturbation Toolkit
+  Teukolsky paclet to 74 digits either way); the MST side is 1.5-4 times faster at 256 bits once its
+  series factors are stored, so `:auto` takes it at every frequency and keeps the asymptotic series as
+  the fallback at a real frequency.
 - **Complex frequencies.** The asymptotic series cannot define a single branch at infinity when
   ``\operatorname{Im}\omega \ne 0``: the truncated series leaves an admixture of the recessive
   solution of relative size ``e^{-2|\omega| r_0}`` at the seed radius ``r_0``, while the recessive
@@ -151,12 +154,14 @@ for the 113/256 run), all passing, with digits agreed of 14.1-19.4 at 64 bits (1
 of the mode ``-m`` and is not in the paclet references (see above); the exact point ``-i/10`` is a
 branch-cut point whose paclet value is a principal-value diagnostic, not a reference.
 
-The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. A route costs 0.3-2.4 s at 113 bits
-(3-6 s at ``\omega = 10`` with its three builds) and 1.5-5 s (real) or 9-24 s (complex frequency, MST
-side) at 256 bits; a Float64 route costs 0.4-0.8 ms, so the factor is about 1000 at 113 bits, the
-price of BigFloat arithmetic rather than of the algorithm. Evaluating a radial function costs 0.1-2 ms
-per point. The quasinormal frequencies of the ``(2, 2, 0)`` modes at ``a = 0.4`` and ``0.9`` polished
-at 128 bits agree with the 192-bit ones to 34 digits.
+The default tolerances are 64 ulps, i.e. 32.2 and 75.1 digits. With the MST side a route costs
+0.3-1.2 s at 113 bits (4-6 s at ``\omega = 10`` with its three builds) and 0.6-2.4 s at 256 bits, real or
+complex frequency alike (the asymptotic-series side costs 1.5-4 times more at 256 bits: 2.7-5.7 s); a
+Float64 route costs 0.4-0.8 ms, so the factor is about 500 at 113 bits, the price of BigFloat arithmetic
+rather than of the algorithm. Evaluating a radial function costs 0.2-0.5 ms per point inside the
+matching radius; the first evaluation beyond it builds the outward chain (1-5 s). A quasinormal-mode
+polish takes 15-40 s at 113 and 256 bits. The quasinormal frequencies of the ``(2, 2, 0)`` modes at
+``a = 0.4`` and ``0.9`` polished at 128 bits agree with the 192-bit ones to 34 digits.
 
 ## Precision bookkeeping
 
