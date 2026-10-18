@@ -37,6 +37,11 @@ amplitude by central differences at 120 digits (two step sizes agree to 38-45 di
 `qnm_runtests.jl` polishes the reference's binary64 seed with `QNM.qnm_arbitrary_precision` and
 compares the frequency and the derivative with the same pass rule.
 
+`nia_jump_runtests.jl` checks the jump across the negative imaginary axis: the two one-sided limits of
+the route at `omega = +-1e-30 - i sigma` against the analytic MST branch strength of the Float64 module,
+`B_inc(-delta) = B_inc(+delta) + i q B_ref(+delta)` with the reflection continuous (no paclet data
+involved; the strength is certified to about 1e-13, which sets the pass level).
+
 ## Running
 
 ```sh

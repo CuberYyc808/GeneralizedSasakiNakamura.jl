@@ -96,7 +96,13 @@ tables of the Float64 routes, evaluated in the working type.
   mirror mode), and they differ by O(1) already at ``\sigma = 0.1``. The Float64 rotated-contour
   route converges to both limits as ``\delta \to 0``; the paclet's principal branch, which is
   continuous across the axis, gives the ``+\delta`` value on both sides, so its values at
-  ``\operatorname{Re}\omega < 0`` are not references.
+  ``\operatorname{Re}\omega < 0`` are not references. The jump itself is the analytic MST one: with the
+  branch strength ``q`` of `mano_suzuki_takasugi_negative_imaginary_axis_jump` (a binary64 quantity
+  certified to about ``10^{-13}``), ``B_{\rm inc}(-\delta) = B_{\rm inc}(+\delta) + i q B_{\rm ref}(+\delta)``
+  in Teukolsky unit-transmission normalization holds to ``10^{-13}``-``10^{-16}`` and the reflection is
+  continuous to ``10^{-29}`` at 113 bits, for ``a = 0.4, 0.9``, ``(l, m) = (2, 2), (3, 1)``,
+  ``\sigma = 0.1, 0.5, 1`` (test/arbitrary_precision/nia_jump_runtests.jl); at ``\sigma = 3`` the Float64
+  strength is uncertified (``10^{-5}``-``10^{-7}``) and the relation holds to that accuracy.
 - **Horizon side.** The IN solution is always the horizon Frobenius series continued by Taylor
   patches (the "hybrid" of the design brief): at ``x = 1/2`` that side costs a few patches and a
   small fraction of the build, so a pure-MST IN solution (the hypergeometric series, whose convergence
