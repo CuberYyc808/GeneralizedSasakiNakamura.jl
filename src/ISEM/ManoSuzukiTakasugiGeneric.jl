@@ -240,24 +240,32 @@ function mst_generic_data(p::GSNParameters, nu; tol=nothing, N=nothing, nu_resid
     kappa = p.kappa
     tau = (eps_ - p.m * p.a) / kappa
     nu_c = C(nu)
-    count = N === nothing ? COEFFICIENT_CAP : Int(N)
-    ratios_R, ratios_L = _ratios(p, eps_, kappa, tau, nu_c, count, 60)
-    # f_n by products of the ratios; stop each side once the coefficients are far below the tolerance
-    # (the U factors and powers of 2 zhat can enhance a term by many orders of magnitude, hence the margin).
+    # f_n by products of the continued-fraction ratios; each side stops once the coefficients are far
+    # below the tolerance (the U factors and powers of 2 zhat can enhance a term by many orders of
+    # magnitude, hence the margin). The ratios come from a backward recursion that must start above the
+    # last term wanted, so the count is doubled from a small start until both sides have converged
+    # (computing them for the cap at once cost more than the rest of the MST data).
     margin = tolerance * ldexp(one(R), -40)
-    positive = C[]
-    f = one(C)
-    for n in 1:count
-        f *= ratios_R[n]
-        push!(positive, f)
-        N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
-    end
-    negative = C[]
-    f = one(C)
-    for n in 1:count
-        f *= ratios_L[n]
-        push!(negative, f)
-        N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
+    local positive, negative
+    count = N === nothing ? 2 * COEFFICIENT_MIN_TERMS : Int(N)
+    while true
+        ratios_R, ratios_L = _ratios(p, eps_, kappa, tau, nu_c, count, 60)
+        positive = C[]
+        f = one(C)
+        for n in 1:count
+            f *= ratios_R[n]
+            push!(positive, f)
+            N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
+        end
+        negative = C[]
+        f = one(C)
+        for n in 1:count
+            f *= ratios_L[n]
+            push!(negative, f)
+            N === nothing && abs(f) < margin && n >= COEFFICIENT_MIN_TERMS && break
+        end
+        (N !== nothing || (length(positive) < count && length(negative) < count) || count >= COEFFICIENT_CAP) && break
+        count = min(2count, COEFFICIENT_CAP)
     end
     nmin = -length(negative)
     nmax = length(positive)
