@@ -162,11 +162,13 @@ function _l_walk(eval_l, ls, threshold, minimum_consecutive::Int; deep = 0.0)
     stopped = false
     first_value = 0.0
     n_walked = 0
+    trail = Float64[]
     for l in ls
         last_l = l
         value = abs(eval_l(l))
         n_walked += 1
         n_walked == 1 && (first_value = value)
+        _push_trail!(trail, value)
         below_count = value <= threshold ? below_count + 1 : 0
         if below_count >= minimum_consecutive || _deep_stop(value, deep, threshold, walk_max)
             stopped = true
@@ -174,11 +176,30 @@ function _l_walk(eval_l, ls, threshold, minimum_consecutive::Int; deep = 0.0)
         end
         walk_max = max(walk_max, value)
     end
-    return (last_l = last_l, stopped = stopped, below_count = below_count, first_value = first_value)
+    return (last_l = last_l, stopped = stopped, below_count = below_count, first_value = first_value, trail = trail)
 end
 
-# True when an l walk ran off the end of ls with its last mode still above threshold: the l sum is truncated there.
-@inline _walk_ran_off(walk, ls) = !walk.stopped && !isempty(ls) && walk.last_l == last(ls) && walk.below_count == 0
+# Keeps the last three |values| of a walk, oldest first.
+_push_trail!(trail, value) = (push!(trail, abs(value)); length(trail) > 3 && popfirst!(trail); trail)
+
+# Tail beyond the last of the trailing |values|: v_last r / (1 - r), with r the mean ratio over the trail. When the
+# values do not decrease (rounding-level wiggles far below the cutoff, or a sum still rising at the cap), the tail
+# is bounded by `cap` more terms of the largest trailing value; a single value counts as one more such term.
+function _geometric_tail(trail, cap)
+    n = length(trail)
+    n == 0 && return 0.0
+    last_value = trail[end]
+    n == 1 && return last_value
+    first_value = trail[1]
+    r = first_value > 0 ? (last_value / first_value)^(1 / (n - 1)) : Inf
+    return r < 1 ? last_value * r / (1 - r) : cap * maximum(trail)
+end
+
+# A sum that reached its cap is truncated when its extrapolated tail exceeds tol times the running boundary total.
+_tail_hit(tail, tol, total) = tail > tol * abs(total)
+
+# Tail of one mode (both signs of m) beyond an l walk that ran off the end of ls without its stop rule; 0 otherwise.
+@inline _walk_tail(walk, ls) = !walk.stopped && !isempty(ls) && walk.last_l == last(ls) ? 2 * _geometric_tail(walk.trail, last(ls)) : 0.0
 
 # Modes more than this factor below the largest mode of their l walk are taken as zeros by symmetry
 # (e.g. every other l at a = 0, |flux| ~ 1e-35 next to neighbours of ~1e-7), not as a decaying tail.
@@ -197,21 +218,22 @@ const _STRUCTURAL_ZERO_RATIO = 1e-20
 # Horizon (from_bottom = true): Kerr horizon modes below the peak are not suppressed and often peak at lmin, so first
 # walk up from lmin as for k = 0; if that stops below the peak, walk down from the peak to where it stopped, then up
 # from the peak.
-# Returns true when the walk hit lmax with modes still above threshold (an ascending segment ran off the end of
-# lmax, or the peak lies beyond lmax and the mode at lmax is above threshold), i.e. the l sum is truncated.
+# Returns the extrapolated l tail (both signs of m) beyond lmax: the geometric tail of an ascending segment that ran
+# off the end of lmax, lmax times the mode at lmax when the peak lies beyond lmax and that mode is above threshold,
+# 0 otherwise.
 function _branch_l_walk(eval_l, lmin::Int, lpeak::Int, lmax::Int, threshold, minimum_consecutive::Int, from_bottom::Bool; deep = 0.0, search_threshold = threshold)
     top = min(lpeak, lmax + 1) - 1
     if from_bottom
         bottom = _l_walk(eval_l, lmin:lmax, search_threshold, minimum_consecutive)
-        bottom.stopped || return _walk_ran_off(bottom, lmin:lmax)
-        lpeak > bottom.last_l || return false
+        bottom.stopped || return _walk_tail(bottom, lmin:lmax)
+        lpeak > bottom.last_l || return 0.0
         down = _l_walk(eval_l, top:-1:(bottom.last_l + 1), search_threshold, minimum_consecutive)
         up = _l_walk(eval_l, lpeak:lmax, threshold, minimum_consecutive; deep=deep)
-        return _walk_ran_off(up, lpeak:lmax) || (lpeak > lmax && down.first_value > search_threshold)
+        return lpeak > lmax && down.first_value > search_threshold ? 2 * lmax * down.first_value : _walk_tail(up, lpeak:lmax)
     else
         up = _l_walk(eval_l, lpeak:lmax, threshold, minimum_consecutive; deep=deep)
         down = _l_walk(eval_l, top:-1:lmin, search_threshold, minimum_consecutive)
-        return _walk_ran_off(up, lpeak:lmax) || (lpeak > lmax && down.first_value > search_threshold)
+        return lpeak > lmax && down.first_value > search_threshold ? 2 * lmax * down.first_value : _walk_tail(up, lpeak:lmax)
     end
 end
 
@@ -1210,7 +1232,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             shell_m_horizon_angular = 0.0
             shell_m_horizon_carter = 0.0
             below_count_l = 0
-            last_l_energy = 0.0
+            l_trail = Float64[]
 
             for l in lmin:lmax
                 mode_inf = with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
@@ -1222,23 +1244,23 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 shell_m_infinity_carter += 2 * mode_inf["CarterConstantFlux"]
                 total_modes += 2
                 l_reached_inf = max(l_reached_inf, l)
-                last_l_energy = mode_inf["EnergyFlux"]
+                _push_trail!(l_trail, mode_inf["EnergyFlux"])
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_infinity_energy), _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
                 below_count_l = abs(mode_inf["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
                 if below_count_l >= minimum_consecutive
                     break
                 end
             end
-            # Truncated in l only when the walk ran to lmax and its last mode still matters for the k = 0 total;
-            # the cutoff inside the walk is relative to this m shell, so short walks at large m always end above it.
-            below_count_l == 0 && abs(last_l_energy) > tol * abs(shell_k_infinity_energy + shell_m_infinity_energy) && (lmax_hit_inf = true)
+            # A walk that ran to lmax is truncated when its extrapolated tail matters for the boundary total; the cutoff
+            # inside the walk is relative to this m shell, so short walks at large m always end above it.
+            below_count_l < minimum_consecutive && _tail_hit(2 * _geometric_tail(l_trail, lmax), tol, shell_k_infinity_energy + shell_m_infinity_energy) && (lmax_hit_inf = true)
 
             shell_k_infinity_energy += shell_m_infinity_energy
             shell_k_infinity_angular += shell_m_infinity_angular
             shell_k_infinity_carter += shell_m_infinity_carter
 
             below_count_l = 0
-            last_l_energy = 0.0
+            l_trail = Float64[]
             for l in lmin:lmax
                 mode_hor = with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
@@ -1249,16 +1271,16 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 shell_m_horizon_carter += 2 * mode_hor["CarterConstantFlux"]
                 total_modes += 2
                 l_reached_hor = max(l_reached_hor, l)
-                last_l_energy = mode_hor["EnergyFlux"]
+                _push_trail!(l_trail, mode_hor["EnergyFlux"])
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_horizon_energy), _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
                 below_count_l = abs(mode_hor["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
                 if below_count_l >= minimum_consecutive
                     break
                 end
             end
-            # Truncated in l only when the walk ran to lmax and its last mode still matters for the k = 0 total;
-            # the cutoff inside the walk is relative to this m shell, so short walks at large m always end above it.
-            below_count_l == 0 && abs(last_l_energy) > tol * abs(shell_k_horizon_energy + shell_m_horizon_energy) && (lmax_hit_hor = true)
+            # A walk that ran to lmax is truncated when its extrapolated tail matters for the boundary total; the cutoff
+            # inside the walk is relative to this m shell, so short walks at large m always end above it.
+            below_count_l < minimum_consecutive && _tail_hit(2 * _geometric_tail(l_trail, lmax), tol, shell_k_horizon_energy + shell_m_horizon_energy) && (lmax_hit_hor = true)
 
             shell_k_horizon_energy += shell_m_horizon_energy
             shell_k_horizon_angular += shell_m_horizon_angular
@@ -1294,7 +1316,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             below_count_l = 0
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-            l_hit = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
+            l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                 mode = with_submission_mode(scope; mode = (-2, l, 0, 0, k)) do mode_cache
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                 end
@@ -1306,7 +1328,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 total_modes += 2
                 mode["EnergyFlux"]
             end
-            lmax_hit_inf = lmax_hit_inf || l_hit
+            lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
 
             shell_k_infinity_energy += shell_m_infinity_energy
             shell_k_infinity_angular += shell_m_infinity_angular
@@ -1314,6 +1336,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             Max_flux = 0.0
             Max_m = 1
+            m_trail = Float64[]
             for m in 1:lmax
                 lmin = max(2, abs(m))
                 shell_m_infinity_energy = 0.0
@@ -1322,7 +1345,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                l_hit = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
+                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                     mode = with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end
@@ -1338,11 +1361,12 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     mode["EnergyFlux"]
                 end
-                lmax_hit_inf = lmax_hit_inf || l_hit
+                lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
 
                 shell_k_infinity_energy += shell_m_infinity_energy
                 shell_k_infinity_angular += shell_m_infinity_angular
                 shell_k_infinity_carter += shell_m_infinity_carter
+                _push_trail!(m_trail, shell_m_infinity_energy)
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_k_infinity_energy) > 0.1 * abs(shell_k_infinity_energy_last)) ? below_count_m + 1 : 0
@@ -1350,9 +1374,10 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     break
                 end
             end
-            below_count_m < minimum_consecutive && abs(shell_m_infinity_energy) > layer_threshold && (lmax_hit_inf = true)
+            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_infinity_energy + shell_k_infinity_energy) && (lmax_hit_inf = true)
 
             below_count_m = 0
+            m_trail = Float64[]
             for m in -1:-1:-lmax
                 lmin = max(2, abs(m))
                 shell_m_infinity_energy = 0.0
@@ -1361,7 +1386,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                l_hit = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
+                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                     mode = with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end
@@ -1373,11 +1398,12 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     total_modes += 2
                     mode["EnergyFlux"]
                 end
-                lmax_hit_inf = lmax_hit_inf || l_hit
+                lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
 
                 shell_k_infinity_energy += shell_m_infinity_energy
                 shell_k_infinity_angular += shell_m_infinity_angular
                 shell_k_infinity_carter += shell_m_infinity_carter
+                _push_trail!(m_trail, shell_m_infinity_energy)
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
@@ -1386,7 +1412,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     break
                 end
             end
-            below_count_m < minimum_consecutive && abs(shell_m_infinity_energy) > layer_threshold && (lmax_hit_inf = true)
+            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_infinity_energy + shell_k_infinity_energy) && (lmax_hit_inf = true)
 
             push!(Energy_flux_inf, shell_k_infinity_energy)
             push!(k_list_inf, k)
@@ -1416,7 +1442,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             below_count_l = 0
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-            l_hit = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
+            l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                 mode = with_submission_mode(scope; mode = (2, l, 0, 0, k)) do mode_cache
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                 end
@@ -1428,7 +1454,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 total_modes += 2
                 mode["EnergyFlux"]
             end
-            lmax_hit_hor = lmax_hit_hor || l_hit
+            lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
 
             shell_k_horizon_energy += shell_m_horizon_energy
             shell_k_horizon_angular += shell_m_horizon_angular
@@ -1436,6 +1462,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             Max_flux = 0.0
             Max_m = 1
+            m_trail = Float64[]
             for m in 1:lmax
                 lmin = max(2, abs(m))
                 shell_m_horizon_energy = 0.0
@@ -1444,7 +1471,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                l_hit = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
+                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                     mode = with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end
@@ -1460,11 +1487,12 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     mode["EnergyFlux"]
                 end
-                lmax_hit_hor = lmax_hit_hor || l_hit
+                lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
 
                 shell_k_horizon_energy += shell_m_horizon_energy
                 shell_k_horizon_angular += shell_m_horizon_angular
                 shell_k_horizon_carter += shell_m_horizon_carter
+                _push_trail!(m_trail, shell_m_horizon_energy)
 
                 # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
@@ -1473,9 +1501,10 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     break
                 end
             end
-            below_count_m < minimum_consecutive && abs(shell_m_horizon_energy) > layer_threshold && (lmax_hit_hor = true)
+            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_horizon_energy + shell_k_horizon_energy) && (lmax_hit_hor = true)
 
             below_count_m = 0
+            m_trail = Float64[]
             for m in -1:-1:-lmax
                 lmin = max(2, abs(m))
                 shell_m_horizon_energy = 0.0
@@ -1484,7 +1513,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                l_hit = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
+                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                     mode = with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end
@@ -1496,11 +1525,12 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     total_modes += 2
                     mode["EnergyFlux"]
                 end
-                lmax_hit_hor = lmax_hit_hor || l_hit
+                lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
 
                 shell_k_horizon_energy += shell_m_horizon_energy
                 shell_k_horizon_angular += shell_m_horizon_angular
                 shell_k_horizon_carter += shell_m_horizon_carter
+                _push_trail!(m_trail, shell_m_horizon_energy)
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
@@ -1509,7 +1539,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     break
                 end
             end
-            below_count_m < minimum_consecutive && abs(shell_m_horizon_energy) > layer_threshold && (lmax_hit_hor = true)
+            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_horizon_energy + shell_k_horizon_energy) && (lmax_hit_hor = true)
 
             push!(Energy_flux_hor, shell_k_horizon_energy)
             push!(k_list_hor, k)
@@ -1525,8 +1555,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             end
         end
 
-        kmax_hit_inf = k_reached_inf === nothing
-        kmax_hit_hor = k_reached_hor === nothing
+        # A k sum that ran to kmax is truncated when the geometric tail of its last three k shells matters.
+        kmax_hit_inf = k_reached_inf === nothing && _tail_hit(_geometric_tail(abs.(Energy_flux_inf[max(1, end - 2):end]), kmax), tol, total_infinity_energy)
+        kmax_hit_hor = k_reached_hor === nothing && _tail_hit(_geometric_tail(abs.(Energy_flux_hor[max(1, end - 2):end]), kmax), tol, total_horizon_energy)
         if warn_truncation && (lmax_hit_inf || lmax_hit_hor)
             @warn "Inclined mode summation hit lmax = $(lmax) with modes still above the cutoff: the l sum is truncated. Raise lmax." a p x lmax l_reached_inf l_reached_hor lmax_hit_inf lmax_hit_hor
         end
