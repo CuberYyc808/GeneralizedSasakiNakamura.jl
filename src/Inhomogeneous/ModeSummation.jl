@@ -646,7 +646,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_n_infinity_carter += shell_m_infinity_carter
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (shell_n_infinity_energy > min(0.1, exp(1 - 1 / e)) * shell_n_infinity_energy_last) ? below_count_m + 1 : 0
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
@@ -763,8 +763,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_n_horizon_angular += shell_m_horizon_angular
             shell_n_horizon_carter += shell_m_horizon_carter
 
+            # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (shell_n_horizon_energy > min(0.1, exp(1 - 1 / e)) * shell_n_horizon_energy_last) ? below_count_m + 1 : 0
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
 
                 break
@@ -1187,7 +1188,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 shell_k_infinity_carter += shell_m_infinity_carter
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (shell_k_infinity_energy > 0.1 * shell_k_infinity_energy_last) ? below_count_m + 1 : 0
+                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_k_infinity_energy) > 0.1 * abs(shell_k_infinity_energy_last)) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
@@ -1300,8 +1301,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 shell_k_horizon_angular += shell_m_horizon_angular
                 shell_k_horizon_carter += shell_m_horizon_carter
 
+                # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_horizon_energy) <= layer_threshold) && (shell_k_horizon_energy > 0.1 * shell_k_horizon_energy_last) ? below_count_m + 1 : 0
+                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_k_horizon_energy) > 0.1 * abs(shell_k_horizon_energy_last)) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
