@@ -408,6 +408,15 @@ _result_lmax_hit(result, lmax) = get(result, :lmax_hit_inf, false) || get(result
 _result_kmax_hit(result) = get(result, :kmax_hit_inf, false) || get(result, :kmax_hit_hor, false)
 _result_nmax_hit(result) = get(result, :nmax_hit_inf, false) || get(result, :nmax_hit_hor, false)
 
+# Mode memo of an automatic-cap run: a raised cap sums again over the same orbit, and the modes already computed
+# are taken from the memo instead of being solved again. Keyed by (s, l, m, n, k); task-local to the run.
+const _MODE_MEMO_KEY = :GSN_MODE_MEMO
+@inline function _memo_mode(f, key)
+    memo = get(task_local_storage(), _MODE_MEMO_KEY, nothing)
+    memo === nothing && return f()
+    return get!(f, memo, key)
+end
+
 # Run run(lmax, kmax, nmax, warn) with the start caps; when a cap came from :auto and the sum hit it, raise that cap
 # by half (lmax and kmax at most AUTO_CAP_MAX, nmax at most AUTO_NMAX_MAX) and sum again, at most
 # AUTO_CAP_MAX_RAISES times. Adds the caps to the result.
@@ -415,7 +424,9 @@ function _with_auto_caps(run, caps)
     L, Kc, Nc = caps.lmax, caps.kmax, caps.nmax
     auto = caps.auto_l || caps.auto_k || caps.auto_n
     raises = 0
-    result = run(L, Kc, Nc, !auto)
+    memo = auto ? Dict{NTuple{5, Int}, Any}() : nothing
+    runner(L, Kc, Nc, warn) = memo === nothing ? run(L, Kc, Nc, warn) : task_local_storage(() -> run(L, Kc, Nc, warn), _MODE_MEMO_KEY, memo)
+    result = runner(L, Kc, Nc, !auto)
     while auto && raises < AUTO_CAP_MAX_RAISES
         raise_l = caps.auto_l && L < AUTO_CAP_MAX && _result_lmax_hit(result, L)
         raise_k = caps.auto_k && Kc isa Integer && Kc < AUTO_CAP_MAX && _result_kmax_hit(result)
@@ -425,7 +436,7 @@ function _with_auto_caps(run, caps)
         raise_k && (Kc = min(AUTO_CAP_MAX, ceil(Int, 1.5Kc)))
         raise_n && (Nc = min(AUTO_NMAX_MAX, ceil(Int, 1.5Nc)))
         raises += 1
-        result = run(L, Kc, Nc, false)
+        result = runner(L, Kc, Nc, false)
     end
     if auto
         _result_lmax_hit(result, L) && @warn "Mode summation hit lmax = $(L) with modes still above the cutoff after $(raises) automatic raise(s): the l sum is truncated." lmax = L
@@ -731,7 +742,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
         use_levin = use_eccentric_tail_levin(s, m, n)
         floor = branch_mode_floor(s)
-        mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if use_levin
+        mode = _memo_mode((s, l, m, n, 0)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s)), zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
@@ -745,7 +756,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                     ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, cache = mode_cache)
                 end
             end
-        end; end
+        end; end; end
         get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
         get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
@@ -777,9 +788,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         below_count_l = 0
 
         for l in lmin:lmax
-            mode = with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
+            mode = _memo_mode((-2, l, m, 0, 0)) do; with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, -2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-            end
+            end; end
             _record_current_mode!(record_h5, record, "I", 0, m, l, mode_index, mode, N)
             shell_m_infinity_energy += 2 * mode["EnergyFlux"]
             shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -813,9 +824,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         below_count_l = 0
 
         for l in lmin:lmax
-            mode = with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
+            mode = _memo_mode((2, l, m, 0, 0)) do; with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, 2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-            end
+            end; end
             _record_current_mode!(record_h5, record, "H", 0, m, l, mode_index, mode, N)
             shell_m_horizon_energy += 2 * mode["EnergyFlux"]
             shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1245,12 +1256,12 @@ function _inclined_mode_flux_scoped(scope, a, p, x, l, m, k; K = 16, Kmax = 2^12
 
     KG = submission_orbit!(scope)
     KG_sample = submission_master!(scope)
-    flux_inf = with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
+    flux_inf = _memo_mode((-2, l, m, 0, k)) do; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; Kmax = Kmax, sample_tol = sample_tol, cache = mode_cache)
-    end
-    flux_hor = with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
+    end; end
+    flux_hor = _memo_mode((2, l, m, 0, k)) do; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; Kmax = Kmax, sample_tol = sample_tol, cache = mode_cache)
-    end
+    end; end
     return (
         l = l,
         m = m,
@@ -1375,9 +1386,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 l_trail = Float64[]
 
                 for l in lmin:lmax
-                    mode_inf = with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
+                    mode_inf = _memo_mode((-2, l, m, 0, 0)) do; with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "I", 0, m, l, mode_index, mode_inf, K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1410,9 +1421,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
                 l_trail = Float64[]
                 for l in lmin:lmax
-                    mode_hor = with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
+                    mode_hor = _memo_mode((2, l, m, 0, 0)) do; with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "H", 0, m, l, mode_index, mode_hor, K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1476,9 +1487,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                mode = with_submission_mode(scope; mode = (-2, l, 0, 0, k)) do mode_cache
+                mode = _memo_mode((-2, l, 0, 0, k)) do; with_submission_mode(scope; mode = (-2, l, 0, 0, k)) do mode_cache
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                end
+                end; end
                 _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                 get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1509,9 +1520,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
+                    mode = _memo_mode((-2, l, m, 0, k)) do; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1553,9 +1564,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
+                    mode = _memo_mode((-2, l, m, 0, k)) do; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1611,9 +1622,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                mode = with_submission_mode(scope; mode = (2, l, 0, 0, k)) do mode_cache
+                mode = _memo_mode((2, l, 0, 0, k)) do; with_submission_mode(scope; mode = (2, l, 0, 0, k)) do mode_cache
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                end
+                end; end
                 _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                 get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1644,9 +1655,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
+                    mode = _memo_mode((2, l, m, 0, k)) do; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1689,9 +1700,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
+                    mode = _memo_mode((2, l, m, 0, k)) do; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                    end
+                    end; end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1928,7 +1939,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
                         levin_local_n, levin_max_depth, levin_nmin))
             floor = branch_mode_floor(s)
-            mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if fast
+            mode = _memo_mode((s, l, m, n, k)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if fast
                 if use_levin
                     levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux))
                     levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
@@ -1944,7 +1955,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
                     ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
-            end; end
+            end; end; end
             get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
             get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
             ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
