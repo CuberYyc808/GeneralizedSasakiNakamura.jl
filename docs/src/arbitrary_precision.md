@@ -137,8 +137,10 @@ tables of the Float64 routes, evaluated in the working type.
   precision raised by ``2|\operatorname{Im}\omega|(r^*_{\rm end} - r^*_m)/\ln 2`` bits so that the
   branch that decays outward keeps the tolerance despite the admixture of the growing one that
   rounding leaves; a request beyond the chain extends it on demand, to twice the distance from the
-  matching radius, at a precision raised by the growth over the new stretch. A radial function is
-  then evaluated in about a millisecond per point at 113 bits wherever it is requested.
+  matching radius, at a precision raised by the growth over the new stretch, as long as the point lies
+  within 60 radians of phase of the matching radius and the extension costs at most 64 extra bits;
+  farther out the MST series are summed directly at the point (about 0.1 s per point at 256 bits).
+  Inside the chain a radial function is evaluated in a fraction of a millisecond per point.
 - **Conditioning with respect to the inputs.** `BigFloat("0.4")` at ``N`` bits is not 4/10; the
   route solves the problem defined by the rounded inputs exactly to its tolerance, and a quantity
   that is ill-conditioned with respect to ``a`` and ``\omega`` (an incidence amplitude in the strongly

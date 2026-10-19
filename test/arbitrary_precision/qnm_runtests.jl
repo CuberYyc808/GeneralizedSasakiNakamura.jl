@@ -28,7 +28,8 @@ end
 const GSN = GeneralizedSasakiNakamura
 include(joinpath(@__DIR__, "bhpt_references.jl"))
 
-const QNM_REFERENCE = joinpath(@__DIR__, "references", "qnm_reference.txt")
+# GSN_AP_QNM_REFERENCE=<file> uses another reference file of the same format (e.g. a larger benchmark set).
+const QNM_REFERENCE = get(ENV, "GSN_AP_QNM_REFERENCE", joinpath(@__DIR__, "references", "qnm_reference.txt"))
 const ACCEPTANCE_MARGIN_DIGITS = 6
 
 # Working precisions: integers are BigFloat bits; "double64" polishes in Double64 (DoubleFloats.jl in the environment).

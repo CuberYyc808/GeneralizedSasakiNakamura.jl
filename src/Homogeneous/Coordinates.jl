@@ -119,6 +119,37 @@ function rstar_from_r(a, r)
     return rstar_from_rp(a, r-rp)
 end
 
+"""
+    horizon_distance_from_rstar(a, rstar)
+
+The distance h = r - r_+ from the outer horizon at the tortoise coordinate `rstar`, with its full relative
+precision also deep in the horizon region, where r = r_+ + h cannot hold it (at r* = -200 and a = 0.9,
+h = 4e-27). Newton's method on u = log h, with drstar/du = h (r^2 + a^2) / Delta, from the binary64 root,
+or from the leading behaviour rstar ~ r_+ + A log(h/2) - B log((r_+ - r_-)/2) where that underflows.
+"""
+function horizon_distance_from_rstar(a, rstar)
+    T = promote_type(typeof(float(rstar)), typeof(float(a)))
+    rp = r_plus(a)
+    rm = r_minus(a)
+    A = 2 * rp / (rp - rm)
+    B = 2 * rm / (rp - rm)
+    # binary64 start where it is meaningful (the binary64 inversion is a bisection on (0, 1.4) for r* <= 0
+    # and cannot resolve h below about 1e-16), the leading behaviour otherwise
+    u = Float64(rstar) > -30 ? log(T(r_from_rstar(Float64(a), Float64(rstar)) - Float64(r_plus(Float64(a))))) :
+        (T(rstar) - rp + B * log((rp - rm) / 2)) / A + log(T(2))
+    for _ in 1:400
+        h = exp(u)
+        r = rp + h
+        # Delta = h (h + r_+ - r_-), in factored form: r^2 - 2r + a^2 cancels to noise when h is below
+        # the precision of r_+
+        step = (rstar_from_rp(a, h) - rstar) * (h + rp - rm) / (r^2 + a^2)
+        # the residual is monotone in u; a step longer than 10 (a factor e^10 in h) is damped
+        u -= clamp(step, -T(10), T(10))
+        abs(step) <= 4 * eps(T) * max(abs(u), one(T)) && break
+    end
+    return exp(u)
+end
+
 @doc raw"""
     r_from_rstar(a, rstar)
 
@@ -141,20 +172,10 @@ function r_from_rstar(a, rstar)
     # The root-finding algorithm might try a negative x, which is not allowed
     # We rectify this by taking an absolute value, i.e. we solve for distance from rp
     f(x) = rstar_from_rp(a, abs(x)) - rstar
-    # Beyond binary64 (BigFloat rstar or a): start from the binary64 root and polish it by
-    # Newton's method in the wider type, with drstar/dh = (r^2 + a^2) / Delta.
+    # Beyond binary64 (BigFloat rstar or a): through the distance from the horizon, below.
     T = promote_type(typeof(float(rstar)), typeof(float(a)))
     if !(T <: Union{Float16,Float32,Float64})
-        h = T(r_from_rstar(Float64(a), Float64(rstar)) - Float64(r_plus(Float64(a))))
-        h = max(h, eps(T))
-        for _ in 1:16
-            r = rp + h
-            step = (rstar_from_rp(a, h) - rstar) * Delta(a, r) / (r^2 + a^2)
-            h -= step
-            h > 0 || error("tortoise inversion stepped to a nonpositive distance from the horizon")
-            abs(step) <= 4 * eps(T) * max(h, one(T)) && break
-        end
-        return rp + h
+        return rp + horizon_distance_from_rstar(a, rstar)
     end
     if rstar <= 0
         #=

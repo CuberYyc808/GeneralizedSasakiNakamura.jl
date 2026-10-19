@@ -307,8 +307,39 @@ _integer_distance(b) = abs(b - round(real(b)))
 const U_CANCELLATION_MARGIN_BITS = 32
 const U_MAX_ATTEMPTS = 6
 
+# Large argument: the asymptotic expansion U(a, b, z) ~ z^(-a) sum_k (a)_k (a-b+1)_k / (k! (-z)^k)
+# (DLMF 13.7.3, |ph z| < 3 pi / 2), whose smallest term is about exp(-|z|) times the parameter growth.
+# The Kummer series would need about |z| terms at |z| / ln 2 extra bits (four million terms at r = 1e6),
+# so the expansion is tried first when |z| exceeds the bits of the precision; it is accepted when a
+# term falls below the tolerance before the terms start to grow, and the Kummer route is used otherwise.
+const U_ASYMPTOTIC_MIN_Z_PER_BIT = 0.8
+function _tricomi_U_asymptotic(a::Complex{BigFloat}, b::Complex{BigFloat}, z::Complex{BigFloat}, bits::Int)
+    value = setprecision(BigFloat, bits + U_GUARD_BITS) do
+        aa = Complex{BigFloat}(a); bb = Complex{BigFloat}(b); zz = Complex{BigFloat}(z)
+        threshold = ldexp(one(BigFloat), -(bits + 8))
+        c = aa - bb + 1
+        term = one(Complex{BigFloat})
+        total = term
+        previous = abs(term)
+        for k in 0:200000
+            term *= (aa + k) * (c + k) / ((k + 1) * (-zz))
+            magnitude = abs(term)
+            magnitude > previous && return nothing             # diverging before reaching the tolerance
+            total += term
+            magnitude <= threshold * abs(total) && return zz^(-aa) * total
+            previous = magnitude
+        end
+        nothing
+    end
+    return value === nothing ? nothing : Complex{BigFloat}(value)
+end
+
 function _tricomi_U(a::Complex{BigFloat}, b::Complex{BigFloat}, z::Complex{BigFloat})
     bits = precision(BigFloat)
+    if Float64(abs(z)) >= U_ASYMPTOTIC_MIN_Z_PER_BIT * bits && abs(angle(z)) < 0.95 * _pi(z)
+        asymptotic = _tricomi_U_asymptotic(a, b, z, bits)
+        asymptotic === nothing || return asymptotic
+    end
     distance = Float64(_integer_distance(b))
     distance > 0 || error("MST generic: Tricomi U with an integer second parameter is not implemented.")
     extra = ceil(Int, 1.5 * Float64(abs(z))) + U_GUARD_BITS + ceil(Int, max(0.0, -log2(distance)))

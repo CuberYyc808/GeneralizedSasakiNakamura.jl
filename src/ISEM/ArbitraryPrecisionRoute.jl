@@ -15,7 +15,7 @@
 # ManoSuzukiTakasugiGeneric.
 module ArbitraryPrecisionRoute
 
-using ...Coordinates: r_from_rstar, rstar_from_r
+using ...Coordinates: r_from_rstar, rstar_from_r, horizon_distance_from_rstar
 using ...ConversionFactors
 using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
 using ..Parameters: GSNParameters, GSNControls, gsn_controls, is_binary64_parameters
@@ -538,6 +538,22 @@ end
 
 # Guard bits of the outward MST chains above the loss of the decaying branch along them.
 const MST_CHAIN_GUARD_BITS = 16
+# Reach of the outward chains: a chain costs a patch per fraction of a wavelength and, at complex
+# frequency, 2 |Im omega| / ln 2 extra bits per unit of r*; beyond MST_CHAIN_MAX_PHASE radians of phase
+# from the matching radius or MST_CHAIN_MAX_LOSS_BITS extra bits the MST series are summed directly at the
+# requested point instead (about 0.1 s per point at 256 bits, against minutes for a chain to r = 1000 at
+# omega = 0.5 - 0.3i, whose precision would grow by 900 bits).
+const MST_CHAIN_MAX_PHASE = 60.0
+const MST_CHAIN_MAX_LOSS_BITS = 64.0
+
+function _chain_worthwhile(route::ArbitraryPrecisionRadialRoute, x)
+    p = route.params
+    r_m = r_from_x(p, route.match_x)
+    r = r_from_x(p, x)
+    phase = Float64(abs(p.omega)) * Float64(r - r_m)
+    loss = 2 * Float64(abs(imag(p.omega))) * Float64(rstar_from_r(p.a, r) - rstar_from_r(p.a, r_m)) / log(2)
+    return phase <= MST_CHAIN_MAX_PHASE && loss <= MST_CHAIN_MAX_LOSS_BITS
+end
 
 # Extend the outward Taylor chain of an MST branch so that it covers x_target: from the end state of
 # the chain (or the MST state at the matching point), to at least twice the present distance from
@@ -797,6 +813,7 @@ function _infinity_branch_state(route::ArbitraryPrecisionRadialRoute, which::Sym
     if expansion isa MSTInfinityBranch
         if isempty(patches) || x > _chain_range(patches)[2] + 8 * eps(typeof(x))
             x < one(x) - _real_type(route.params)(1 // 2^20) || return _infinity_state(expansion, x)
+            _chain_worthwhile(route, x) || return _infinity_state(expansion, x)
             _extend_mst_chain!(route, which, x)
         end
         state = _patch_state(patches, x)
@@ -887,13 +904,17 @@ end
 struct GSNStateEvaluator{Rt}
     route::Rt
 end
+# The compact coordinate is formed from the distance to the horizon, x = h / (h + r_+ - r_-), so that
+# deep in the horizon region (r* -> -infinity) x keeps its relative precision; through r = r_+ + h it
+# would keep only the digits of r beyond those of r_+.
 function (e::GSNStateEvaluator)(rs)
     return _at_working_precision(e.route) do
         p = e.route.params
         R = _real_type(p)
-        r = r_from_rstar(p.a, R(rs))
-        X, dXdrstar = route_state_r(e.route, r)
-        (X, dXdrstar, zero(R))
+        h = horizon_distance_from_rstar(p.a, R(rs))
+        x = h / (h + r_plus(p) - r_minus(p))
+        X, dXdx = _route_state(e.route, x)
+        (X, dXdx * dx_drstar(p, x, r_plus(p) + h), zero(R))
     end
 end
 
