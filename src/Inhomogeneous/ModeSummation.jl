@@ -1229,7 +1229,7 @@ function _inclined_mode_flux_scoped(scope, a, p, x, l, m, k; K = 16, Kmax = 2^12
             zero_flux = (energy_flux = 0.0, angular_momentum_flux = 0.0, carter_constant_flux = 0.0)
             return (l = l, m = m, k = k, infinity = zero_flux, horizon = zero_flux)
         end
-        mode = circular_mode_flux(x == -1.0 ? -a : a, p, l, m; submission = x == -1.0 ? nothing : scope, stop_requested = x == -1.0 ? (() -> _mode_flux_parent_stop_requested(scope)) : nothing, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        mode = circular_mode_flux(a, p, l, m; x = x, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
         return (l = l, m = m, k = k, infinity = mode.infinity, horizon = mode.horizon)
     end
 
@@ -1274,7 +1274,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
-        return circular_mode_summation(x == -1.0 ? -a : a, p; tol = tol, lmax = lmax, min_consecutive = minimum_consecutive, submission = x == -1.0 ? nothing : scope, stop_requested = x == -1.0 ? (() -> _mode_flux_parent_stop_requested(scope)) : nothing, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return circular_mode_summation(a, p; x = x, tol = tol, lmax = lmax, min_consecutive = minimum_consecutive, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
 
     kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
@@ -1798,7 +1798,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
-        return eccentric_mode_summation(x == -1.0 ? -a : a, p, e; N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, submission = x == -1.0 ? nothing : scope, stop_requested = x == -1.0 ? (() -> _mode_flux_parent_stop_requested(scope)) : nothing, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
     if e == 0.0
         return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, submission = isequal(e, 0.0) ? scope : nothing, stop_requested = isequal(e, 0.0) ? nothing : (() -> _mode_flux_parent_stop_requested(scope)), lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
