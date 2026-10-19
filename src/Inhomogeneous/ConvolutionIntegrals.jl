@@ -1252,9 +1252,38 @@ end
 # The Carter average has its own polar resolution, independent of the mode grid.
 const GENERIC_CARTER_MIN_INTERVALS = 64
 
+# <Lz cot^2 theta> over the polar Mino cycle of a generic orbit, exactly: the polar part of Upsilon_phi is
+# <Lz / sin^2 theta> - a E, so <Lz / sin^2 theta> = Upsilon_phi + a E - <Phi_r>_r with
+# Phi_r = a (E (r^2 + a^2) - a Lz) / Delta averaged over the smooth radial cycle. A trapezoid of Lz cot^2 theta
+# misses the spike of width ~x near the pole of a nearly polar orbit. Cached in the sample Dict.
+function _generic_lz_cot2_average(KG_samp::Dict)
+    cached = get(KG_samp, "LzCot2Average", nothing)
+    cached === nothing || return cached
+    a = KG_samp["a"]
+    E = KG_samp["E"]
+    Lz = KG_samp["Lz"]
+    value = if iszero(Lz)
+        0.0
+    else
+        F = KG_samp["Frequencies"]
+        r_of = KG_samp["Trajectory"][2]
+        qr0 = KG_samp["InitialPhases"][2]
+        qr = range(0, pi; length = 257)
+        Φr = map(qr) do q
+            r = r_of((q - qr0) / F["ϒr"])
+            a * (E * (r^2 + a^2) - a * Lz) / (r^2 - 2r + a^2)
+        end
+        Φr_mean = (sum(Φr) - (first(Φr) + last(Φr)) / 2) / (length(Φr) - 1)
+        F["ϒϕ"] + a * E - Φr_mean - Lz
+    end
+    KG_samp["LzCot2Average"] = value
+    return value
+end
+
 function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
+    lz_cot2 = _generic_lz_cot2_average(KG_samp)
     if length(KG_samp["θ"]) - 1 >= GENERIC_CARTER_MIN_INTERVALS
-        return _generic_carter_factor_sample(KG_samp, m, omega)
+        return _generic_carter_factor_sample(KG_samp, m, omega; lz_cot2)
     end
     theta = KG_samp["Trajectory"][3]
     theta_phase = KG_samp["InitialPhases"][3]
@@ -1265,7 +1294,7 @@ function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
         "a" => KG_samp["a"], "E" => KG_samp["E"], "Lz" => KG_samp["Lz"],
         "θ" => theta_values,
     )
-    return _generic_carter_factor_sample(carter_sample, m, omega)
+    return _generic_carter_factor_sample(carter_sample, m, omega; lz_cot2)
 end
 
 function _phase_vector_exp!(out::Vector{ComplexF64}, base_omega::Float64, freq_vec::Vector{Float64}, mode_index::Int, q_vec::Vector{Float64}, fixed_phase::Vector{ComplexF64})
@@ -1285,18 +1314,18 @@ function _phase_vector_recurrence!(out::Vector{ComplexF64}, base_omega::Float64,
     return out
 end
 
-@inline function _generic_carter_factor(cache::GenericM2MCache, omega::Float64)
+# m <Lz cot^2 theta> (exact, from _generic_lz_cot2_average) - a^2 omega E <cos^2 theta> (trapezoid, smooth).
+@inline function _generic_carter_factor(cache::GenericM2MCache, omega::Float64, lz_cot2::Float64)
     total = 0.0
     a2ωE = cache.a * cache.a * omega * cache.E
-    mLz = cache.m * cache.Lz
     @inbounds for j in 1:cache.K
         ct2 = cache.ct[j] * cache.ct[j]
-        total += cache.wtheta[j] * ((iszero(mLz) ? 0.0 : mLz * ct2 * cache.invst2[j]) - a2ωE * ct2) / pi
+        total -= cache.wtheta[j] * a2ωE * ct2 / pi
     end
-    return total
+    return total + cache.m * lz_cot2
 end
 
-@inline function _generic_carter_factor_sample(KG_samp::Dict, m::Int, omega::Float64)
+@inline function _generic_carter_factor_sample(KG_samp::Dict, m::Int, omega::Float64; lz_cot2 = _generic_lz_cot2_average(KG_samp))
     theta = KG_samp["θ"]::Vector{Float64}
     K = length(theta)
     K <= 1 && return 0.0
@@ -1311,9 +1340,9 @@ end
         st = sin(theta[j])
         ct = cos(theta[j])
         weight = (j == 1 || j == K) ? 0.5 * dθ : dθ
-        total += weight * ((iszero(mLz) ? 0.0 : mLz * ct * ct / (st * st)) - a2ωE * ct * ct) / pi
+        total -= weight * a2ωE * ct * ct / pi
     end
-    return total
+    return total + m * lz_cot2
 end
 
 function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, n::Int, k::Int; recurrence_phase::Bool = true, new_only::Bool = false)
@@ -1651,7 +1680,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
     carter_factor = if K < GENERIC_CARTER_MIN_INTERVALS
         _generic_carter_factor_min_grid(KG_samp, m, ω)
     else
-        _generic_carter_factor(_cached_m2_mcache!(cache, KG_samp, m), ω)
+        _generic_carter_factor(_cached_m2_mcache!(cache, KG_samp, m), ω, _generic_lz_cot2_average(KG_samp))
     end
     res = Dict(
         "Amplitude" => integral,
