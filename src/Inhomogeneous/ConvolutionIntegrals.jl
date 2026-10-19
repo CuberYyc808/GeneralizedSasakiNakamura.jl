@@ -861,11 +861,11 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
     theta_odd_derivative(f, q) = q >= π / 2 ? f(q) : f(π - q)
 
     r_vals = GridSampling._phase_values(r, qr_vals, qr0, ϒr)
-    θ_vals = GridSampling._phase_values(θ, qθ_vals, qθ0, ϒθ)
-    ur_fwd = GridSampling._radial_phase_rates(ur, θ, qr_vals, r_vals, a, qr0, ϒr)
+    θ_vals = GridSampling._polar_values(θ, qθ_vals, qθ0, ϒθ)
+    ur_fwd = GridSampling._radial_phase_rates(ur, θ, qr_vals, r_vals, a, qr0, ϒr; constants = GridSampling._theta_constants(KG_in))
     qθ_rates = map(q -> q >= π / 2 ? q : π - q, qθ_vals)
-    θ_rates = GridSampling._phase_values(θ, qθ_rates, qθ0, ϒθ)
-    uθ_fwd = GridSampling._polar_phase_rates(uθ, r, qθ_rates, θ_rates, a, qθ0, ϒθ)
+    θ_rates = GridSampling._polar_values(θ, qθ_rates, qθ0, ϒθ)
+    uθ_fwd = GridSampling._polar_phase_rates(uθ, r, qθ_rates, θ_rates, a, qθ0, ϒθ; constants = GridSampling._theta_constants(KG_in))
 
     return Dict{String, Any}(
         "qr" => qr_vals,
@@ -1227,7 +1227,7 @@ function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
     theta_phase = KG_samp["InitialPhases"][3]
     theta_frequency = KG_samp["Frequencies"]["ϒθ"]
     qtheta = collect(range(0, pi; length = GENERIC_CARTER_MIN_INTERVALS + 1))
-    theta_values = GridSampling._phase_values(theta, qtheta, theta_phase, theta_frequency)
+    theta_values = GridSampling._polar_values(theta, qtheta, theta_phase, theta_frequency)
     carter_sample = Dict(
         "a" => KG_samp["a"], "E" => KG_samp["E"], "Lz" => KG_samp["Lz"],
         "θ" => theta_values,
@@ -1258,7 +1258,7 @@ end
     mLz = cache.m * cache.Lz
     @inbounds for j in 1:cache.K
         ct2 = cache.ct[j] * cache.ct[j]
-        total += cache.wtheta[j] * (mLz * ct2 * cache.invst2[j] - a2ωE * ct2) / pi
+        total += cache.wtheta[j] * ((iszero(mLz) ? 0.0 : mLz * ct2 * cache.invst2[j]) - a2ωE * ct2) / pi
     end
     return total
 end
@@ -1278,7 +1278,7 @@ end
         st = sin(theta[j])
         ct = cos(theta[j])
         weight = (j == 1 || j == K) ? 0.5 * dθ : dθ
-        total += weight * (mLz * ct * ct / (st * st) - a2ωE * ct * ct) / pi
+        total += weight * ((iszero(mLz) ? 0.0 : mLz * ct * ct / (st * st)) - a2ωE * ct * ct) / pi
     end
     return total
 end

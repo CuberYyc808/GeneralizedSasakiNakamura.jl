@@ -1887,7 +1887,8 @@ function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
 end
 
 
-_pointparticle_float(a, p, e, x) = (Float64(a), Float64(p), Float64(e), Float64(x))
+# x = -0.0 is the same polar orbit as x = +0.0; normalize it so that the retrograde branches are not taken.
+_pointparticle_float(a, p, e, x) = (Float64(a), Float64(p), Float64(e), iszero(x) ? 0.0 : Float64(x))
 
 """
     with_pointparticle_submission(f, a, p, e, x; Nmax=2^14, Kmax=2^12, stop_requested=nothing, lifecycle_observer=nothing)

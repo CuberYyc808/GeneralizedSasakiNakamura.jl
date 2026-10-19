@@ -305,7 +305,7 @@ function _generic_m2_geometry(KG_samp::Dict)
         ct[j] = ctj
         invst[j] = invstj
         invst2[j] = invst2j
-        termM[j] = im * stj * (a * E - Lz * invst2j)
+        termM[j] = im * stj * (a * E - (iszero(Lz) ? 0.0 : Lz * invst2j))
     end
     rho = Matrix{ComplexF64}(undef, N, K)
     rhobar = Matrix{ComplexF64}(undef, N, K)

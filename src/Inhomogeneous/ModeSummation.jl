@@ -135,12 +135,12 @@ end
 
 # At a = 0 an inclined orbit is a rotated equatorial one: mode (l, m, k) carries E_eq(l, j) |d^l_{m,j}|^2 with
 # |j| = |m + sign(x) k|, so the l spectrum of a k != 0 branch vanishes below and peaks at l = |j|.
-@inline _branch_peak_l(lmin::Int, m::Int, k::Int, x) = max(lmin, abs(m + (x < 0 ? -k : k)))
+@inline _branch_peak_l(lmin::Int, m::Int, k::Int, x) = max(lmin, abs(m + (signbit(x) ? -k : k)))
 
 # For fixed k the same rotation gives |j| = |m + sign(x) k|, which falls to 0 at m* = -sign(x) k (where omega ~ 0 and
 # the shells are tiny) and rises again past it. On the side of m* an m branch counts toward the m-shell streak only
 # once it is past the mirror image of m = 0 about m*, |m| >= 2|k|.
-@inline _before_m_peak(m::Int, k::Int, x) = m * (x < 0 ? k : -k) > 0 && abs(m) < 2 * abs(k)
+@inline _before_m_peak(m::Int, k::Int, x) = m * (signbit(x) ? k : -k) > 0 && abs(m) < 2 * abs(k)
 
 # Eccentric shells and the k = 0 shells of generic orbits: omega = (m Ups_phi + n Ups_r) / Ups_t vanishes at
 # m* = -n Ups_r / Ups_phi, where the m shells are tiny, and the modes past it (the lower sideband) carry flux again:
@@ -743,6 +743,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                 end
             end
         end
+        ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
         _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, 0, mode["EnergyFlux"])
         mode
     end
@@ -1919,6 +1920,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
             end
+            ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
             _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
         end
