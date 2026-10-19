@@ -1195,6 +1195,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     l_reached_hor = 0
     lmax_hit_inf = false
     lmax_hit_hor = false
+    # Near-static modes recorded as zero after a matching overflow (see ConvolutionIntegrals.NEAR_STATIC_RATIO).
+    near_static_zero_inf = 0
+    near_static_zero_hor = 0
 
     mode_index = Ref(0)
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
@@ -1239,6 +1242,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
                 end
                 _record_current_mode_inclined!(record_h5, record, "I", 0, m, l, mode_index, mode_inf, K)
+                get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                 shell_m_infinity_energy += 2 * mode_inf["EnergyFlux"]
                 shell_m_infinity_angular += 2 * mode_inf["AngularMomentumFlux"]
                 shell_m_infinity_carter += 2 * mode_inf["CarterConstantFlux"]
@@ -1266,6 +1270,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
                 end
                 _record_current_mode_inclined!(record_h5, record, "H", 0, m, l, mode_index, mode_hor, K)
+                get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                 shell_m_horizon_energy += 2 * mode_hor["EnergyFlux"]
                 shell_m_horizon_angular += 2 * mode_hor["AngularMomentumFlux"]
                 shell_m_horizon_carter += 2 * mode_hor["CarterConstantFlux"]
@@ -1321,6 +1326,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                 end
                 _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
+                get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                 l_reached_inf = max(l_reached_inf, l)
                 shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                 shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1350,6 +1356,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
+                    get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     l_reached_inf = max(l_reached_inf, l)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1391,6 +1398,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
+                    get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     l_reached_inf = max(l_reached_inf, l)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1447,6 +1455,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                 end
                 _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
+                get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                 l_reached_hor = max(l_reached_hor, l)
                 shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                 shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1476,6 +1485,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
+                    get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     l_reached_hor = max(l_reached_hor, l)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1518,6 +1528,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
+                    get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     l_reached_hor = max(l_reached_hor, l)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1578,6 +1589,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             record_h5["meta/l_reached_hor"] = l_reached_hor
             record_h5["meta/lmax_hit_inf"] = lmax_hit_inf
             record_h5["meta/lmax_hit_hor"] = lmax_hit_hor
+            record_h5["meta/near_static_zero_inf"] = near_static_zero_inf
+            record_h5["meta/near_static_zero_hor"] = near_static_zero_hor
             record_h5["meta/total_modes"] = total_modes
             record_h5["meta/infinity_energy_flux_list"] = Energy_flux_inf
             record_h5["meta/horizon_energy_flux_list"] = Energy_flux_hor
@@ -1605,6 +1618,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             lmax_hit_hor = lmax_hit_hor,
             kmax_hit_inf = kmax_hit_inf,
             kmax_hit_hor = kmax_hit_hor,
+            near_static_zero_inf = near_static_zero_inf,
+            near_static_zero_hor = near_static_zero_hor,
             infinity_energy_flux_list = Energy_flux_inf,
             horizon_energy_flux_list = Energy_flux_hor,
             record_file = record ? record_path : nothing,

@@ -28,6 +28,14 @@ end
 @inline _skip_radiative_mode(s, a, m, ω) =
     (s == -2 && _skip_infinity_mode(ω)) || (s == 2 && _skip_horizon_mode(a, m, ω))
 
+# Near-static modes (|omega| <= NEAR_STATIC_RATIO |Omega_phi|) whose radial matching overflows Float64: at
+# omega ~ 1e-16 the incidence amplitude grows like |omega|^-(l+1), and the flux of such a mode is far below any
+# cutoff (the l = 2 nodal mode of (a, p, x) = (0.948, 195382, 0.478) carries 3e-75). Only the ISEM nonfinite
+# matching-scale error on a near-static mode counts; every other error still propagates.
+const NEAR_STATIC_RATIO = 1e-6
+_near_static_overflow(err, ω, Ωφ) = abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) &&
+    err isa ErrorException && startswith(err.msg, "nonfinite ISEM GSN matching")
+
 function _zero_radiative_mode(ω, trajectory; reason = "")
     return Dict(
         "Amplitude" => 0.0 + 0.0im,
@@ -4198,7 +4206,16 @@ function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m
         res["K_sample"] = K_sample
         return res
     end
-    ctx = _inclined_trapezoidal_context(KG_sample, s, l, m, k, K_interval, cache)
+    ctx = try
+        _inclined_trapezoidal_context(KG_sample, s, l, m, k, K_interval, cache)
+    catch err
+        _near_static_overflow(err, ω, Frequencies["ϒϕ"] / Γ) || rethrow()
+        res = _zero_radiative_mode(ω, KG_sample; reason = "near_static_overflow")
+        res["NearStaticOverflow"] = true
+        res["K_sample_requested"] = K_sample
+        res["K_sample"] = K_sample
+        return res
+    end
     SHsamp = threaded_sampling ? GridSampling.swsh_sample_threaded(ctx.SH, ctx.KG_samp) : ctx.SHsamp
     res = _inclined_flux_from_sample(ctx.KG_samp, ctx.Ysol, ctx.Ydic, SHsamp, s, ctx.a, ctx.omega, m, k)
     flux_scale = max(Float64(max_flux), eps(Float64))

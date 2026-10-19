@@ -1703,6 +1703,7 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
         println(io, "    k_reached = (infinity = $(flux.reached[:k_reached_inf]), horizon = $(flux.reached[:k_reached_hor])),")
         println(io, "    lmax_hit = $(flux.reached[:lmax_hit]),")
         println(io, "    kmax_hit = $(flux.reached[:kmax_hit]),")
+        haskey(flux.reached, :near_static_zero) && println(io, "    near_static_zero = $(flux.reached[:near_static_zero]),")
         if haskey(flux.reached, :convolution_integral)
             println(io, "    convolution_integral = $(flux.reached[:convolution_integral]),")
         end
@@ -1865,6 +1866,7 @@ function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
             k_reached_hor = _flux_get(result, :k_reached_hor),
             lmax_hit = _flux_get(result, :lmax_hit_inf, false) || _flux_get(result, :lmax_hit_hor, false),
             kmax_hit = _flux_get(result, :kmax_hit_inf, false) || _flux_get(result, :kmax_hit_hor, false),
+            near_static_zero = (infinity = _flux_get(result, :near_static_zero_inf, 0), horizon = _flux_get(result, :near_static_zero_hor, 0)),
             convolution_integral = _teukolsky_flux_convolution_integral_info(result, orbit_type),
         )
     else
