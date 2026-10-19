@@ -1698,6 +1698,14 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
         if haskey(flux.reached, :convolution_integral)
             println(io, "    convolution_integral = $(flux.reached[:convolution_integral]),")
         end
+    elseif haskey(flux.reached, :k_reached_inf) && haskey(flux.reached, :l_reached_inf)
+        println(io, "    l_reached = (infinity = $(flux.reached[:l_reached_inf]), horizon = $(flux.reached[:l_reached_hor])),")
+        println(io, "    k_reached = (infinity = $(flux.reached[:k_reached_inf]), horizon = $(flux.reached[:k_reached_hor])),")
+        println(io, "    lmax_hit = $(flux.reached[:lmax_hit]),")
+        println(io, "    kmax_hit = $(flux.reached[:kmax_hit]),")
+        if haskey(flux.reached, :convolution_integral)
+            println(io, "    convolution_integral = $(flux.reached[:convolution_integral]),")
+        end
     elseif haskey(flux.reached, :l_reached_inf) && haskey(flux.reached, :l_reached_hor)
         println(io, "    l_reached = (infinity = $(flux.reached[:l_reached_inf]), horizon = $(flux.reached[:l_reached_hor])),")
         if haskey(flux.reached, :convolution_integral)
@@ -1832,8 +1840,12 @@ function _teukolsky_flux_reached(result, orbit_type::Symbol)
         )
     elseif orbit_type == :inclined
         return (
+            l_reached_inf = _flux_get(result, :l_reached_inf),
+            l_reached_hor = _flux_get(result, :l_reached_hor),
             k_reached_inf = _flux_get(result, :k_reached_inf),
             k_reached_hor = _flux_get(result, :k_reached_hor),
+            lmax_hit = _flux_get(result, :lmax_hit_inf, false) || _flux_get(result, :lmax_hit_hor, false),
+            kmax_hit = _flux_get(result, :kmax_hit_inf, false) || _flux_get(result, :kmax_hit_hor, false),
             convolution_integral = _teukolsky_flux_convolution_integral_info(result, orbit_type),
         )
     else
