@@ -1,5 +1,6 @@
 module GridSampling
 
+import SpinWeightedSpheroidalHarmonics as SWSH
 using ..Coordinates
 using ..ConversionFactors
 using ..ISEM
@@ -560,9 +561,63 @@ function subsample_inclined_sample(KG_sample::Dict, K_interval::Int64)
     return sample
 end
 
+# sYlm(θ, 0) and its θ-derivative, stable at the poles. SpinWeightedSpheroidalHarmonics' Jacobi form
+# sin(θ/2)^(m+s) cos(θ/2)^(m-s) P_n^(m+s, m-s)(cos θ) has a negative exponent when m + s < 0 (or m - s < 0),
+# and the polynomial must then cancel to O(θ^2k) from O(1) terms: at θ ~ 5e-4 the value is off by ~1%,
+# below θ ~ 1e-4 it returns 0. With P_n^(-k,β)(x) = [C(n+β,k)/C(n,k)] ((x-1)/2)^k P_{n-k}^(k,β)(x) (and the
+# mirror identity for β < 0) every exponent is non-negative. Same prefactor and conventions as the package.
+function _stable_sylm(s::Int, l::Int, m::Int, θ)
+    if m < 0
+        v, d = _stable_sylm(-s, l, -m, θ)
+        sign = isodd(s - m) ? -1.0 : 1.0
+        return sign * v, sign * d
+    end
+    α = m + s
+    β = m - s
+    n = l - m
+    factor = SWSH._swsh_prefactor(s, l, m)
+    A, B, N = α, β, n
+    if α < 0
+        k = -α
+        factor *= (isodd(k) ? -1.0 : 1.0) * binomial(n + β, k) / binomial(n, k)
+        A, N = k, n - k
+    elseif β < 0
+        j = -β
+        factor *= binomial(n + α, j) / binomial(n, j)
+        B, N = j, n - j
+    end
+    x = cos(θ)
+    st2 = sin(θ / 2)
+    ct2 = cos(θ / 2)
+    P = SWSH._jacobi_polynomial_recurrence(N, A, B, x)
+    dP = N > 0 ? 0.5 * (N + A + B + 1) * SWSH._jacobi_polynomial_recurrence(N - 1, A + 1, B + 1, x) : 0.0
+    base = st2^A * ct2^B
+    dbase = (A > 0 ? 0.5 * A * st2^(A - 1) * ct2^(B + 1) : 0.0) - (B > 0 ? 0.5 * B * st2^(A + 1) * ct2^(B - 1) : 0.0)
+    value = factor * base * P
+    derivative = factor * (dbase * P - base * dP * 2 * st2 * ct2)
+    return value, derivative
+end
+
+# S(θ, 0) and dS/dθ of a spectral-decomposition harmonic from _stable_sylm; other methods use the package.
+function _stable_swsh(SH, θ)
+    SH.method == :spectral || return SH(θ, 0.0), SH(θ, 0.0; theta_derivative = 1)
+    s = SH.params.s
+    m = SH.params.m
+    ls = SWSH.construct_all_l_in_matrix(s, m, SH.params.N)
+    v = zero(ComplexF64)
+    d = zero(ComplexF64)
+    for (idx, l) in enumerate(ls)
+        coeff = SH.coeffs[idx]
+        abs(coeff) < SWSH._TOLERANCE && continue
+        y, dy = _stable_sylm(s, l, m, θ)
+        v += coeff * y
+        d += coeff * dy
+    end
+    return v / SH.normalization_const, d / SH.normalization_const
+end
+
 @inline function _swsh_values(SH, θ, s, m, c, λ)
-    s0 = SH(θ, 0.0)
-    s1 = SH(θ, 0.0; theta_derivative = 1)
+    s0, s1 = _stable_swsh(SH, θ)
     sθ = sin(θ)
     cθ = cos(θ)
     cotθ = cθ / sθ
