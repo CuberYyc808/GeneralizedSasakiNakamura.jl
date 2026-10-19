@@ -225,8 +225,19 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     return (KG_samp = KG_samp, Ysol = Ysol, Ydic = Ydic, SH = SH, SHsamp = SHsamp, omega = ω, a = a, m = m, Trajectory = KG_sample["Trajectory"])
 end
 
+# Carter factor of a spherical orbit, m <Lz cot^2θ> - a^2 ω E <cos^2θ> over the polar Mino cycle.
+# <Lz / sin^2θ> = ϒφ + a E - Φr is exact. A trapezoid of Lz cot^2θ is not: near the pole it is a spike of width ~x,
+# and the trapezoid overshoots by about coth(K x), so nearly polar orbits never converged in K.
+function _inclined_carter_factor(KG_samp::Dict, a, p, ϒφ, m, ω)
+    E = KG_samp["E"]
+    Lz = KG_samp["Lz"]
+    Φr = a * ((p^2 + a^2) * E - a * Lz) / (p^2 - 2p + a^2)
+    lz_cot2 = ϒφ + a * E - Φr - Lz
+    return m * lz_cot2 + trapezoidal_1d_integral(carter_ingredients_sample(KG_samp, a, 0, ω))
+end
+
 function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Dict, s::Int, a, ω, m, k::Int)
-    carter_factor = trapezoidal_1d_integral(carter_ingredients_sample(KG_samp, a, m, ω))
+    carter_factor = _inclined_carter_factor(KG_samp, a, KG_samp["p"], KG_samp["Frequencies"]["ϒϕ"], m, ω)
     if s == 2
         inte = integrand_inclined_sample_p2(KG_samp, Ydic, SH_samp, k)
         integral = trapezoidal_1d_integral(inte)
@@ -3070,8 +3081,7 @@ function convolution_integral_inclined_trapezoidal(a, p, x, s, l, m, k, K_sample
     rsin = rstar_from_r(a, 1+sqrt(1-a^2)+1e-4)
     rsout = max(200.0, 10pi / abs(omega))
     KG_samp = kerr_geo_inclined_sample(KG, K_sample)
-    carter_samp = carter_ingredients_sample(KG_samp, a, m, omega)
-    carter_factor = trapezoidal_1d_integral(carter_samp)
+    carter_factor = _inclined_carter_factor(KG_samp, a, p, KG["Frequencies"]["ϒϕ"], m, omega)
 
     if s == 2
         Yup_soln = Y_solution(s, l, m, a, omega, UP; rsin = rsin, rsout = rsout)
@@ -3134,8 +3144,7 @@ function convolution_integral_inclined_levin(a, p, x, s, l, m, k, K_sample)
     rsout = max(200.0, 10pi / abs(omega))
     KG_samp = kerr_geo_inclined_sample_cheby(KG, K_sample)
     KG_trap = kerr_geo_inclined_sample(KG, K_sample)
-    carter_samp = carter_ingredients_sample(KG_trap, a, m, omega)
-    carter_factor = trapezoidal_1d_integral(carter_samp)
+    carter_factor = _inclined_carter_factor(KG_trap, a, p, KG["Frequencies"]["ϒϕ"], m, omega)
 
     if s == 2
         Yup_soln = Y_solution(s, l, m, a, omega, UP; rsin = rsin, rsout = rsout)
@@ -4274,8 +4283,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
     rsout = max(200.0, 10pi / abs(omega))
     KG_samp = _inclined_levin_owner_sample(cache, KG, K_sample, true)
     KG_trap = _inclined_levin_owner_sample(cache, KG, K_sample, false)
-    carter_samp = carter_ingredients_sample(KG_trap, a, m, omega)
-    carter_factor = trapezoidal_1d_integral(carter_samp)
+    carter_factor = _inclined_carter_factor(KG_trap, a, p, KG["Frequencies"]["ϒϕ"], m, omega)
 
     result = if s == 2
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
