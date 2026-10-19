@@ -662,6 +662,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
     KG = submission_orbit!(scope)
     radial_over_azimuthal = KG["Frequencies"]["ϒr"] / KG["Frequencies"]["ϒϕ"]
+    F_orbit = KG["Frequencies"]
     KG_sample = submission_master!(scope)
     Energy_flux_inf = Vector{Float64}()
     Energy_flux_hor = Vector{Float64}()
@@ -726,10 +727,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     end
     cap_trackers = (CapTracker(lmax, 0), CapTracker(lmax, 0))
     failed_modes = [0, 0]
+    near_static_zero = [0, 0]
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
         use_levin = use_eccentric_tail_levin(s, m, n)
         floor = branch_mode_floor(s)
-        mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0) do; if use_levin
+        mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s)), zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
@@ -745,6 +747,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             end
         end; end
         get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
+        get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
         _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, 0, mode["EnergyFlux"])
         mode
@@ -1133,6 +1136,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         nmax_hit_hor = _nmax_hit(n_reached_hor, Energy_flux_hor, nmax, tol, total_horizon_energy),
         failed_modes_inf = failed_modes[1],
         failed_modes_hor = failed_modes[2],
+        near_static_zero_inf = near_static_zero[1],
+        near_static_zero_hor = near_static_zero[2],
         tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
         tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
         tail_levin_infinity_policy = tail_policy_inf,
@@ -1825,6 +1830,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
 
     KG = submission_orbit!(scope)
     radial_over_azimuthal = KG["Frequencies"]["ϒr"] / KG["Frequencies"]["ϒϕ"]
+    F_orbit = KG["Frequencies"]
 
     KG_master = submission_master!(scope)
     tail_policy = _tail_policy(tail_levin)
@@ -1913,6 +1919,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         # one tracker per boundary: the two branches may run on different tasks
         cap_trackers = (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
         failed_modes = [0, 0]
+        near_static_zero = [0, 0]
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             auto_levin = use_generic_tail_levin(s, n)
             use_levin = use_levin || auto_levin ||
@@ -1920,7 +1927,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
                         levin_local_n, levin_max_depth, levin_nmin))
             floor = branch_mode_floor(s)
-            mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k) do; if fast
+            mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if fast
                 if use_levin
                     levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux))
                     levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
@@ -1938,6 +1945,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 end
             end; end
             get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
+            get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
             ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
             _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
@@ -2577,6 +2585,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             nmax_hit_hor = _nmax_hit(hor.n_reached, hor.shell_list, nmax, tol, hor.energy_flux),
             failed_modes_inf = failed_modes[1],
             failed_modes_hor = failed_modes[2],
+            near_static_zero_inf = near_static_zero[1],
+            near_static_zero_hor = near_static_zero[2],
             tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
             tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
             tail_levin_infinity_policy = tail_policy_inf,

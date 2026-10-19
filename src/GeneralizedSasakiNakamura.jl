@@ -1885,6 +1885,7 @@ function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
             lmax_hit = _flux_get(result, :lmax_hit_inf, false) || _flux_get(result, :lmax_hit_hor, false),
             kmax_hit = _flux_get(result, :kmax_hit_inf, false) || _flux_get(result, :kmax_hit_hor, false),
             nmax_hit = _flux_get(result, :nmax_hit_inf, false) || _flux_get(result, :nmax_hit_hor, false),
+            near_static_zero = (infinity = _flux_get(result, :near_static_zero_inf, 0), horizon = _flux_get(result, :near_static_zero_hor, 0)),
             convolution_integral = _teukolsky_flux_convolution_integral_info(result, orbit_type),
         )
     end

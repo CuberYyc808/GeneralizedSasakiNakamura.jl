@@ -52,11 +52,16 @@ const _FORCE_ORDINARY_KEY = :GSN_FORCE_ORDINARY_Y
 _is_basis_coverage_error(err) = err isa ErrorException &&
     (occursin("basis does not cover", err.msg) || occursin("basis has no patch for", err.msg))
 
-function _with_coverage_retry(f, s, l, m, n, k)
+function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing)
     try
         return f()
     catch err
         err isa InterruptException && rethrow()
+        if omega !== nothing && _near_static_overflow(err, omega, Ωφ)
+            res = _zero_radiative_mode(omega, nothing; reason = "near_static_overflow")
+            res["NearStaticOverflow"] = true
+            return res
+        end
         _is_basis_coverage_error(err) || rethrow()
     end
     try
