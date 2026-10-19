@@ -684,8 +684,8 @@ function _glevin_basis_build(KG_samp::Dict, s::Int, a::Float64, sign::Int)
     rp = 1.0 + κ
     rm = 1.0 - κ
     log_term = log.((r .- rp) ./ (r .- rm))
-    σrs = s == -2 ? 1.0 : -1.0
-    σlog = s == -2 ? -1.0 : 1.0
+    σrs = 1.0
+    σlog = -1.0
     radial_base = sign .* KG_samp["Δtr"] .+ σrs .* rs
     return GenericLevinPhaseBasis(
         Ω.Ωφ .* KG_samp["Δtθ"] .- KG_samp["Δφθ"],
@@ -899,8 +899,8 @@ function _generic_adaptive_phase_basis_build(KG_samp::Dict, s::Int, a::Float64, 
     rp = 1.0 + κ
     rm = 1.0 - κ
     log_term = log.((r .- rp) ./ (r .- rm))
-    σrs = s == -2 ? 1.0 : -1.0
-    σlog = s == -2 ? -1.0 : 1.0
+    σrs = 1.0
+    σlog = -1.0
     radial_base = sign .* KG_samp["Δtr"] .+ σrs .* rs
     return GenericLevinPhaseBasis(
         Ω.Ωφ .* KG_samp["Δtθ"] .- KG_samp["Δφθ"],
@@ -971,7 +971,7 @@ function _generic_adaptive_radial_gprime(KG_samp::Dict, key::GenericAdaptiveLevi
     r = Float64.(KG_samp["r"])
     drdq = Float64.(KG_samp["ur_fwd"]) ./ KG_samp["Frequencies"]["ϒr"]
     Δ = r .^ 2 .- 2.0 .* r .+ a^2
-    σ = s == -2 ? 1.0 : -1.0
+    σ = 1.0
     gq = sign .* (ω .* KG_samp["dtr"] .- m .* KG_samp["dφr"] .+ n) .+ σ .* (ω .* (r .^ 2 .+ a^2) .- a * m) ./ Δ .* drdq
     return gq .* ((qr_hi - qr_lo) / π)
 end
@@ -3681,8 +3681,7 @@ function _internal_radial_phase(KG_samp::Dict, s::Int, a, ω, m)
     rp = 1.0 + κ
     rm = 1.0 - κ
     log_term = log.((r .- rp) ./ (r .- rm))
-    ψ = s == -2 ? ω .* rs .- a .* m .* log_term ./ (2.0κ) :
-                  .-ω .* rs .+ a .* m .* log_term ./ (2.0κ)
+    ψ = ω .* rs .- a .* m .* log_term ./ (2.0κ)
     return (phase_values = ψ, phase_factor = exp.(1im .* ψ))
 end
 
