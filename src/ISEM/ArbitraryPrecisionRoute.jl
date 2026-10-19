@@ -403,8 +403,10 @@ function _mst_branches(p::GSNParameters, tolerance)
         end
     end
     data = mst_generic_data(p, nu; tol=mst_tolerance, nu_residual=residual, nu_depth=depth)
-    up = MSTInfinityBranch(data, :up, ConversionFactors.Ctrans(p.s, p.m, p.a, p.omega, p.lambda))
-    down = MSTInfinityBranch(data, :down, ConversionFactors.Binc(p.s, p.m, p.a, p.omega, p.lambda))
+    # (the conversion factors are the integer 1 for s = 0: the scale is held in the complex working type)
+    C = _complex_type(p)
+    up = MSTInfinityBranch(data, :up, C(ConversionFactors.Ctrans(p.s, p.m, p.a, p.omega, p.lambda)))
+    down = MSTInfinityBranch(data, :down, C(ConversionFactors.Binc(p.s, p.m, p.a, p.omega, p.lambda)))
     return data, up, down
 end
 
