@@ -36,6 +36,13 @@ const NEAR_STATIC_RATIO = 1e-6
 _near_static_overflow(err, ω, Ωφ) = abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) &&
     err isa ErrorException && startswith(err.msg, "nonfinite ISEM GSN matching")
 
+# A non-finite mode flux would turn every later cutoff into NaN, so that no walk can stop; fail on the mode instead.
+function _check_finite_mode_flux(res, s, l, m, n, k)
+    all(isfinite, (res["EnergyFlux"], res["AngularMomentumFlux"], res["CarterConstantFlux"])) && return res
+    error("Non-finite flux for mode (s, l, m, n, k) = ($s, $l, $m, $n, $k), omega = $(res["omega"]): " *
+        "E = $(res["EnergyFlux"]), L = $(res["AngularMomentumFlux"]), Q = $(res["CarterConstantFlux"])")
+end
+
 function _zero_radiative_mode(ω, trajectory; reason = "")
     return Dict(
         "Amplitude" => 0.0 + 0.0im,
@@ -4270,6 +4277,7 @@ function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m
 
     res["K_sample_requested"] = K_sample
     res["K_sample"] = K_interval
+    _check_finite_mode_flux(res, s, l, m, 0, k)
     return res
 end
 
