@@ -1831,6 +1831,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
     KG = submission_orbit!(scope)
     radial_over_azimuthal = KG["Frequencies"]["ϒr"] / KG["Frequencies"]["ϒϕ"]
     F_orbit = KG["Frequencies"]
+    polar_over_azimuthal = KG["Frequencies"]["ϒθ"] / KG["Frequencies"]["ϒϕ"]
 
     KG_master = submission_master!(scope)
     tail_policy = _tail_policy(tail_levin)
@@ -2344,7 +2345,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                         # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                         growing_m = abs(shell_m) > abs(previous_shell_m)
                         previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
                         if below_count_m >= minimum_consecutive
                             break
                         end
@@ -2376,7 +2377,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                         # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                         growing_m = abs(shell_m) > abs(previous_shell_m)
                         previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
                         if below_count_m >= minimum_consecutive
                             break
                         end
@@ -2450,7 +2451,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                         # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                         growing_m = abs(shell_m) > abs(previous_shell_m)
                         previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
                         if below_count_m >= minimum_consecutive
                             break
                         end
@@ -2482,7 +2483,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                         # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                         growing_m = abs(shell_m) > abs(previous_shell_m)
                         previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
                         if below_count_m >= minimum_consecutive
                             break
                         end
