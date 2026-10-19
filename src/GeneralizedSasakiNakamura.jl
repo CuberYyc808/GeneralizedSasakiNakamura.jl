@@ -1713,8 +1713,13 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
         end
     else
         for key in keys(flux.reached)
+            key === :caps && continue
             println(io, "    $key = $(_flux_reached_print_value(flux, key, flux.reached[key])),")
         end
+    end
+    if haskey(flux.reached, :caps)
+        caps = flux.reached[:caps]
+        println(io, "    caps = (lmax = $(caps.lmax)$(caps.lmax_auto ? " (auto)" : ""), kmax = $(caps.kmax)$(caps.kmax_auto ? " (auto)" : ""), raises = $(caps.raises)),")
     end
     println(io, "    tolerance = $(_flux_tolerance_print_value(flux)),")
     println(io, "    truncation_floor = $(_flux_truncation_floor_print_value(flux)),")
@@ -1830,7 +1835,21 @@ function _teukolsky_flux_convolution_integral_info(result, orbit_type::Symbol)
     )
 end
 
+_teukolsky_flux_caps(result) = (
+    lmax = _flux_get(result, :lmax_used),
+    kmax = _flux_get(result, :kmax_used),
+    lmax_auto = _flux_get(result, :lmax_auto, false),
+    kmax_auto = _flux_get(result, :kmax_auto, false),
+    estimate = _flux_get(result, :cap_estimate),
+    raises = _flux_get(result, :cap_raises, 0),
+)
+
 function _teukolsky_flux_reached(result, orbit_type::Symbol)
+    reached = _teukolsky_flux_reached_walks(result, orbit_type)
+    return merge(reached, (caps = _teukolsky_flux_caps(result),))
+end
+
+function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
     if orbit_type == :circular
         return (
             l_reached = _flux_get(result, :l_reached),
@@ -1901,9 +1920,15 @@ end
 export spawn_pointparticle_submission!
 
 @doc raw"""
-    Teukolsky_pointparticle_flux(a, p, e, x; tol=1e-8, lmax=30, nmax=500, kmax=20)
+    Teukolsky_pointparticle_flux(a, p, e, x; tol=1e-8, lmax=:auto, nmax=500, kmax=:auto)
 
 Compute total point-particle fluxes by automatically selecting the mode-summation strategy from the orbit type.
+`lmax=:auto` and `kmax=:auto` estimate the caps before summing: the energy fluxes of the (l, m = l) modes,
+l = 2..10, of the equatorial circular orbit at the same spin and radius p/(1+e) (prograde for x >= 0) give the
+l falloff, and the cap is the l where the extrapolated tail drops below `tol` times the probe total, plus 3,
+clamped to 30..150; `kmax` takes the same value. If a sum still reaches an automatic cap with modes above the
+cutoff, the cap is raised by half (at most 150) and the sum repeated, at most twice. An integer keeps that cap
+fixed. The caps used are reported in `reached.caps`.
 For eccentric and generic tails, `tail_levin=nothing` switches to adaptive Levin
 for `n >= levin_nmin` once the uniform trapezoidal grid would be much more
 expensive than the adaptive one, `true` forces adaptive Levin from `levin_nmin`,
@@ -1930,7 +1955,7 @@ Carter-constant fluxes at infinity and at the horizon, or `nothing` (with a
 warning) when `(a, p, e, x)` is neither a stable bound orbit nor a marginally
 stable (critical) bound circular orbit, as classified by KerrGeodesics.
 """
-function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = 30, nmax = 500, kmax = 20, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
+function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = 500, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
     # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
     a, p, e, x = _pointparticle_float(a, p, e, x)
     if !_teukolsky_flux_bound_orbit(a, p, e, x)

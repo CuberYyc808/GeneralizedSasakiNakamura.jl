@@ -215,6 +215,100 @@ function _branch_l_walk(eval_l, lmin::Int, lpeak::Int, lmax::Int, threshold, min
     end
 end
 
+# Automatic l and k caps (lmax = :auto, kmax = :auto).
+const AUTO_CAP_MIN = 30
+const AUTO_CAP_MAX = 150
+const AUTO_CAP_MARGIN = 3
+const AUTO_CAP_MAX_RAISES = 2
+
+# Energy flux |F_inf| + |F_hor| of the (l, m = l) modes, l = 2..10, of the equatorial circular orbit at radius r, or
+# nothing when that orbit cannot be evaluated.
+function _auto_cap_probe_fluxes(a, r, x_probe)
+    try
+        scope, owned = ensure_public_submission(nothing, a, r, 0.0, x_probe)
+        return _with_public_scope(scope, owned) do
+            with_submission_operation(scope) do
+                map(2:10) do l
+                    mode = _circular_mode_flux_scoped(scope, a, r, l, l; x = x_probe)
+                    abs(mode.infinity.energy_flux) + abs(mode.horizon.energy_flux)
+                end
+            end
+        end
+    catch
+        return nothing
+    end
+end
+
+# Upper estimate of the l needed for tol, from the l falloff of the equatorial circular orbit at the same a and
+# radius r = p / (1 + e) (prograde for x >= 0, retrograde otherwise, prograde if that fails). A linear fit of
+# log F_l over l = 6..10 gives the slope s < 0; the tail beyond L is F_10 exp(s (L - 10)) / (1 - e^s). The cap is
+# the smallest L with that tail below tol * sum(F_2..F_10), plus AUTO_CAP_MARGIN, clamped to
+# [AUTO_CAP_MIN, AUTO_CAP_MAX]. Returns (cap, status).
+function auto_lmax_estimate(a, p, e, x; tol = 1e-8)
+    r = p / (1 + e)
+    probes = x >= 0 ? (1.0,) : (-1.0, 1.0)
+    F = nothing
+    for x_probe in probes
+        F = _auto_cap_probe_fluxes(a, r, x_probe)
+        F !== nothing && all(f -> isfinite(f) && f > 0, F) && break
+        F = nothing
+    end
+    F === nothing && return (cap = AUTO_CAP_MIN, status = :probe_failed)
+    ls = 6:10
+    ys = log.(F[ls .- 1])
+    lbar = sum(ls) / length(ls)
+    ybar = sum(ys) / length(ys)
+    slope = sum((ls .- lbar) .* (ys .- ybar)) / sum((ls .- lbar) .^ 2)
+    (isfinite(slope) && slope < 0) || return (cap = AUTO_CAP_MAX, status = :no_falloff)
+    budget = tol * sum(F)
+    tail_scale = F[end] / (1 - exp(slope))
+    L = tail_scale <= budget ? 10 : 10 + ceil(Int, log(budget / tail_scale) / slope)
+    return (cap = clamp(L + AUTO_CAP_MARGIN, AUTO_CAP_MIN, AUTO_CAP_MAX), status = :ok)
+end
+
+# Initial caps: integers pass through; :auto takes the estimate (kmax = lmax estimate).
+function _auto_caps_start(a, p, e, x, tol, lmax, kmax)
+    auto_l = lmax === :auto
+    auto_k = kmax === :auto
+    (auto_l || auto_k) && !(tol > 0) && throw(ArgumentError("tol must be positive"))
+    (auto_l || auto_k) || return (lmax = lmax, kmax = kmax, auto_l = false, auto_k = false, estimate = nothing, status = :fixed)
+    est = auto_lmax_estimate(a, p, e, x; tol)
+    if est.status == :probe_failed
+        @warn "Automatic lmax/kmax: the equatorial circular probe at r = p / (1 + e) failed; using $(AUTO_CAP_MIN)." a p e x
+    elseif est.status == :no_falloff
+        @warn "Automatic lmax/kmax: the probe shows no l falloff by l = 10; using $(AUTO_CAP_MAX)." a p e x
+    end
+    return (lmax = auto_l ? est.cap : lmax, kmax = auto_k ? est.cap : kmax, auto_l, auto_k, estimate = est.cap, status = est.status)
+end
+
+_result_lmax_hit(result, lmax) = get(result, :lmax_hit_inf, false) || get(result, :lmax_hit_hor, false) ||
+    (haskey(result, :l_reached_inf) && !haskey(result, :lmax_hit_inf) && (something(result.l_reached_inf, 0) >= lmax || something(get(result, :l_reached_hor, 0), 0) >= lmax))
+_result_kmax_hit(result) = get(result, :kmax_hit_inf, false) || get(result, :kmax_hit_hor, false)
+
+# Run run(lmax, kmax, warn) with the start caps; when a cap came from :auto and the sum hit it, raise that cap by
+# half (at most AUTO_CAP_MAX) and sum again, at most AUTO_CAP_MAX_RAISES times. Adds the caps to the result.
+function _with_auto_caps(run, caps)
+    L, Kc = caps.lmax, caps.kmax
+    auto = caps.auto_l || caps.auto_k
+    raises = 0
+    result = run(L, Kc, !auto)
+    while auto && raises < AUTO_CAP_MAX_RAISES
+        raise_l = caps.auto_l && L < AUTO_CAP_MAX && _result_lmax_hit(result, L)
+        raise_k = caps.auto_k && Kc isa Integer && Kc < AUTO_CAP_MAX && _result_kmax_hit(result)
+        (raise_l || raise_k) || break
+        raise_l && (L = min(AUTO_CAP_MAX, ceil(Int, 1.5L)))
+        raise_k && (Kc = min(AUTO_CAP_MAX, ceil(Int, 1.5Kc)))
+        raises += 1
+        result = run(L, Kc, false)
+    end
+    if auto
+        _result_lmax_hit(result, L) && @warn "Mode summation hit lmax = $(L) with modes still above the cutoff after $(raises) automatic raise(s): the l sum is truncated." lmax = L
+        _result_kmax_hit(result) && @warn "Mode summation ran to kmax = $(Kc) without converged k shells after $(raises) automatic raise(s): the k sum may be truncated." kmax = Kc
+    end
+    return merge(result, (lmax_used = L, kmax_used = Kc, lmax_auto = caps.auto_l, kmax_auto = caps.auto_k,
+        cap_estimate = caps.estimate, cap_status = caps.status, cap_raises = raises))
+end
+
 function _record_adaptive_levin_metadata!(bgrp, mode)
     for key in (
         "AdaptiveLevin",
@@ -408,11 +502,14 @@ end
 
 # Total circular-orbit fluxes: sum m = 1..l (doubled for -m) over l shells until min_consecutive shells are
 # below tol times the running total, separately at infinity and at the horizon.
-function circular_mode_summation(a, p; submission = nothing, x=1.0, tol = 1e-8, lmax = 30, min_consecutive = 5, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+function circular_mode_summation(a, p; submission = nothing, x=1.0, tol = 1e-8, lmax = :auto, min_consecutive = 5, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+    caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, nothing)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        with_submission_operation(scope) do
-            _circular_mode_summation_scoped(scope, a, p; x = x, tol = tol, lmax = lmax, min_consecutive = min_consecutive)
+        _with_auto_caps(caps) do L, _, _
+            with_submission_operation(scope) do
+                _circular_mode_summation_scoped(scope, a, p; x = x, tol = tol, lmax = L, min_consecutive = min_consecutive)
+            end
         end
     end
 end
@@ -918,11 +1015,14 @@ end
 
 # Total eccentric equatorial fluxes: n = 0 shell, then n = 1, 2, ... shells (each over m >= 1, m <= -1 and l),
 # until minimum_consecutive + 1 n shells are below tol times the branch total. See Teukolsky_pointparticle_flux.
-function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+    caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        with_submission_operation(scope) do
-            _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth)
+        _with_auto_caps(caps) do L, Kc, warn
+            with_submission_operation(scope) do
+                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth)
+            end
         end
     end
 end
@@ -1033,7 +1133,7 @@ function inclined_mode_flux(a, p, x, l, m, k; submission = nothing, K = 16, Kmax
     end
 end
 
-function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false)
+function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, warn_truncation::Bool = true)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
@@ -1427,10 +1527,10 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
         kmax_hit_inf = k_reached_inf === nothing
         kmax_hit_hor = k_reached_hor === nothing
-        if lmax_hit_inf || lmax_hit_hor
+        if warn_truncation && (lmax_hit_inf || lmax_hit_hor)
             @warn "Inclined mode summation hit lmax = $(lmax) with modes still above the cutoff: the l sum is truncated. Raise lmax." a p x lmax l_reached_inf l_reached_hor lmax_hit_inf lmax_hit_hor
         end
-        if kmax_hit_inf || kmax_hit_hor
+        if warn_truncation && (kmax_hit_inf || kmax_hit_hor)
             @warn "Inclined mode summation ran to kmax = $(kmax) without $(minimum_consecutive + 1) consecutive negligible k shells: the k sum may be truncated. Raise kmax." a p x kmax kmax_hit_inf kmax_hit_hor
         end
 
@@ -1484,11 +1584,14 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 end
 
 # Total inclined circular fluxes, summed over k shells as the eccentric summation sums n shells.
-function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
+function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
+    caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        with_submission_operation(scope) do
-            _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
+        _with_auto_caps(caps) do L, Kc, warn
+            with_submission_operation(scope) do
+                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, warn_truncation = warn)
+            end
         end
     end
 end
@@ -2272,11 +2375,14 @@ end
 
 # Total generic-orbit fluxes, summed over n, k, m and l shells with the stopping rules described in
 # Teukolsky_pointparticle_flux. Equatorial and e = 0 orbits are passed to the eccentric and inclined summations.
-function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+    caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        with_submission_operation(scope) do
-            _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path)
+        _with_auto_caps(caps) do L, Kc, warn
+            with_submission_operation(scope) do
+                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path)
+            end
         end
     end
 end
