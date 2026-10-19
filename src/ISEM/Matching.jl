@@ -1,6 +1,7 @@
 module Matching
 
 using ..CoefficientTables: CoefficientSet, gsn_coefficients
+using ..Iteration: ScaledMarchStepLimit
 using ..Iteration:
     Basis,
     Patch,
@@ -489,15 +490,20 @@ function _build_small_frequency_expansion_endpoint_bridge(
         return true
     end
 
-    bridge = iterate_scaled_y(
-        coefficients,
-        kind,
-        match_x,
-        target.X,
-        target.dXdx;
-        target_y,
-        stop_check,
-    )
+    bridge = try
+        iterate_scaled_y(
+            coefficients,
+            kind,
+            match_x,
+            target.X,
+            target.dXdx;
+            target_y,
+            stop_check,
+        )
+    catch err
+        err isa ScaledMarchStepLimit || rethrow()
+        nothing
+    end
     return bridge, plan[]
 end
 

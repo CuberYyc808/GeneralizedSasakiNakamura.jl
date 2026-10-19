@@ -6205,6 +6205,8 @@ const MANO_SUZUKI_TAKASUGI_BISECTION_ITER = 2
 const MANO_SUZUKI_TAKASUGI_BISECTION_SCORE_RATIO = 10.0
 const MANO_SUZUKI_TAKASUGI_Y_SAFETY = 0.8
 const MANO_SUZUKI_TAKASUGI_SEED_Y_CAP = 1.0e4
+const MANO_SUZUKI_TAKASUGI_DIRECT_MATCH_Y = parse(Float64,
+    get(ENV, "ISEM_MANO_SUZUKI_TAKASUGI_DIRECT_MATCH_Y", "1.0e6"))
 const MANO_SUZUKI_TAKASUGI_TAU_PREFLIGHT = parse(Float64,
     get(ENV, "ISEM_MANO_SUZUKI_TAKASUGI_TAU_PREFLIGHT", "1.0e2"))
 const MANO_SUZUKI_TAKASUGI_TAU_SEED_PRODUCT = 2.0
@@ -6525,6 +6527,33 @@ function _mano_suzuki_takasugi_residual_seed_x(
         status="INVALID_MATCH",
     )
 
+    # At very low |omega| the march from a capped seed to the matching point crosses many decades of y,
+    # and its steps stay near 1e-8 in x, so it takes millions of steps: the nodal m = -k modes of wide
+    # spherical orbits (omega ~ 1e-16) never finished. There, use the MST state at the matching point
+    # itself when its residual passes; the march is then empty.
+    if y_start > MANO_SUZUKI_TAKASUGI_DIRECT_MATCH_Y
+        direct = try
+            _mano_suzuki_takasugi_residual_at_y(coefficients, data, y_start, branches)
+        catch
+            nothing
+        end
+        if direct !== nothing && direct.valid
+            return (
+                seed_x=match_x,
+                seed_y=y_start,
+                safe_y=y_start,
+                unsafe_y=NaN,
+                safe_score=direct.score,
+                unsafe_score=NaN,
+                evaluations=1,
+                in_sequence=direct.in_sequence,
+                out_sequence=direct.out_sequence,
+                in_budget=direct.in_budget,
+                out_budget=direct.out_budget,
+                status="OK_DIRECT_MATCH",
+            )
+        end
+    end
     candidate_y = MANO_SUZUKI_TAKASUGI_Y_SAFETY * min(y_start, MANO_SUZUKI_TAKASUGI_SEED_Y_CAP)
     tau = abs(data.params.tau)
     if tau > MANO_SUZUKI_TAKASUGI_TAU_PREFLIGHT

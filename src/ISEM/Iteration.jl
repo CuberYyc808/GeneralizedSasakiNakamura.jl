@@ -2142,6 +2142,9 @@ function iterate_logscaled_from_state(
     while direction * (target_x - current_x) >
             100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
+        step_count <= _MAX_MARCH_STEPS || error(
+            "ISEM GSN log-scaled propagation exceeded $(_MAX_MARCH_STEPS) steps at x=$(current_x) " *
+            "(target x=$(target_x))")
         a_terms, b_terms = _local_ab!(work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
         b_coeffs = @view work.bvec[1:b_terms]
@@ -2201,6 +2204,18 @@ function iterate_logscaled_from_state(
     )
 end
 
+# Hard step cap of the scaled-y and log-scaled marches. Normal marches take tens to hundreds of steps;
+# a march past this is not converging (e.g. steps held near the rounding floor) and throws instead of
+# running for hours.
+const _MAX_MARCH_STEPS = 20_000
+
+# Thrown when a scaled-y march reaches _MAX_MARCH_STEPS. The optional endpoint bridge catches it and goes on
+# without the bridge; elsewhere it propagates.
+struct ScaledMarchStepLimit <: Exception
+    message::String
+end
+Base.showerror(io::IO, err::ScaledMarchStepLimit) = print(io, err.message)
+
 # Small-frequency propagation in the scaled coordinate y = (1 - x)/|omega| from
 # seed_x toward target_y, stopping early when stop_check(x, X, dXdx) is true or
 # a step fails its checks. Returns a basis with ScaledPatch patches, or
@@ -2234,6 +2249,9 @@ function iterate_scaled_y(
     min_step = Inf
 
     while direction * (final_y - current_y) > 100eps(Float64) * max(1.0, current_y)
+        length(patches) < _MAX_MARCH_STEPS || throw(ScaledMarchStepLimit(
+            "ISEM GSN scaled-y propagation exceeded $(_MAX_MARCH_STEPS) steps at y=$(current_y) " *
+            "(target y=$(final_y), omega=$(omega_scale))"))
         current_x = 1.0 - omega_scale * current_y
         a_terms, b_terms = ordinary_scaled_y_ab_series!(
             work.avec, work.bvec, work.pq, coefficients, current_y, omega_scale, order)
