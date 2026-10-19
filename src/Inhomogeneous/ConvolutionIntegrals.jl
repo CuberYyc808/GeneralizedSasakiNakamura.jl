@@ -1619,10 +1619,8 @@ function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, 
         res2 = _generic_flux_from_cheby_sample(KG_cheby, Ysamp, SHsamp, s, l, m, n, k, a, ω, ϒθ, carter_factor, cache)
         absE = abs(res2["EnergyFlux"])
         if res === nothing
+            # As in the eccentric route, a value below the floor needs the next refinement to confirm it.
             res = res2
-            if mode_abs_floor > 0.0 && absE < mode_abs_floor
-                break
-            end
             if !confirm_low_flux && absE < low_flux_budget
                 break
             end
@@ -1632,8 +1630,9 @@ function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, 
             excess = abs(res2["EnergyFlux"]) / flux_scale
             factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
             low_flux_confirmed = absE < low_flux_budget && (!confirm_low_flux || (pending_low_flux_check && _same_order_or_smaller(res2["EnergyFlux"], res["EnergyFlux"], mode_abs_floor)))
+            below_floor = mode_abs_floor > 0.0 && absE < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
             res = res2
-            if (mode_abs_floor > 0.0 && absE < mode_abs_floor) || low_flux_confirmed || factor * relE <= effective_sample_tol
+            if below_floor || low_flux_confirmed || factor * relE <= effective_sample_tol
                 break
             end
             pending_low_flux_check = absE < low_flux_budget
@@ -1712,30 +1711,9 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     sh_cache = Dict{NTuple{3, Int}, Any}()
     root = _generic_adaptive_segment_amplitude!(cache, KG_master, Ysol, SH, s, a, ω, m, n, k, root_key, nr, nt; threaded_sampling = threaded_sampling, sh_cache = sh_cache)
-    root_energy = abs(_generic_adaptive_energy_from_amp(root, s, a, m, ω))
     segment_evaluations = 1
-    if mode_abs_floor > 0.0 && root_energy < mode_abs_floor
-        amp = zero_low_flux ? 0.0 + 0.0im : root
-        carter_factor = _generic_carter_factor_sample(KG_master, m, ω)
-        res = _generic_adaptive_levin_result(amp, KG_master, Ysol, SH, s, a, m, ω, ϒθ, k, carter_factor)
-        res["Quadrature"] = "adaptive_levin_radial_theta_cc"
-        res["AdaptiveLevin"] = true
-        res["AdaptiveLevinStopReason"] = "low_flux_root"
-        res["AdaptiveLevinSegmentEvaluations"] = segment_evaluations
-        res["N_sample_requested"] = nr
-        res["K_sample_requested"] = nt
-        res["N_sample"] = nr
-        res["K_sample"] = nt
-        res["AdaptiveLevinMaxDepth"] = max_depth
-        res["AdaptiveLevinMaxLeafDepth"] = 0
-        res["AdaptiveLevinEffectiveRIntervals"] = local_r_intervals
-        res["AdaptiveLevinEffectiveThetaIntervals"] = effective_local_theta_intervals
-        res["AdaptiveLevinLocalThetaIntervals"] = effective_local_theta_intervals
-        res["AdaptiveLevinRequestedLocalThetaIntervals"] = local_theta_intervals
-        zero_low_flux && (res["LowFluxZeroed"] = true)
-        return res
-    end
-
+    # As in the eccentric route: a low-flux verdict needs two consecutive radial levels below the floor,
+    # the later at least min_depth, since the root segment can miss a narrow radial burst.
     leaves = GenericAdaptiveLevin2DLeaf[GenericAdaptiveLevin2DLeaf(root_key, root, true)]
     previous_total = root
     split_count = 0
@@ -1751,12 +1729,15 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
             end
             child_amp = zero(ComplexF64)
             children = GenericAdaptiveLevin2DLeaf[]
+            leaf_energy = abs(_generic_adaptive_energy_from_amp(leaf.amp, s, a, m, ω))
             for child in _generic_adaptive_radial_children(leaf.key)
                 amp = _generic_adaptive_segment_amplitude!(cache, KG_master, Ysol, SH, s, a, ω, m, n, k, child, nr, nt; threaded_sampling = threaded_sampling, sh_cache = sh_cache)
                 segment_evaluations += 1
                 child_amp += amp
                 child_energy = abs(_generic_adaptive_energy_from_amp(amp, s, a, m, ω))
-                push!(children, GenericAdaptiveLevin2DLeaf(child, amp, !(mode_abs_floor > 0.0 && child_energy < mode_abs_floor)))
+                low_flux = mode_abs_floor > 0.0 && child.level_r >= min_depth &&
+                    child_energy < mode_abs_floor && leaf_energy < mode_abs_floor
+                push!(children, GenericAdaptiveLevin2DLeaf(child, amp, !low_flux))
             end
             child_level = leaf.key.level_r + 1
             local_ok = child_level >= max(min_depth, GENERIC_LEVIN_LOCAL_MIN_LEVEL) &&
@@ -1773,7 +1754,9 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
         current_energy = abs(_generic_adaptive_energy_from_amp(current_total, s, a, m, ω))
         previous_energy = abs(_generic_adaptive_energy_from_amp(previous_total, s, a, m, ω))
         leaves = new_leaves
-        if mode_abs_floor > 0.0 && current_energy < mode_abs_floor
+        level = maximum((leaf.key.level_r for leaf in leaves); init = 0)
+        if mode_abs_floor > 0.0 && level >= min_depth &&
+                current_energy < mode_abs_floor && previous_energy < mode_abs_floor
             stop_reason = "low_flux"
             break
         elseif !changed
@@ -3607,18 +3590,18 @@ function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, 
         res2 = _eccentric_flux_from_cheby_sample(KG_cheby, Ysamp, SH, s, a, ω, m, n; cache = levin_cache)
         absE = abs(res2["EnergyFlux"])
         if res === nothing
+            # The first grid can miss a narrow periapsis burst; a value below the floor is only accepted
+            # when the next refinement confirms it.
             res = res2
-            if mode_abs_floor > 0.0 && absE < mode_abs_floor
-                break
-            end
             pending_low_flux_check = absE < low_flux_budget
         else
             relE = _relative_energy_change(res2["EnergyFlux"], res["EnergyFlux"])
             excess = abs(res2["EnergyFlux"]) / flux_scale
             factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
             low_flux_confirmed = pending_low_flux_check && absE < low_flux_budget && _levin_low_flux_stable(res2["EnergyFlux"], res["EnergyFlux"], mode_abs_floor)
+            below_floor = mode_abs_floor > 0.0 && absE < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
             res = res2
-            if (mode_abs_floor > 0.0 && absE < mode_abs_floor) || low_flux_confirmed || factor * relE <= effective_sample_tol
+            if below_floor || low_flux_confirmed || factor * relE <= effective_sample_tol
                 break
             end
             pending_low_flux_check = absE < low_flux_budget
@@ -3942,21 +3925,9 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     segment_evaluations = 0
     root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling)
     segment_evaluations += 1
-    root_energy = abs(_adaptive_eccentric_levin_result(root, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
-    if mode_abs_floor > 0.0 && root_energy < mode_abs_floor
-        res = _adaptive_eccentric_levin_result(root, KG_sample, Ysol, SH, s, a, ω, m)
-        res["N_sample_requested"] = local_n
-        res["N_sample"] = local_n
-        res["Quadrature"] = "adaptive_levin"
-        res["AdaptiveLevin"] = true
-        res["AdaptiveLevinSegmentEvaluations"] = segment_evaluations
-        res["AdaptiveLevinAcceptedSegments"] = 1
-        res["AdaptiveLevinMaxDepth"] = max_depth
-        res["AdaptiveLevinMaxLeafDepth"] = 0
-        res["AdaptiveLevinEffectiveIntervals"] = local_n
-        return res
-    end
-
+    # A low-flux verdict needs two consecutive refinement levels below the floor, the later at least
+    # min_depth: the single-segment root (and the first split) can miss a narrow periapsis burst of a
+    # high-eccentricity orbit and come out orders of magnitude too small.
     leaves = AdaptiveEccentricLevinLeaf[AdaptiveEccentricLevinLeaf(0, 0, root, true)]
     previous_total = root
     split_count = 0
@@ -3977,7 +3948,9 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
             segment_evaluations += 2
             child_amp = left + right
             child_energy = abs(_adaptive_eccentric_levin_result(child_amp, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
-            low_flux = mode_abs_floor > 0.0 && child_energy < mode_abs_floor
+            leaf_energy = abs(_adaptive_eccentric_levin_result(leaf.amp, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
+            low_flux = mode_abs_floor > 0.0 && child_level >= min_depth &&
+                child_energy < mode_abs_floor && leaf_energy < mode_abs_floor
             push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, left_bin, left, !low_flux))
             push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, right_bin, right, !low_flux))
             changed = true
@@ -3988,8 +3961,10 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
         current_energy = abs(_adaptive_eccentric_levin_result(current_total, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
         previous_energy = abs(_adaptive_eccentric_levin_result(previous_total, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
         leaves = new_leaves
+        level = maximum((leaf.level for leaf in leaves); init = 0)
 
-        if mode_abs_floor > 0.0 && current_energy < mode_abs_floor
+        if mode_abs_floor > 0.0 && level >= min_depth &&
+                current_energy < mode_abs_floor && previous_energy < mode_abs_floor
             stop_reason = "low_flux"
             break
         elseif !changed
