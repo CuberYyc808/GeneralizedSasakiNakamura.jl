@@ -1139,6 +1139,57 @@ end
     return min(target, max_stop)
 end
 
+# Fewest radial trapezoidal intervals that resolve the integrand's phase: the largest rate, per unit
+# q_r on [0, pi], of n q_r + omega Delta t_r - m Delta phi_r plus that of the carrier omega r_*, read off
+# the dense master grid. 4|n| alone misses the Delta phi_r term near periapsis: at (a, p, e) = (0.9, 8, 0.95)
+# the counter-rotating mode (n, m, l) = (101, -18, 18) needs 1063 intervals, and at N = 256 and 512 it
+# settled on an aliased 4.1e-7 instead of 6e-25.
+# max over the derivative pairs of |n + omega dt - m dphi|: the linear part peaks at the support point of the
+# direction (omega, -m) and is lowest at that of (-omega, m); each is read from the four stored directions
+# around it.
+function _support_phase_rate(dt::Vector{Float64}, dφ::Vector{Float64}, ω::Float64, m::Float64, n::Float64)
+    (ω == 0.0 && m == 0.0) && return abs(n)
+    K = length(dt)
+    function support(vx, vy)
+        θ = mod(atan(vy, vx), 2π)
+        k0 = floor(Int, θ / (2π) * K)
+        best = -Inf
+        @inbounds for j in k0 - 1:k0 + 2
+            i = mod(j, K) + 1
+            best = max(best, vx * dt[i] + vy * dφ[i])
+        end
+        return best
+    end
+    high = support(ω, -m)
+    low = -support(-ω, m)
+    return max(abs(high + n), abs(low + n))
+end
+
+function _radial_phase_min_sample(KG_master::Dict, ω, m::Integer, n::Integer, min_stop::Int, max_stop::Int)
+    data = get(KG_master, "radial_phase_rate", nothing)
+    if data !== nothing
+        # dense masters carry the support points of the derivative pairs (GridSampling._radial_phase_rate_data)
+        needed = _support_phase_rate(data.dt, data.dφ, Float64(ω), Float64(m), Float64(n)) + abs(ω) * data.max_drs
+        isfinite(needed) || return max_stop
+        return min(max(min_stop, nextpow(2, max(1, ceil(Int, needed)))), max_stop)
+    end
+    Δt = KG_master["Δtr"]
+    Δφ = KG_master["Δφr"]
+    rs = KG_master["rs"]
+    intervals = length(Δt) - 1
+    intervals > 0 || return min_stop
+    h = π / intervals
+    rate = 0.0
+    carrier = 0.0
+    @inbounds for i in 1:intervals
+        rate = max(rate, abs((ω * (Δt[i + 1] - Δt[i]) - m * (Δφ[i + 1] - Δφ[i])) / h + n))
+        carrier = max(carrier, abs(ω * (rs[i + 1] - rs[i]) / h))
+    end
+    needed = rate + carrier
+    isfinite(needed) || return max_stop
+    return min(max(min_stop, nextpow(2, max(1, ceil(Int, needed)))), max_stop)
+end
+
 # The Carter average has its own polar resolution, independent of the mode grid.
 const GENERIC_CARTER_MIN_INTERVALS = 64
 
@@ -1468,7 +1519,8 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
     energy = s == -2 ? abs2(integral) / (4.0pi * ω^2) : hf * abs2(integral)
     flux_scale = max(max_flux, eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
-    min_stop_N = _eccentric_fourier_min_sample(min(max(4N0, 256), Nmax), Nmax, n)
+    min_stop_N = _radial_phase_min_sample(KG_master, ω, m, n,
+        _eccentric_fourier_min_sample(min(max(4N0, 256), Nmax), Nmax, n), Nmax)
     min_stop_K = K_band
 
     while N < Nmax || K < Kmax
@@ -1958,7 +2010,8 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
     res = _generic_flux_from_sample(KG_samp, Ysamp, SHsamp, s, l, m, n, k, a, ω, ϒθ)
     flux_scale = max(max_flux, eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
-    min_stop_N = _eccentric_fourier_min_sample(min(max(4N0, 256), Nmax), Nmax, n)
+    min_stop_N = _radial_phase_min_sample(KG_master, ω, m, n,
+        _eccentric_fourier_min_sample(min(max(4N0, 256), Nmax), Nmax, n), Nmax)
     min_stop_K = min(max(4K0, 64), Kmax)
     while N < Nmax || K < Kmax
         N2 = min(2N, Nmax)
@@ -4047,7 +4100,8 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
     res = _eccentric_flux_from_sample(KG_samp, Ysamp, SH, s, a, ω, m, n)
     flux_scale = max(Float64(max_flux), eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(Float64(tol)))
-    min_stop_N = _eccentric_fourier_min_sample(min(max(4N_sample, 256), Nmax), Nmax, n)
+    min_stop_N = _radial_phase_min_sample(KG_sample, ω, m, n,
+        _eccentric_fourier_min_sample(min(max(4N_sample, 256), Nmax), Nmax, n), Nmax)
     # Checked radial Y table, as for generic orbits: built only once a refinement inserts at least as
     # many radii as the table and its three independent self-check calls cost.
     r_master = KG_sample["r"]

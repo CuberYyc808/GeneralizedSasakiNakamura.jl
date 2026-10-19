@@ -260,6 +260,29 @@ end
 
 # Dense uniform master grid of an eccentric equatorial orbit: N_sample + 1 points in qr on [0, π],
 # from which subsample_eccentric_sample extracts nested power-of-two grids.
+# Radial phase-rate data of a dense master grid on q_r in [0, pi], for ConvolutionIntegrals._radial_phase_min_sample,
+# which needs the largest |n + omega Delta t_r' - m Delta phi_r'| over the grid for every mode. That is the support
+# function of the set of finite-difference derivative pairs (Delta t_r', Delta phi_r') in the direction
+# (omega, -m), so the grid point maximising each of RADIAL_RATE_DIRECTIONS directions is stored; a query reads the
+# points of the four nearest directions, a few operations instead of a pass over the whole grid.
+const RADIAL_RATE_DIRECTIONS = 1024
+function _radial_phase_rate_data(Δtr_vals::AbstractVector, Δφr_vals::AbstractVector, rs_vals::AbstractVector)
+    intervals = length(Δtr_vals) - 1
+    h = π / intervals
+    dt = [(Δtr_vals[i + 1] - Δtr_vals[i]) / h for i in 1:intervals]
+    dφ = [(Δφr_vals[i + 1] - Δφr_vals[i]) / h for i in 1:intervals]
+    max_drs = maximum(abs((rs_vals[i + 1] - rs_vals[i]) / h) for i in 1:intervals)
+    support_dt = Vector{Float64}(undef, RADIAL_RATE_DIRECTIONS)
+    support_dφ = Vector{Float64}(undef, RADIAL_RATE_DIRECTIONS)
+    for k in 1:RADIAL_RATE_DIRECTIONS
+        c, s = cos(2π * (k - 1) / RADIAL_RATE_DIRECTIONS), sin(2π * (k - 1) / RADIAL_RATE_DIRECTIONS)
+        best = argmax(c * dt[i] + s * dφ[i] for i in eachindex(dt))
+        support_dt[k] = dt[best]
+        support_dφ[k] = dφ[best]
+    end
+    return (dt = support_dt, dφ = support_dφ, max_drs = max_drs)
+end
+
 function kerr_geo_eccentric_sample_dense(KG::Dict, N_sample::Int64)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
     N_points = N_sample + 1
@@ -293,6 +316,7 @@ function kerr_geo_eccentric_sample_dense(KG::Dict, N_sample::Int64)
         "θ" => π/2,
         "Δtr" => Δtr_vals,
         "Δφr" => Δφr_vals,
+        "radial_phase_rate" => _radial_phase_rate_data(Δtr_vals, Δφr_vals, rs_vals),
         "ur_fwd" => urq_fwd,
         "ur_rev" => urq_rev,
         "N_sample" => N_points,
@@ -3725,6 +3749,7 @@ function kerr_geo_generic_sample_dense(KG::Dict, N_interval::Int64, K_interval::
         "Δtθ" => Δtθ_vals,
         "Δφr" => Δφr_vals,
         "Δφθ" => Δφθ_vals,
+        "radial_phase_rate" => _radial_phase_rate_data(Δtr_vals, Δφr_vals, rs_vals),
         "ur_fwd" => ur_fwd,
         "ur_rev" => -ur_fwd,
         "uθ_fwd" => uθ_fwd,
