@@ -1748,7 +1748,7 @@ function _flux_tail_levin_branch_strategy(label::AbstractString, enabled, start_
         if start_n === nothing
             return "$label: ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered"
         end
-        return "$label: ISEM adaptive trapezoidal for n < $start_n; tail ISEM adaptive Levin for n >= $start_n"
+        return "$label: ISEM adaptive trapezoidal; tail ISEM adaptive Levin from n = $start_n on"
     end
     return "$label: ISEM adaptive trapezoidal for all n; tail ISEM adaptive Levin inactive"
 end
@@ -1758,7 +1758,7 @@ function _flux_tail_levin_strategy(enabled, start_n)
         if start_n === nothing
             return "ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered"
         end
-        return "ISEM adaptive trapezoidal for n < $start_n; tail ISEM adaptive Levin for n >= $start_n"
+        return "ISEM adaptive trapezoidal; tail ISEM adaptive Levin from n = $start_n on"
     end
     return "ISEM adaptive trapezoidal for all n; tail ISEM adaptive Levin inactive"
 end

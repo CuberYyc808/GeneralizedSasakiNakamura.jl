@@ -51,11 +51,10 @@ end
 
 # Cost heuristic behind tail_levin = :auto: a mode with |n| >= nmin switches to adaptive Levin only when the
 # uniform trapezoid grid it would need has at least 4096 radial points and is at least 8x (eccentric) or, in N*K,
-# 16x (generic) the adaptive-Levin work.
-@inline function _ecc_levin_auto(n::Int, N0::Int, Nmax::Int,
-        local_n::Int, max_depth::Int, nmin::Int)
+# 16x (generic) the adaptive-Levin work. The eccentric rule takes that grid per mode from the radial phase rate
+# (uniform_n from _mode_radial_trapezoid_n); the generic n-shell rule keeps 4|n|.
+@inline function _ecc_levin_auto(uniform_n::Int, n::Int, local_n::Int, max_depth::Int, nmin::Int)
     abs(n) >= nmin || return false
-    uniform_n = _uniform_radial_n(N0, Nmax, n)
     adaptive_n = local_n * 2^min(max_depth, 5)
     return uniform_n >= max(4096, 8adaptive_n)
 end
@@ -69,6 +68,25 @@ end
     adaptive_k = local_n + 1
     return uniform_n >= 4096 &&
         uniform_n * uniform_k >= 16adaptive_n * adaptive_k
+end
+
+# Radial trapezoid intervals a mode needs: its radial phase rate (ConvolutionIntegrals._radial_phase_min_sample),
+# not 4|n|. At high eccentricity the rate is far above 4|n| (about 14 n at e = 0.95 and 30 n at e = 0.99, a = 0.9)
+# and grows with the counter-rotating |m|, so the tail switch below is decided per mode from it.
+function _mode_radial_trapezoid_n(KG::Dict, m::Int, n::Int, k::Int, N0::Int, Nmax::Int)
+    F = KG["Frequencies"]
+    ω = (m * F["ϒϕ"] + n * F["ϒr"] + k * get(F, "ϒθ", 0.0)) / F["ϒt"]
+    return ConvolutionIntegrals._radial_phase_min_sample(KG, ω, m, n, _uniform_radial_n(N0, Nmax, n), typemax(Int))
+end
+
+# Per-mode form of _gen_levin_auto with the radial grid from the phase rate.
+@inline function _gen_levin_auto_mode(uniform_n::Int, n::Int, K0::Int, Kmax::Int,
+        local_n::Int, max_depth::Int, nmin::Int)
+    abs(n) >= nmin || return false
+    uniform_k = min(max(4K0, 64), Kmax)
+    adaptive_n = local_n * 2^min(max_depth, 5)
+    adaptive_k = local_n + 1
+    return uniform_n >= 4096 && uniform_n * uniform_k >= 16adaptive_n * adaptive_k
 end
 
 @inline _mode_cutoff_threshold(base::Float64, mode_abs_floor::Float64) = max(base, mode_abs_floor)
@@ -446,25 +464,26 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     tail_levin_horizon_active = Ref(false)
     tail_levin_infinity_start_n = Ref{Union{Nothing, Int}}(nothing)
     tail_levin_horizon_start_n = Ref{Union{Nothing, Int}}(nothing)
-    use_eccentric_tail_levin = (s, n) -> begin
+    # tail_levin = true: every mode from the first |n| >= nmin on. :auto: each mode whose trapezoid grid,
+    # estimated from its radial phase rate, passes the cost rule of _ecc_levin_auto.
+    use_eccentric_tail_levin = (s, m, n) -> begin
         branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
         _tail_enabled(branch_policy) && fast || return false
         active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
         start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
-        if active[]
-            return true
-        elseif _use_levin_tail(n; nmin = levin_nmin) &&
-                (branch_policy === true || _ecc_levin_auto(
-                    n, N, Nmax, adaptive_local_n, levin_max_depth,
-                    levin_nmin))
+        branch_policy === true && active[] && return true
+        _use_levin_tail(n; nmin = levin_nmin) || return false
+        if branch_policy === true || _ecc_levin_auto(
+                _mode_radial_trapezoid_n(KG_sample, m, n, 0, N, Nmax), n,
+                adaptive_local_n, levin_max_depth, levin_nmin)
             active[] = true
-            start_n[] = n
+            start_n[] === nothing && (start_n[] = n)
             return true
         end
         return false
     end
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
-        use_levin = use_eccentric_tail_levin(s, n)
+        use_levin = use_eccentric_tail_levin(s, m, n)
         floor = branch_mode_floor(s)
         if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
@@ -1512,7 +1531,10 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         end
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             auto_levin = use_generic_tail_levin(s, n)
-            use_levin = use_levin || auto_levin
+            use_levin = use_levin || auto_levin ||
+                (fast && (s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
+                    _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
+                        levin_local_n, levin_max_depth, levin_nmin))
             floor = branch_mode_floor(s)
             mode = if fast
                 if use_levin
