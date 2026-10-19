@@ -1910,23 +1910,23 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         tail_levin_horizon_active = Ref(false)
         tail_levin_infinity_start_n = Ref{Union{Nothing, Int}}(nothing)
         tail_levin_horizon_start_n = Ref{Union{Nothing, Int}}(nothing)
+        # n-shell trigger of the generic tail (forced Levin for the shell and the m-walk tail shortcut). It is decided
+        # per shell from the radial trapezoid grid the shell's (m = 2, k = 0) mode needs, and is not latched: a shell
+        # whose phase is slow again goes back to the trapezoid. start_n records the first shell that triggered.
         use_generic_tail_levin = (s, n) -> begin
             branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
             _tail_enabled(branch_policy) && fast || return false
             active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
             start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
-            if active[]
-                return true
-            elseif _use_levin_tail(n; nmin = levin_nmin) &&
-                    (branch_policy === true || _gen_levin_auto(
-                        n, N0, K0, Nmax, Kmax,
-                        levin_local_n,
-                        levin_max_depth, levin_nmin))
+            triggered = _use_levin_tail(n; nmin = levin_nmin) &&
+                (branch_policy === true || _gen_levin_auto_mode(
+                    _mode_radial_trapezoid_n(KG_master, 2, n, 0, N0, Nmax), n, K0, Kmax,
+                    levin_local_n, levin_max_depth, levin_nmin))
+            if triggered
                 active[] = true
-                start_n[] = n
-                return true
+                start_n[] === nothing && (start_n[] = n)
             end
-            return false
+            return triggered
         end
         # one tracker per boundary: the two branches may run on different tasks
         cap_trackers = (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
