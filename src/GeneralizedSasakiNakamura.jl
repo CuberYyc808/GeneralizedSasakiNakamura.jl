@@ -1715,9 +1715,12 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
         end
     else
         for key in keys(flux.reached)
-            key === :caps && continue
+            key in (:caps, :failed_modes) && continue
             println(io, "    $key = $(_flux_reached_print_value(flux, key, flux.reached[key])),")
         end
+    end
+    if haskey(flux.reached, :failed_modes) && (flux.reached[:failed_modes].infinity > 0 || flux.reached[:failed_modes].horizon > 0)
+        println(io, "    failed_modes = $(flux.reached[:failed_modes]),")
     end
     if haskey(flux.reached, :caps)
         caps = flux.reached[:caps]
@@ -1852,7 +1855,8 @@ _teukolsky_flux_caps(result) = (
 
 function _teukolsky_flux_reached(result, orbit_type::Symbol)
     reached = _teukolsky_flux_reached_walks(result, orbit_type)
-    return merge(reached, (caps = _teukolsky_flux_caps(result),))
+    failed = (infinity = _flux_get(result, :failed_modes_inf, 0), horizon = _flux_get(result, :failed_modes_hor, 0))
+    return merge(reached, (failed_modes = failed, caps = _teukolsky_flux_caps(result)))
 end
 
 function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)

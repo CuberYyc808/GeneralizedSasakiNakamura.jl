@@ -725,10 +725,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         return false
     end
     cap_trackers = (CapTracker(lmax, 0), CapTracker(lmax, 0))
+    failed_modes = [0, 0]
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
         use_levin = use_eccentric_tail_levin(s, m, n)
         floor = branch_mode_floor(s)
-        mode = if use_levin
+        mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s)), zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
@@ -742,7 +743,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                     ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, cache = mode_cache)
                 end
             end
-        end
+        end; end
+        get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
         _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, 0, mode["EnergyFlux"])
         mode
@@ -1129,6 +1131,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         lmax_hit_hor = _cap_hits(cap_trackers[2], tol, total_horizon_energy)[1],
         nmax_hit_inf = _nmax_hit(n_reached_inf, Energy_flux_inf, nmax, tol, total_infinity_energy),
         nmax_hit_hor = _nmax_hit(n_reached_hor, Energy_flux_hor, nmax, tol, total_horizon_energy),
+        failed_modes_inf = failed_modes[1],
+        failed_modes_hor = failed_modes[2],
         tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
         tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
         tail_levin_infinity_policy = tail_policy_inf,
@@ -1312,6 +1316,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     # Near-static modes recorded as zero after a matching overflow (see ConvolutionIntegrals.NEAR_STATIC_RATIO).
     near_static_zero_inf = 0
     near_static_zero_hor = 0
+    failed_modes_inf = 0
+    failed_modes_hor = 0
 
     mode_index = Ref(0)
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
@@ -1369,6 +1375,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "I", 0, m, l, mode_index, mode_inf, K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
+                    get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
                     shell_m_infinity_energy += 2 * mode_inf["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode_inf["AngularMomentumFlux"]
                     shell_m_infinity_carter += 2 * mode_inf["CarterConstantFlux"]
@@ -1403,6 +1410,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "H", 0, m, l, mode_index, mode_hor, K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
+                    get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
                     shell_m_horizon_energy += 2 * mode_hor["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode_hor["AngularMomentumFlux"]
                     shell_m_horizon_carter += 2 * mode_hor["CarterConstantFlux"]
@@ -1468,6 +1476,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 end
                 _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
+                get(mode, "FailedMode", false) && (failed_modes_inf += 1)
                 l_reached_inf = max(l_reached_inf, l)
                 shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                 shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1500,6 +1509,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
+                    get(mode, "FailedMode", false) && (failed_modes_inf += 1)
                     l_reached_inf = max(l_reached_inf, l)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1543,6 +1553,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
+                    get(mode, "FailedMode", false) && (failed_modes_inf += 1)
                     l_reached_inf = max(l_reached_inf, l)
                     shell_m_infinity_energy += 2 * mode["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
@@ -1600,6 +1611,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 end
                 _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
+                get(mode, "FailedMode", false) && (failed_modes_hor += 1)
                 l_reached_hor = max(l_reached_hor, l)
                 shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                 shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1632,6 +1644,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
+                    get(mode, "FailedMode", false) && (failed_modes_hor += 1)
                     l_reached_hor = max(l_reached_hor, l)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1676,6 +1689,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
+                    get(mode, "FailedMode", false) && (failed_modes_hor += 1)
                     l_reached_hor = max(l_reached_hor, l)
                     shell_m_horizon_energy += 2 * mode["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
@@ -1767,6 +1781,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             kmax_hit_hor = kmax_hit_hor,
             near_static_zero_inf = near_static_zero_inf,
             near_static_zero_hor = near_static_zero_hor,
+            failed_modes_inf = failed_modes_inf,
+            failed_modes_hor = failed_modes_hor,
             infinity_energy_flux_list = Energy_flux_inf,
             horizon_energy_flux_list = Energy_flux_hor,
             record_file = record ? record_path : nothing,
@@ -1896,6 +1912,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         end
         # one tracker per boundary: the two branches may run on different tasks
         cap_trackers = (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
+        failed_modes = [0, 0]
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             auto_levin = use_generic_tail_levin(s, n)
             use_levin = use_levin || auto_levin ||
@@ -1903,7 +1920,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
                         levin_local_n, levin_max_depth, levin_nmin))
             floor = branch_mode_floor(s)
-            mode = if fast
+            mode = ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k) do; if fast
                 if use_levin
                     levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux))
                     levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
@@ -1919,7 +1936,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
                     ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
-            end
+            end; end
+            get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
             ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
             _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
@@ -2557,6 +2575,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             kmax_hit_hor = cap_hits_hor[2],
             nmax_hit_inf = _nmax_hit(inf.n_reached, inf.shell_list, nmax, tol, inf.energy_flux),
             nmax_hit_hor = _nmax_hit(hor.n_reached, hor.shell_list, nmax, tol, hor.energy_flux),
+            failed_modes_inf = failed_modes[1],
+            failed_modes_hor = failed_modes[2],
             tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
             tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
             tail_levin_infinity_policy = tail_policy_inf,

@@ -43,6 +43,33 @@ function _check_finite_mode_flux(res, s, l, m, n, k)
         "E = $(res["EnergyFlux"]), L = $(res["AngularMomentumFlux"]), Q = $(res["CarterConstantFlux"])")
 end
 
+# A radial basis that does not cover the source radius (ISEM's small-frequency UP route can leave a gap between its
+# marched patches and the MST out-sum, e.g. x = 0.92..0.94 at a ~ 0.95) used to end a multi-hour run. Such a mode is
+# retried with the small-frequency expansion off; if that fails too it is recorded as a failed mode (zero flux,
+# FailedMode = true, counted in reached) with a warning. The coverage error is recognized by its message: ISEM keeps
+# it an ErrorException because its complex-frequency paths catch that type. Interrupts always propagate.
+const _FORCE_ORDINARY_KEY = :GSN_FORCE_ORDINARY_Y
+_is_basis_coverage_error(err) = err isa ErrorException &&
+    (occursin("basis does not cover", err.msg) || occursin("basis has no patch for", err.msg))
+
+function _with_coverage_retry(f, s, l, m, n, k)
+    try
+        return f()
+    catch err
+        err isa InterruptException && rethrow()
+        _is_basis_coverage_error(err) || rethrow()
+    end
+    try
+        return task_local_storage(f, _FORCE_ORDINARY_KEY, true)
+    catch err
+        err isa InterruptException && rethrow()
+        @warn "Mode (s, l, m, n, k) = ($s, $l, $m, $n, $k) failed after a retry without the small-frequency expansion; recorded as a failed mode with zero flux." exception = sprint(showerror, err)
+        res = _zero_radiative_mode(0.0, nothing; reason = "failed_mode")
+        res["FailedMode"] = true
+        return res
+    end
+end
+
 function _zero_radiative_mode(ω, trajectory; reason = "")
     return Dict(
         "Amplitude" => 0.0 + 0.0im,
@@ -407,6 +434,7 @@ const _INHOMOGENEOUS_ORDINARY_MAX_L = 4
 # Small-frequency-expansion control for the ISEM Y solve: off for real, low-l (l <= 4) modes with
 # |omega| >= 0.05 and |a| <= 0.95, otherwise left to ISEM (:auto).
 @inline function _inhomogeneous_small_frequency_expansion_control(l, a, omega)
+    get(task_local_storage(), _FORCE_ORDINARY_KEY, false) && return false
     regular_low_mode = isreal(omega) &&
         abs(omega) >= _INHOMOGENEOUS_ORDINARY_MIN_OMEGA &&
         l <= _INHOMOGENEOUS_ORDINARY_MAX_L && abs(a) <= 0.95
@@ -4197,7 +4225,13 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
     return res
 end
 
-function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m, k, K_sample::Int64; kwargs...)
+    return _with_coverage_retry(s, l, m, 0, k) do
+        _inclined_trapezoidal_isem_once(KG_sample, s, l, m, k, K_sample; kwargs...)
+    end
+end
+
+function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(K_sample) || throw(ArgumentError("K_sample must be a power of 2"))
     ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
