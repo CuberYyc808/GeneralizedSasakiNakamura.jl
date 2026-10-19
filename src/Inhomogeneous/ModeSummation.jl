@@ -2045,6 +2045,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             initial_mode_threshold = _mode_cutoff_threshold(tol * max(abs(total_energy + shell_n), abs(shell_n)), initial_floor)
             initial_k_shell_threshold = _generic_k_shell_threshold(total_energy + shell_n, shell_n, tol, initial_floor)
             below_count_k = 0
+            peak_k_shell = 0.0
             for k in 1:kmax
                 shell_k = 0.0
                 shell_k_angular = 0.0
@@ -2141,7 +2142,9 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     end
                 end
 
-                below_count_k = abs(shell_k) <= initial_k_shell_threshold ? below_count_k + 1 : 0
+                # a k shell counts towards the stop only past the largest k shell (shells can rise before they fall)
+                below_count_k = abs(shell_k) <= initial_k_shell_threshold && abs(shell_k) < peak_k_shell ? below_count_k + 1 : 0
+                peak_k_shell = max(peak_k_shell, abs(shell_k))
                 if below_count_k >= minimum_consecutive
                     break
                 end
