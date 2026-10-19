@@ -201,6 +201,62 @@ _tail_hit(tail, tol, total) = tail > tol * abs(total)
 # Tail of one mode (both signs of m) beyond an l walk that ran off the end of ls without its stop rule; 0 otherwise.
 @inline _walk_tail(walk, ls) = !walk.stopped && !isempty(ls) && walk.last_l == last(ls) ? 2 * _geometric_tail(walk.trail, last(ls)) : 0.0
 
+# Modes within two steps of a cap, for the tail-based cap-hit test of the eccentric and generic routes, which walk l,
+# m and k in many nested loops: (n, m, k) => (l, E) of an l walk, (n, k, m) => m-shell E, (n, k) => k-shell E.
+struct CapTracker
+    lmax::Int
+    kmax::Int
+    l_walks::Dict{NTuple{3, Int}, Vector{Tuple{Int, Float64}}}
+    m_shells::Dict{NTuple{3, Int}, Float64}
+    k_shells::Dict{NTuple{2, Int}, Float64}
+end
+CapTracker(lmax::Int, kmax::Int) = CapTracker(lmax, kmax, Dict{NTuple{3, Int}, Vector{Tuple{Int, Float64}}}(),
+    Dict{NTuple{3, Int}, Float64}(), Dict{NTuple{2, Int}, Float64}())
+
+function _note_cap_mode!(t::CapTracker, l::Int, m::Int, n::Int, k::Int, E)
+    isfinite(E) || return t
+    l >= t.lmax - 2 && push!(get!(Vector{Tuple{Int, Float64}}, t.l_walks, (n, m, k)), (l, Float64(E)))
+    abs(m) >= t.lmax - 2 && (t.m_shells[(n, k, m)] = get(t.m_shells, (n, k, m), 0.0) + 2E)
+    t.kmax > 0 && abs(k) >= t.kmax - 2 && (t.k_shells[(n, k)] = get(t.k_shells, (n, k), 0.0) + 2E)
+    return t
+end
+
+# Tail-based hit of the walks that reached a cap, sorted by their walk index (last three values, oldest first).
+function _capped_walk_hit(groups, cap, tol, total, factor)
+    for v in values(groups)
+        any(e -> e[1] == cap, v) || continue
+        sort!(v)
+        trail = [factor * abs(e[2]) for e in v[max(1, end - 2):end]]
+        _tail_hit(_geometric_tail(trail, cap), tol, total) && return true
+    end
+    return false
+end
+
+# (lmax_hit, kmax_hit) of one boundary from its tracker and its total.
+function _cap_hits(t::CapTracker, tol, total)
+    lhit = _capped_walk_hit(t.l_walks, t.lmax, tol, total, 2.0)
+    if !lhit
+        groups = Dict{NTuple{3, Int}, Vector{Tuple{Int, Float64}}}()
+        for ((n, k, m), E) in t.m_shells
+            push!(get!(Vector{Tuple{Int, Float64}}, groups, (n, k, sign(m))), (abs(m), E))
+        end
+        lhit = _capped_walk_hit(groups, t.lmax, tol, total, 1.0)
+    end
+    khit = false
+    if t.kmax > 0
+        groups = Dict{NTuple{3, Int}, Vector{Tuple{Int, Float64}}}()
+        for ((n, k), E) in t.k_shells
+            push!(get!(Vector{Tuple{Int, Float64}}, groups, (n, sign(k), 0)), (abs(k), E))
+        end
+        khit = _capped_walk_hit(groups, t.kmax, tol, total, 1.0)
+    end
+    return lhit, khit
+end
+
+# An n sum that reached nmax without its stop rule is truncated when the geometric tail of its last three shells matters.
+_nmax_hit(n_reached, shells, nmax, tol, total) =
+    n_reached === nothing && !isempty(shells) && _tail_hit(_geometric_tail(abs.(shells[max(1, end - 2):end]), nmax), tol, total)
+
 # Modes more than this factor below the largest mode of their l walk are taken as zeros by symmetry
 # (e.g. every other l at a = 0, |flux| ~ 1e-35 next to neighbours of ~1e-7), not as a decaying tail.
 const _STRUCTURAL_ZERO_RATIO = 1e-20
@@ -289,46 +345,96 @@ function auto_lmax_estimate(a, p, e, x; tol = 1e-8)
 end
 
 # Initial caps: integers pass through; :auto takes the estimate (kmax = lmax estimate).
-function _auto_caps_start(a, p, e, x, tol, lmax, kmax)
+const AUTO_NMAX_MIN = 100
+const AUTO_NMAX_MAX = 20000
+const AUTO_NMAX_COEFF = 0.75
+
+# Radial harmonic content: the azimuthal rate at periapsis r_p = p / (1 + e) (at the equatorial crossing for generic
+# orbits) over the radial frequency. It grows without bound towards the separatrix (Omega_r -> 0).
+function _radial_harmonic_scale(a, p, e, x)
+    KG = kerr_geo_orbit(a, p, e, x)
+    E = KG["Energy"]
+    Lz = KG["AngularMomentum"]
+    F = KG["Frequencies"]
+    r = p / (1 + e)
+    Δ = r^2 - 2r + a^2
+    P = E * (r^2 + a^2) - a * Lz
+    dφ = a * P / Δ - a * E + Lz
+    dt = (r^2 + a^2) * P / Δ - a * (a * E - Lz)
+    return abs(dφ / dt) / abs(F["ϒr"] / F["ϒt"])
+end
+
+# nmax = c_n (lmax + log(1/tol)) w_p / Omega_r, clamped to [AUTO_NMAX_MIN, AUTO_NMAX_MAX]. c_n = 0.75 gives at least
+# 1.5 times the n reached by (0.9, 8, 0.99, 1) at tol 1e-6 (8436), (0.9, 8, 0.95, 1) (1005), (0.9, 6, 0.7, 1) at
+# 1e-8 (124) and (0.5, p_sep + 0.05, 0.8, 1) (388).
+function auto_nmax_estimate(a, p, e, x, tol, lmax)
+    scale = try
+        _radial_harmonic_scale(a, p, e, x)
+    catch
+        return (cap = AUTO_NMAX_MAX, status = :scale_failed)
+    end
+    isfinite(scale) || return (cap = AUTO_NMAX_MAX, status = :scale_failed)
+    return (cap = clamp(ceil(Int, AUTO_NMAX_COEFF * (lmax + log(1 / tol)) * scale), AUTO_NMAX_MIN, AUTO_NMAX_MAX), status = :ok)
+end
+
+# Initial caps: integers pass through; :auto takes the estimates (kmax = lmax estimate; nmax from the radial
+# harmonic scale with the lmax used). nmax = nothing for routes without an n sum.
+function _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax = nothing)
     auto_l = lmax === :auto
     auto_k = kmax === :auto
-    (auto_l || auto_k) && !(tol > 0) && throw(ArgumentError("tol must be positive"))
-    (auto_l || auto_k) || return (lmax = lmax, kmax = kmax, auto_l = false, auto_k = false, estimate = nothing, status = :fixed)
-    est = auto_lmax_estimate(a, p, e, x; tol)
-    if est.status == :probe_failed
-        @warn "Automatic lmax/kmax: the equatorial circular probe at r = p / (1 + e) failed; using $(AUTO_CAP_MIN)." a p e x
-    elseif est.status == :no_falloff
-        @warn "Automatic lmax/kmax: the probe shows no l falloff by l = 10; using $(AUTO_CAP_MAX)." a p e x
+    auto_n = nmax === :auto
+    (auto_l || auto_k || auto_n) && !(tol > 0) && throw(ArgumentError("tol must be positive"))
+    est = (cap = nothing, status = :fixed)
+    if auto_l || auto_k
+        est = auto_lmax_estimate(a, p, e, x; tol)
+        if est.status == :probe_failed
+            @warn "Automatic lmax/kmax: the equatorial circular probe at r = p / (1 + e) failed; using $(AUTO_CAP_MIN)." a p e x
+        elseif est.status == :no_falloff
+            @warn "Automatic lmax/kmax: the probe shows no l falloff by l = 10; using $(AUTO_CAP_MAX)." a p e x
+        end
     end
-    return (lmax = auto_l ? est.cap : lmax, kmax = auto_k ? est.cap : kmax, auto_l, auto_k, estimate = est.cap, status = est.status)
+    L = auto_l ? est.cap : lmax
+    nest = (cap = nothing, status = :fixed)
+    if auto_n
+        nest = auto_nmax_estimate(a, p, e, x, tol, L)
+        nest.status == :scale_failed && @warn "Automatic nmax: the radial harmonic scale could not be evaluated; using $(AUTO_NMAX_MAX)." a p e x
+    end
+    return (lmax = L, kmax = auto_k ? est.cap : kmax, nmax = auto_n ? nest.cap : nmax, auto_l, auto_k, auto_n,
+        estimate = est.cap, n_estimate = nest.cap, status = est.status)
 end
 
 _result_lmax_hit(result, lmax) = get(result, :lmax_hit_inf, false) || get(result, :lmax_hit_hor, false) ||
     (haskey(result, :l_reached_inf) && !haskey(result, :lmax_hit_inf) && (something(result.l_reached_inf, 0) >= lmax || something(get(result, :l_reached_hor, 0), 0) >= lmax))
 _result_kmax_hit(result) = get(result, :kmax_hit_inf, false) || get(result, :kmax_hit_hor, false)
+_result_nmax_hit(result) = get(result, :nmax_hit_inf, false) || get(result, :nmax_hit_hor, false)
 
-# Run run(lmax, kmax, warn) with the start caps; when a cap came from :auto and the sum hit it, raise that cap by
-# half (at most AUTO_CAP_MAX) and sum again, at most AUTO_CAP_MAX_RAISES times. Adds the caps to the result.
+# Run run(lmax, kmax, nmax, warn) with the start caps; when a cap came from :auto and the sum hit it, raise that cap
+# by half (lmax and kmax at most AUTO_CAP_MAX, nmax at most AUTO_NMAX_MAX) and sum again, at most
+# AUTO_CAP_MAX_RAISES times. Adds the caps to the result.
 function _with_auto_caps(run, caps)
-    L, Kc = caps.lmax, caps.kmax
-    auto = caps.auto_l || caps.auto_k
+    L, Kc, Nc = caps.lmax, caps.kmax, caps.nmax
+    auto = caps.auto_l || caps.auto_k || caps.auto_n
     raises = 0
-    result = run(L, Kc, !auto)
+    result = run(L, Kc, Nc, !auto)
     while auto && raises < AUTO_CAP_MAX_RAISES
         raise_l = caps.auto_l && L < AUTO_CAP_MAX && _result_lmax_hit(result, L)
         raise_k = caps.auto_k && Kc isa Integer && Kc < AUTO_CAP_MAX && _result_kmax_hit(result)
-        (raise_l || raise_k) || break
+        raise_n = caps.auto_n && Nc isa Integer && Nc < AUTO_NMAX_MAX && _result_nmax_hit(result)
+        (raise_l || raise_k || raise_n) || break
         raise_l && (L = min(AUTO_CAP_MAX, ceil(Int, 1.5L)))
         raise_k && (Kc = min(AUTO_CAP_MAX, ceil(Int, 1.5Kc)))
+        raise_n && (Nc = min(AUTO_NMAX_MAX, ceil(Int, 1.5Nc)))
         raises += 1
-        result = run(L, Kc, false)
+        result = run(L, Kc, Nc, false)
     end
     if auto
         _result_lmax_hit(result, L) && @warn "Mode summation hit lmax = $(L) with modes still above the cutoff after $(raises) automatic raise(s): the l sum is truncated." lmax = L
         _result_kmax_hit(result) && @warn "Mode summation ran to kmax = $(Kc) without converged k shells after $(raises) automatic raise(s): the k sum may be truncated." kmax = Kc
+        _result_nmax_hit(result) && @warn "Mode summation ran to nmax = $(Nc) without converged n shells after $(raises) automatic raise(s): the n sum may be truncated." nmax = Nc
     end
-    return merge(result, (lmax_used = L, kmax_used = Kc, lmax_auto = caps.auto_l, kmax_auto = caps.auto_k,
-        cap_estimate = caps.estimate, cap_status = caps.status, cap_raises = raises))
+    return merge(result, (lmax_used = L, kmax_used = Kc, nmax_used = Nc, lmax_auto = caps.auto_l, kmax_auto = caps.auto_k,
+        nmax_auto = caps.auto_n, cap_estimate = caps.estimate, nmax_estimate = caps.n_estimate, cap_status = caps.status,
+        cap_raises = raises))
 end
 
 function _record_adaptive_levin_metadata!(bgrp, mode)
@@ -528,7 +634,7 @@ function circular_mode_summation(a, p; submission = nothing, x=1.0, tol = 1e-8, 
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, nothing)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, _, _
+        _with_auto_caps(caps) do L, _, _, _
             with_submission_operation(scope) do
                 _circular_mode_summation_scoped(scope, a, p; x = x, tol = tol, lmax = L, min_consecutive = min_consecutive)
             end
@@ -618,10 +724,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         end
         return false
     end
+    cap_trackers = (CapTracker(lmax, 0), CapTracker(lmax, 0))
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
         use_levin = use_eccentric_tail_levin(s, m, n)
         floor = branch_mode_floor(s)
-        if use_levin
+        mode = if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s)), zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
@@ -636,6 +743,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                 end
             end
         end
+        _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, 0, mode["EnergyFlux"])
+        mode
     end
 
     try
@@ -1015,6 +1124,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         N_max = Nmax,
         n_reached_inf = n_reached_inf,
         n_reached_hor = n_reached_hor,
+        lmax_hit_inf = _cap_hits(cap_trackers[1], tol, total_infinity_energy)[1],
+        lmax_hit_hor = _cap_hits(cap_trackers[2], tol, total_horizon_energy)[1],
+        nmax_hit_inf = _nmax_hit(n_reached_inf, Energy_flux_inf, nmax, tol, total_infinity_energy),
+        nmax_hit_hor = _nmax_hit(n_reached_hor, Energy_flux_hor, nmax, tol, total_horizon_energy),
         tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
         tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
         tail_levin_infinity_policy = tail_policy_inf,
@@ -1037,13 +1150,13 @@ end
 
 # Total eccentric equatorial fluxes: n = 0 shell, then n = 1, 2, ... shells (each over m >= 1, m <= -1 and l),
 # until minimum_consecutive + 1 n shells are below tol times the branch total. See Teukolsky_pointparticle_flux.
-function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
-    caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing)
+function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+    caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, warn
+        _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
-                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth)
+                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth)
             end
         end
     end
@@ -1667,7 +1780,7 @@ function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, 
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, warn
+        _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
                 _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, warn_truncation = warn)
             end
@@ -1780,6 +1893,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             end
             return false
         end
+        # one tracker per boundary: the two branches may run on different tasks
+        cap_trackers = (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             auto_levin = use_generic_tail_levin(s, n)
             use_levin = use_levin || auto_levin ||
@@ -1804,6 +1919,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
             end
+            _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
         end
 
@@ -2412,6 +2528,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             record_h5["meta/horizon_energy_flux_list"] = hor.shell_list
         end
 
+        cap_hits_inf = _cap_hits(cap_trackers[1], tol, inf.energy_flux)
+        cap_hits_hor = _cap_hits(cap_trackers[2], tol, hor.energy_flux)
         return (
             infinity_energy_flux = inf.energy_flux,
             infinity_angular_momentum_flux = inf.angular_momentum_flux,
@@ -2431,6 +2549,12 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             K_max = Kmax,
             n_reached_inf = inf.n_reached,
             n_reached_hor = hor.n_reached,
+            lmax_hit_inf = cap_hits_inf[1],
+            lmax_hit_hor = cap_hits_hor[1],
+            kmax_hit_inf = cap_hits_inf[2],
+            kmax_hit_hor = cap_hits_hor[2],
+            nmax_hit_inf = _nmax_hit(inf.n_reached, inf.shell_list, nmax, tol, inf.energy_flux),
+            nmax_hit_hor = _nmax_hit(hor.n_reached, hor.shell_list, nmax, tol, hor.energy_flux),
             tail_levin_infinity_enabled = _tail_enabled(tail_policy_inf) && fast,
             tail_levin_horizon_enabled = _tail_enabled(tail_policy_hor) && fast,
             tail_levin_infinity_policy = tail_policy_inf,
@@ -2454,13 +2578,13 @@ end
 
 # Total generic-orbit fluxes, summed over n, k, m and l shells with the stopping rules described in
 # Teukolsky_pointparticle_flux. Equatorial and e = 0 orbits are passed to the eccentric and inclined summations.
-function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
-    caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax)
+function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+    caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, warn
+        _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
-                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path)
+                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path)
             end
         end
     end
