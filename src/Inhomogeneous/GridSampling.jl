@@ -1,5 +1,6 @@
 module GridSampling
 
+using SpinWeightedSpheroidalHarmonics: value_and_theta_derivative
 using ..Coordinates
 using ..ConversionFactors
 using ..ISEM
@@ -608,8 +609,7 @@ function subsample_inclined_sample(KG_sample::Dict, K_interval::Int64)
 end
 
 @inline function _swsh_values(SH, θ, s, m, c, λ)
-    s0 = SH(θ, 0.0)
-    s1 = SH(θ, 0.0; theta_derivative = 1)
+    s0, s1 = value_and_theta_derivative(SH, θ, 0.0)
     sθ = sin(θ)
     cθ = cos(θ)
     cotθ = cθ / sθ

@@ -3043,8 +3043,7 @@ function convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N_sampl
         Yup_soln = Y_solution(s, l, m, a, omega, UP; rsin = rsin, rsout = rsout)
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
         Yup_samp = y_sample_p2(Yup_soln, KG_samp)
-        S0_p2 = SH_p2(π/2, 0.0)      
-        S1_p2 = SH_p2(π/2, 0.0; theta_derivative=1)
+        S0_p2, S1_p2 = value_and_theta_derivative(SH_p2, π/2, 0.0)
         S2_p2 = (m^2 + (a * omega)^2 - 2 - 2 * a * omega * m - SH_p2.lambda) * S0_p2
         inte_samp_p2 = integrand_eccentric_sample_p2(KG_samp, Yup_samp, (S0_p2, S1_p2, S2_p2), n)
         integral_p2 = trapezoidal_1d_integral(inte_samp_p2)
@@ -3063,8 +3062,7 @@ function convolution_integral_eccentric_trapezoidal(a, p, e, s, l, m, n, N_sampl
         Yin_soln = Y_solution(s, l, m, a, omega, IN; rsin = rsin, rsout = rsout)
         SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")  # θ-fixed harmonics
         Yin_samp = y_sample_m2(Yin_soln, KG_samp) 
-        S0_m2 = SH_m2(π/2, 0.0)      
-        S1_m2 = SH_m2(π/2, 0.0; theta_derivative=1)
+        S0_m2, S1_m2 = value_and_theta_derivative(SH_m2, π/2, 0.0)
         S2_m2 = (m^2 + (a * omega)^2 + 2 - 2 * a * omega * m - SH_m2.lambda) * S0_m2
         inte_samp_m2 = integrand_eccentric_sample_m2(KG_samp, Yin_samp, (S0_m2, S1_m2, S2_m2), n)
         integral_m2 = trapezoidal_1d_integral(inte_samp_m2)
@@ -3103,8 +3101,7 @@ function convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N_sample; x=1
         Yup_soln = Y_solution(s, l, m, a, omega, UP; rsin = rsin, rsout = rsout)
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
         Yup_samp = y_sample_p2(Yup_soln, KG_samp)
-        S0_p2 = SH_p2(π/2, 0.0)      
-        S1_p2 = SH_p2(π/2, 0.0; theta_derivative=1)
+        S0_p2, S1_p2 = value_and_theta_derivative(SH_p2, π/2, 0.0)
         S2_p2 = (m^2 + (a * omega)^2 - 2 - 2 * a * omega * m - SH_p2.lambda) * S0_p2
         Jp_up, Jm_up, drphase_up, rphaseL_up, rphaseR_up, prefactor_up = integrand_eccentric_sample_cheby_p2(KG_samp, Yup_samp, (S0_p2, S1_p2, S2_p2), n)
         integralp_p2 = levin_1d_integral(Jp_up, drphase_up, rphaseL_up, rphaseR_up)
@@ -3125,8 +3122,7 @@ function convolution_integral_eccentric_levin(a, p, e, s, l, m, n, N_sample; x=1
         Yin_soln = Y_solution(s, l, m, a, omega, IN; rsin = rsin, rsout = rsout)
         SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
         Yin_samp = y_sample_m2(Yin_soln, KG_samp)   
-        S0_m2 = SH_m2(π/2, 0.0)      
-        S1_m2 = SH_m2(π/2, 0.0; theta_derivative=1)
+        S0_m2, S1_m2 = value_and_theta_derivative(SH_m2, π/2, 0.0)
         S2_m2 = (m^2 + (a * omega)^2 + 2 - 2 * a * omega * m - SH_m2.lambda) * S0_m2
         Jp_in, Jm_in, drphase_in, rphaseL_in, rphaseR_in, prefactor_in = integrand_eccentric_sample_cheby_m2(KG_samp, Yin_samp, (S0_m2, S1_m2, S2_m2), n)
         integralp_m2 = levin_1d_integral(Jp_in, drphase_in, rphaseL_in, rphaseR_in)
@@ -3304,8 +3300,7 @@ function convolution_integral_circular_equatorial_m2(a, p, l, m; x=1.0)
 
     c = a * ω
     SH = spin_weighted_spheroidal_harmonic(-2, l, m, c)
-    S0 = SH(θ, 0.0)
-    S1 = SH(θ, 0.0; theta_derivative=1)
+    S0, S1 = value_and_theta_derivative(SH, θ, 0.0)
     λ = SH.lambda
     S2 = (m^2 + c^2 + 2 - 2c*m - λ) * S0
 
@@ -3384,8 +3379,7 @@ function convolution_integral_circular_equatorial_p2(a, p, l, m; x=1.0)
 
     c = a * ω
     SH = spin_weighted_spheroidal_harmonic(2, l, m, c)
-    S0 = SH(θ, 0.0)
-    S1 = SH(θ, 0.0; theta_derivative=1)
+    S0, S1 = value_and_theta_derivative(SH, θ, 0.0)
     λ = SH.lambda
     S2 = (m^2 + c^2 - 2 - 2c*m - λ) * S0
 
@@ -3592,8 +3586,7 @@ function convolution_integral_circular_equatorial_isem(a, p, s, l, m; x=1.0, tra
     Y_soln = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
     Y, Yp, X, _ = Y_soln.Y_solution(r)
     A = Y_soln.mode.lambda
-    S0 = SH(θ, 0.0)
-    S1 = SH(θ, 0.0; theta_derivative = 1)
+    S0, S1 = value_and_theta_derivative(SH, θ, 0.0)
     S2 = s == -2 ? (m^2 + c^2 + 2 - 2c*m - A) * S0 : (m^2 + c^2 - 2 - 2c*m - A) * S0
 
     ρ = -1.0 / r
@@ -3775,8 +3768,7 @@ end
 
 function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m, n)
     if s == 2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
         integral = GridSampling._eccentric_integral_sample_p2_fast(
             KG_samp, Ysamp, (S0, S1, S2), n)
@@ -3792,8 +3784,7 @@ function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m
             "SWSH" => SH
         )
     elseif s == -2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 + 2 - 2 * a * ω * m - SH.lambda) * S0
         integral = GridSampling._eccentric_integral_sample_m2_fast(
             KG_samp, Ysamp, (S0, S1, S2), n)
@@ -3847,8 +3838,7 @@ end
 function _eccentric_flux_from_cheby_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m, n; cache = nothing)
     N = KG_samp["N_sample"]::Int
     if s == 2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
         Jp, Jm, _, _, _, prefactor = integrand_eccentric_sample_cheby_p2(KG_samp, Ysamp, (S0, S1, S2), n)
         phase = _eccentric_radial_phase(KG_samp, cache, m, n, ω)
@@ -3868,8 +3858,7 @@ function _eccentric_flux_from_cheby_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a,
             "SWSH" => SH
         )
     elseif s == -2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 + 2 - 2 * a * ω * m - SH.lambda) * S0
         Jp, Jm, _, _, _, prefactor = integrand_eccentric_sample_cheby_m2(KG_samp, Ysamp, (S0, S1, S2), n)
         phase = _eccentric_radial_phase(KG_samp, cache, m, n, ω)
@@ -3954,13 +3943,11 @@ end
 function _adaptive_eccentric_factored_segment(bundle::Dict, Ysamp::Dict, SH, s::Int, a, ω, m::Int, n::Int)
     KG_samp = bundle["sample"]
     if s == -2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 + 2 - 2 * a * ω * m - SH.lambda) * S0
         return integrand_eccentric_factored_segment_cheby_m2(KG_samp, bundle["geometry"], bundle["phase_basis"], Ysamp, (S0, S1, S2), m, n, a, ω)
     elseif s == 2
-        S0 = SH(π/2, 0.0)
-        S1 = SH(π/2, 0.0; theta_derivative = 1)
+        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
         S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
         Jp, Jm, _, _, _, prefactor = integrand_eccentric_sample_cheby_p2(KG_samp, Ysamp, (S0, S1, S2), n)
         phase = _eccentric_radial_phase(KG_samp, nothing, m, n, ω)
