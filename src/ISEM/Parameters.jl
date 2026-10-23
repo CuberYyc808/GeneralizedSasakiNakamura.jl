@@ -417,12 +417,32 @@ end
 @inline function select_small_frequency_expansion_regime(params::GSNParameters)
     isreal(params.omega) || return false
     _small_frequency_expansion_zero_lambda_ordinary(params) && return false
+    _small_frequency_expansion_high_compression(params) && return false
     features = _frequency_features(params)
     0 < features.omega_abs <= SMALL_FREQUENCY_EXPANSION_FREQUENCY_LIMIT && return true
     return features.omega_abs <= SMALL_FREQUENCY_EXPANSION_TRANSITION_LIMIT &&
         features.kappa_omega_abs <= SMALL_FREQUENCY_EXPANSION_KAPPA_OMEGA_LIMIT &&
         features.horizon_wavenumber_abs >= SMALL_FREQUENCY_EXPANSION_HORIZON_WAVENUMBER_MIN
 end
+
+# High-l modes at high angular compression (l + 1/2) / kappa, kappa = sqrt(1 - a^2), are sent to the ordinary
+# route: there the small-frequency route returns wrong UP solutions without an error. Against the linear ODE started
+# at r_out ~ 20 l^2 / omega, for s = -2 and 2: (a, l, omega) = (0.997, 28, 0.072) off by 5e-5 at r <= 300 and by
+# 1e96 at r = 198 (horizon fluxes of 1e51..1e75 at (a, p, e) = (0.997, 31, 0.84)); (0.99, 40, 0.05) by 8e47;
+# (0.9999, 24, 0.05) by 7e-3; (0.9999, 30, 1e-3..1e-2) by 1e30..1e37; the ordinary route agrees with that ODE to
+# <= 1.5e-9 in all of them, and with the small-frequency route to <= 4e-9 wherever the latter holds (l <= 20 at any
+# a; compression <= 93 at a = 0.9 up to l = 40), at omega = 1e-3..0.09 and comparable cost.
+# Only for |omega| >= 1e-3: below it the ordinary route is no longer reliable (at a = 0.99 it fails with "infinity
+# recurrence lost Float64 credibility" at omega <= 1e-5 and disagrees with the small-frequency route by O(1) at
+# omega = 1e-5, l = 20..24 and omega = 1e-4, l = 30), and such high-l, low-frequency modes are anyway far below any
+# flux cutoff unless r ~ l / omega.
+const SMALL_FREQUENCY_EXPANSION_HIGH_L = 20
+const SMALL_FREQUENCY_EXPANSION_COMPRESSION_MAX = 100.0
+const SMALL_FREQUENCY_EXPANSION_ORDINARY_MIN_OMEGA = 1e-3
+@inline _small_frequency_expansion_high_compression(params::GSNParameters) =
+    params.l >= SMALL_FREQUENCY_EXPANSION_HIGH_L &&
+    abs(params.omega) >= SMALL_FREQUENCY_EXPANSION_ORDINARY_MIN_OMEGA &&
+    (params.l + 0.5) / max(params.kappa, eps(Float64)) >= SMALL_FREQUENCY_EXPANSION_COMPRESSION_MAX
 
 # Small-frequency regular-spin modes whose lambda vanishes to rounding level;
 # these are sent to the ordinary route instead of the small-frequency one.

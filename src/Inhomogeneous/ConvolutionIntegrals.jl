@@ -28,13 +28,53 @@ end
 @inline _skip_radiative_mode(s, a, m, ω) =
     (s == -2 && _skip_infinity_mode(ω)) || (s == 2 && _skip_horizon_mode(a, m, ω))
 
+# A high-l mode whose flux is negligible on analytic grounds, so it is not computed. With |omega| r_max < l / 2
+# the whole orbit lies inside the mode's centrifugal barrier (near zone): the amplitude at infinity carries
+# (omega r)^(l+1) / (2l+1)!! and the horizon one the tidal factor (r_+ / r)^(l+1), so the energy flux is bounded by
+# [(|omega| r_max)^(l+1) / (2l+1)!!]^2 (s = -2) or (r_+ / r_min)^(2(l-1)) (s = 2) times O(1). Below 1e-40 the mode is
+# skipped (recorded as zero, counted with the near-static zeros); the bound is taken relative to that of the l = 2 mode at
+# omega = 2 Omega_phi, so that a weak-field orbit, whose fluxes are all small, keeps its leading modes. For retrograde orbits omega crosses zero at m ~ 0.66 n
+# on the positive-m side, which the walk must pass at every n; at (a, p, e) = (0.999, 12.0, 0.633) the
+# (l, m, n) = (29, 27, 41) horizon mode (|omega| r_max = 3.2) alone took 30 s. Spherical and generic orbits use it too
+# (r_max = p / (1 - e), r_min = p / (1 + e)): at (a, p, x) = (0.998, 8.4e6, 0.77) the near-static (l, m, k) = (12, -5, 5)
+# horizon mode (omega ~ 1e-10 Omega_phi) came out as L = -95 (the true horizon L flux is -1e-41) without any error.
+const NEGLIGIBLE_LOW_FREQUENCY_BOUND = 1e-40
+# A mode that still fails after the coverage retry is zeroed without a warning (counted with the near-static zeros, not
+# as failed) when this bound puts it below 1e-20 of the leading mode: at (a, p, x) = (0.998, 3.7e4, 0.004) the
+# (l, m, k) = (9, -9, 4) and (8, -8, 5) infinity modes (|omega| r ~ 0.03, bound ~ 1e-35) lost the ISEM recurrence.
+const NEGLIGIBLE_FAILED_MODE_BOUND = 1e-20
+function _negligible_low_frequency_mode(s::Int, l::Int, ω::Real, Ωφ::Real, a::Real, p::Real, e::Real; bound::Real = NEGLIGIBLE_LOW_FREQUENCY_BOUND)
+    rmax = p / (1 - e)
+    x = abs(ω) * rmax
+    x < l / 2 || return false
+    log_bound = if s == -2
+        _log10_near_zone_bound(l, x) - _log10_near_zone_bound(2, min(2 * abs(Ωφ) * rmax, 1.0))
+    else
+        2 * (l - 2) * log10((1 + sqrt(1 - a^2)) / (p / (1 + e)))
+    end
+    return log_bound < log10(bound)
+end
+# log10 [x^(l+1) / (2l+1)!!]^2
+function _log10_near_zone_bound(l::Int, x::Real)
+    log_double_factorial = (_lgamma_int(2l + 2) - l * log(2) - _lgamma_int(l + 1)) / log(10)
+    return 2 * ((l + 1) * log10(max(x, floatmin(Float64))) - log_double_factorial)
+end
+_lgamma_int(n::Int) = sum(log, 1:(n - 1); init = 0.0)   # log Gamma(n) = log (n-1)!
+
 # Near-static modes (|omega| <= NEAR_STATIC_RATIO |Omega_phi|) whose radial matching overflows Float64: at
 # omega ~ 1e-16 the incidence amplitude grows like |omega|^-(l+1), and the flux of such a mode is far below any
 # cutoff (the l = 2 nodal mode of (a, p, x) = (0.948, 195382, 0.478) carries 3e-75). Only the ISEM nonfinite
-# matching-scale error on a near-static mode counts; every other error still propagates.
+# solver error ("ISEM ...", "nonfinite ISEM ..." or "MST ...": at p ~ 1e7 the near-static modes of a ~ 1 also lose
+# the MST handoff, the recurrence or the MST residual check), or a non-finite flux (omega ~ 1e-24 at p ~ 2.6e7 gives NaN without an error), on a
+# near-static mode counts; every other error still propagates.
 const NEAR_STATIC_RATIO = 1e-6
-_near_static_overflow(err, ω, Ωφ) = abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) &&
-    err isa ErrorException && startswith(err.msg, "nonfinite ISEM GSN matching")
+function _near_static_overflow(err, ω, Ωφ)
+    abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) || return false
+    (err isa ErrorException || err isa ISEM.ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError) || return false
+    msg = err isa ErrorException ? err.msg : err.message
+    return startswith(msg, "nonfinite ISEM") || startswith(msg, "ISEM ") || startswith(msg, "MST ") ||
+        startswith(msg, "Non-finite flux for mode")
+end
 
 # A non-finite mode flux would turn every later cutoff into NaN, so that no walk can stop; fail on the mode instead.
 function _check_finite_mode_flux(res, s, l, m, n, k)
@@ -49,25 +89,43 @@ end
 # FailedMode = true, counted in reached) with a warning. The coverage error is recognized by its message: ISEM keeps
 # it an ErrorException because its complex-frequency paths catch that type. Interrupts always propagate.
 const _FORCE_ORDINARY_KEY = :GSN_FORCE_ORDINARY_Y
-_is_basis_coverage_error(err) = err isa ErrorException &&
-    (occursin("basis does not cover", err.msg) || occursin("basis has no patch for", err.msg))
+_is_basis_coverage_error(err) = (err isa ErrorException &&
+    (occursin("basis does not cover", err.msg) || occursin("basis has no patch for", err.msg))) ||
+    # The MST certificate can reject a sum just above its residual tolerance (1.0e-13 to 1.3e-13 for modes at
+    # p ~ 1e7, a ~ 0.998); the retry takes the ordinary route.
+    err isa ISEM.ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError ||
+    (err isa ErrorException && startswith(err.msg, "ISEM radial self-check failed"))
 
-function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing)
+# A low-frequency, high-l mode whose matching overflows: the flux scales like (omega r)^(2l), and with
+# (|omega| r_max)^(2(l - 1)) < 1e-100 it is far below any cutoff ((l, m, n) = (68, -67, 84) at
+# (a, p, e) = (0.036, 16.7, 0.9) with omega = 8.1e-5 and r_max = 167, reached at tol = 1e-10, gives 1e-250).
+_negligible_overflow(err, ω, l, rmax) = rmax !== nothing && ω !== nothing && err isa ErrorException &&
+    startswith(err.msg, "nonfinite ISEM GSN matching") && 2 * (l - 1) * log10(abs(ω) * rmax) < -100
+
+function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing, rmax = nothing, negligible_if_failed::Bool = false)
     try
         return f()
     catch err
         err isa InterruptException && rethrow()
-        if omega !== nothing && _near_static_overflow(err, omega, Ωφ)
+        if (omega !== nothing && _near_static_overflow(err, omega, Ωφ)) || _negligible_overflow(err, omega, l, rmax)
             res = _zero_radiative_mode(omega, nothing; reason = "near_static_overflow")
             res["NearStaticOverflow"] = true
             return res
         end
-        _is_basis_coverage_error(err) || rethrow()
+        if !_is_basis_coverage_error(err)
+            @error "Mode (s, l, m, n, k) = ($s, $l, $m, $n, $k), omega = $(omega) failed" exception = sprint(showerror, err)
+            rethrow()
+        end
     end
     try
         return task_local_storage(f, _FORCE_ORDINARY_KEY, true)
     catch err
         err isa InterruptException && rethrow()
+        if negligible_if_failed
+            res = _zero_radiative_mode(omega === nothing ? 0.0 : omega, nothing; reason = "negligible_failed_mode")
+            res["NearStaticOverflow"] = true
+            return res
+        end
         @warn "Mode (s, l, m, n, k) = ($s, $l, $m, $n, $k) failed after a retry without the small-frequency expansion; recorded as a failed mode with zero flux." exception = sprint(showerror, err)
         res = _zero_radiative_mode(0.0, nothing; reason = "failed_mode")
         res["FailedMode"] = true
@@ -259,7 +317,7 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     ω = (m * ϒφ + k * ϒθ) / Γ
     KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
     Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
     Ydic = Dict(
         "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
@@ -446,20 +504,76 @@ const _INHOMOGENEOUS_ORDINARY_MAX_L = 4
     return regular_low_mode ? false : :auto
 end
 
-# ISEM Y radial function for the source integrals: IN branch for s = -2, UP branch for s = +2.
-@inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing)
+# Wronskian self-check of the ISEM radial solutions that took the small-frequency route (real
+# 0 < |omega| <= ISEM_WRONSKIAN_CHECK_MAX_OMEGA, l >= ISEM_WRONSKIAN_CHECK_MIN_L): Delta^(s+1) (R_in R_up' - R_in' R_up)
+# must not depend on r. That route returned wrong UP solutions without an error at high l and near-extremal spin
+# (|W(r) / W(3) - 1| = 5e86 at (a, l, omega) = (0.997, 28, 0.072), 3e43 at (0.99, 40, 0.05); correct solutions give
+# 1e-12..3e-9). A spread above ISEM_WRONSKIAN_CHECK_TOL over radii spanning the orbit raises "ISEM radial self-check
+# failed", which _with_coverage_retry treats like a coverage error (retry on the ordinary route, then a failed mode).
+# Wrong solutions were only seen from l = 18 on; checking every mode of that route from l = 12 on cost 30 % of the
+# time of the FEWv2 validation set without finding one.
+const ISEM_WRONSKIAN_CHECK_MIN_L = 16
+const ISEM_WRONSKIAN_CHECK_MAX_OMEGA = 0.15
+const ISEM_WRONSKIAN_CHECK_TOL = 1e-6
+
+# Radii spanning the orbit of a sample (min, geometric mean and max of r; 0.8 p, p, 1.25 p for a fixed radius).
+function _orbit_check_radii(KG)
+    if haskey(KG, "r")
+        rs = Float64.(KG["r"])
+        rmin, rmax = minimum(rs), maximum(rs)
+        rmax > 1.01 * rmin && return (rmin, sqrt(rmin * rmax), rmax)
+        return (0.8 * rmin, rmin, 1.25 * rmax)
+    end
+    haskey(KG, "p") || return nothing
+    p = Float64(KG["p"])
+    return (0.8 * p, p, 1.25 * p)
+end
+
+function _isem_wronskian_check(s, l, m, a, omega, radii)
+    radii === nothing && return nothing
+    (isreal(omega) && 0 < abs(omega) <= ISEM_WRONSKIAN_CHECK_MAX_OMEGA && l >= ISEM_WRONSKIAN_CHECK_MIN_L) || return nothing
+    control = _inhomogeneous_small_frequency_expansion_control(l, a, omega)
+    sfe = control === :auto ? nothing : control
+    root = parentmodule(@__MODULE__)
+    teukolsky_radial = getfield(root, :Teukolsky_radial)
+    Rin = teukolsky_radial(s, l, m, a, real(omega), getfield(root, :IN); method = "ISEM", sfe = sfe)
+    Rup = teukolsky_radial(s, l, m, a, real(omega), getfield(root, :UP); method = "ISEM", sfe = sfe)
+    ws = ComplexF64[]
+    for r in radii
+        w = try
+            pin = Rin.Teukolsky_solution.pair_value(r)
+            pup = Rup.Teukolsky_solution.pair_value(r)
+            (r^2 - 2r + a^2)^(s + 1) * (pin[1] * pup[2] - pin[2] * pup[1])
+        catch err
+            err isa InterruptException && rethrow()
+            continue
+        end
+        push!(ws, ComplexF64(w))
+    end
+    length(ws) >= 2 || return nothing
+    spread = maximum(abs(w / ws[1] - 1) for w in ws)
+    (isfinite(spread) && spread <= ISEM_WRONSKIAN_CHECK_TOL) ||
+        error("ISEM radial self-check failed: the Wronskian varies by $(spread) over r = $(radii) for (s, l, m, omega) = ($s, $l, $m, $omega)")
+    return spread
+end
+
+# ISEM Y radial function for the source integrals: IN branch for s = -2, UP branch for s = +2. With check_radii
+# (radii spanning the orbit) the Wronskian self-check runs first.
+@inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing, check_radii = nothing)
     branch = s == -2 ? :IN : s == 2 ? :UP :
         error("ISEM Y interfaces currently support only s = -2 and s = 2.")
     route = ISEM.radial_route(s, l, m, a, omega, branch;
         lambda = lambda,
         small_frequency_expansion = _inhomogeneous_small_frequency_expansion_control(l, a, omega),
         large_frequency_expansion = :auto)
+    hasproperty(route, :controls) && route.controls.small_frequency_expansion &&
+        _isem_wronskian_check(s, l, m, a, omega, check_radii)
     return ISEM.y_radial_function(route)
 end
 
 @inline function _generic_isem_y_solution(s, l, m, a, omega;
-        lambda = nothing)
-    return _isem_y_solution(s, l, m, a, omega; lambda = lambda)
+        lambda = nothing, check_radii = nothing)
+    return _isem_y_solution(s, l, m, a, omega; lambda = lambda, check_radii = check_radii)
 end
 
 function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s::Int, l::Int, m::Int, n::Int, k::Int, a::Float64, ω::Float64, ϒθ::Float64)
@@ -1575,7 +1689,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
 
     # Resolve the polar harmonic band independently of the radial grid.
     K_band = min(max(K0, nextpow(2, l + abs(k) + 1)), Kmax)
@@ -1739,7 +1853,7 @@ function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, 
     end
 
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
     flux_scale = max(max_flux, eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
     low_flux_budget = _levin_low_flux_budget(Float64(max_flux), Float64(tol), mode_abs_floor)
@@ -1849,7 +1963,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     effective_local_theta_intervals = _generic_adaptive_effective_theta_intervals(local_theta_intervals, k, l)
     nt = effective_local_theta_intervals + 1
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     sh_cache = Dict{NTuple{3, Int}, Any}()
     root = _generic_adaptive_segment_amplitude!(cache, KG_master, Ysol, SH, s, a, ω, m, n, k, root_key, nr, nt; threaded_sampling = threaded_sampling, sh_cache = sh_cache)
@@ -2086,7 +2200,7 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
 
     N = N0
     K = K0
@@ -3706,7 +3820,7 @@ function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     flux_scale = max(Float64(max_flux), eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(Float64(tol)))
@@ -4048,7 +4162,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     KG = haskey(KG_sample, "Energy") ? KG_sample : _kg_from_presampled_master(KG_sample)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
 
     segment_evaluations = 0
     root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling)
@@ -4146,6 +4260,9 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     return res
 end
 
+# Semi-latus rectum from which the eccentric trapezoid always refines to the phase-resolving grid (see below).
+const ALIAS_GUARD_P = 40.0
+
 function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
@@ -4164,7 +4281,7 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
 
     N = N_sample
     KG_samp = cache isa EccentricFluxCache ? _cached_eccentric_sample!(cache, KG_sample, N) : subsample_eccentric_sample(KG_sample, N)
@@ -4205,8 +4322,13 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         relE = _relative_energy_change(res2["EnergyFlux"], res["EnergyFlux"])
         excess = abs(res2["EnergyFlux"]) / flux_scale
         factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
+        # For p >= ALIAS_GUARD_P every stop needs the grid that resolves the radial phase, also for a mode below the
+        # low-flux cutoff: on a coarser grid a counter-rotating high-n mode aliases to ~ the cutoff (at
+        # (a, p, e) = (0.574, 90.2, 0.816) the (n, m, l) = (116, -16, 17) mode came out 1e-17 instead of 6e-44), and
+        # thousands of such modes added 30..75 tol to the total. Below p = 40 the guard changed no sampled total by
+        # more than 4e-9 and cost 1.5x..2.4x, so there such a mode may still stop early.
         significant_for_alias = abs(res2["EnergyFlux"]) > low_flux_cutoff
-        allow_stop = (N2 >= min_stop_N) || !significant_for_alias
+        allow_stop = (N2 >= min_stop_N) || (!significant_for_alias && Float64(KG_sample["p"]) < ALIAS_GUARD_P)
         # a mode is negligible only when two consecutive refinement levels are below the floor
         low_flux_done = mode_abs_floor > 0.0 && abs(res2["EnergyFlux"]) < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
         has_flux_reference = Float64(max_flux) > 100 * eps(Float64)
@@ -4251,7 +4373,10 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
 end
 
 function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m, k, K_sample::Int64; kwargs...)
-    return _with_coverage_retry(s, l, m, 0, k) do
+    F = KG_sample["Frequencies"]
+    ω = (m * F["ϒϕ"] + k * F["ϒθ"]) / F["ϒt"]
+    negligible = _negligible_low_frequency_mode(s, l, ω, F["ϒϕ"] / F["ϒt"], KG_sample["a"], KG_sample["p"], 0.0; bound = NEGLIGIBLE_FAILED_MODE_BOUND)
+    return _with_coverage_retry(s, l, m, 0, k; omega = ω, Ωφ = F["ϒϕ"] / F["ϒt"], negligible_if_failed = negligible) do
         _inclined_trapezoidal_isem_once(KG_sample, s, l, m, k, K_sample; kwargs...)
     end
 end
@@ -4268,6 +4393,13 @@ function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::
     ω = (m * Frequencies["ϒϕ"] + k * Frequencies["ϒθ"]) / Γ
     if _skip_radiative_mode(s, a, m, ω)
         res = _zero_radiative_mode(ω, KG_sample; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
+        res["K_sample_requested"] = K_sample
+        res["K_sample"] = K_sample
+        return res
+    end
+    if _negligible_low_frequency_mode(s, l, ω, Frequencies["ϒϕ"] / Γ, a, KG_sample["p"], 0.0)
+        res = _zero_radiative_mode(ω, KG_sample; reason = "negligible_low_frequency")
+        res["NearStaticOverflow"] = true
         res["K_sample_requested"] = K_sample
         res["K_sample"] = K_sample
         return res
@@ -4337,7 +4469,15 @@ function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::
 
     res["K_sample_requested"] = K_sample
     res["K_sample"] = K_interval
-    _check_finite_mode_flux(res, s, l, m, 0, k)
+    try
+        _check_finite_mode_flux(res, s, l, m, 0, k)
+    catch err
+        _near_static_overflow(err, ω, Frequencies["ϒϕ"] / Γ) || rethrow()
+        res = _zero_radiative_mode(ω, KG_sample; reason = "near_static_overflow")
+        res["NearStaticOverflow"] = true
+        res["K_sample_requested"] = K_sample
+        res["K_sample"] = K_interval
+    end
     return res
 end
 

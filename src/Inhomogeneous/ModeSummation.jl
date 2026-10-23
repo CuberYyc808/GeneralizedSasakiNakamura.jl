@@ -147,6 +147,64 @@ end
 # on the side of m* an m shell counts toward the m streak only once |m| >= |m*|.
 @inline _before_omega_zero(m::Int, m_omega_zero::Float64) = m * m_omega_zero > 0 && abs(m) < abs(m_omega_zero)
 
+# High-l low-frequency modes with negligible flux are skipped on analytic grounds: see
+# ConvolutionIntegrals._negligible_low_frequency_mode.
+const _negligible_low_frequency_mode = ConvolutionIntegrals._negligible_low_frequency_mode
+
+# An eccentric m walk counts a small m shell toward its stop only once |m| is past this fraction of the |m| the previous
+# n shell's walk reached. The m shells of a shell can dip and rise again: for the nearly circular (a, p, e) =
+# (0.991, 1.59, 0.029) the n = 1 shell is tiny at |m| = 25..29 and carries 1.5e-8 (2e-7 of E_inf) at l = |m| = 30..38,
+# which the walk, stopping in the dip, dropped. The fraction lets the reach shrink from shell to shell.
+const MWALK_REACH_FRACTION = 1.0
+
+# A mode may stop refining once two refinement levels are below its floor; the branch floor min(1e-16, tol * branch
+# total) also sets the walk thresholds, but as a refinement floor it let thousands of horizon modes near 1e-18 keep
+# coarse-grid values whose errors add up: at FEWv2 569994 (a = 0.44, p = 22.7, e = 0.84) E_hor moved by 4.5e-7
+# (45 tol) between tol 1e-8 and 1e-10. The refinement floor is this fraction of the branch floor (E_hor at tol 1e-8 then
+# within 6e-8 of tol 1e-10, same modes); the walk thresholds are unchanged. Spherical and generic modes use it too.
+const MODE_REFINE_FLOOR_FRACTION = 0.01
+
+# Length of the below-threshold run that stops an eccentric n walk: minimum_consecutive + 1, or one period
+# Ups_phi / Ups_r of the n shells when that is longer (zoom-whirl, see _eccentric_mode_summation_scoped).
+_n_stop_run(minimum_consecutive::Int, radial_over_azimuthal::Real) =
+    max(minimum_consecutive + 1, ceil(Int, abs(1 / radial_over_azimuthal)))
+
+# Geometric extrapolation of the eccentric n tail. At high eccentricity the n shells fall off slowly and geometrically,
+# and the n walk stops (minimum_consecutive + 1 shells below tol times the total) with several tol of flux still in
+# the shells it did not evaluate: at e ~ 0.8, tol = 1e-8 that tail is ~ 1e-7 of E_inf. When the walk stopped by
+# itself at n >= N_TAIL_MIN_N for e >= N_TAIL_MIN_E, the ratio r of the last N_TAIL_FIT shells (a least-squares fit
+# of log|shell| against n) adds shell_last * r / (1 - r), provided those shells share one sign and r < N_TAIL_MAX_RATIO.
+const N_TAIL_MIN_E = 0.7
+const N_TAIL_MIN_N = 100
+const N_TAIL_FIT = 4
+const N_TAIL_MAX_RATIO = 0.98
+
+# Returns (tail factor r / (1 - r), r), (0.0, 0.0) when no tail is added; the tail of a flux is its last shell times the factor.
+# The shells must also fall steadily over the last period (period = the n stop run): where they oscillate (zoom-whirl)
+# a fit over a few shells says nothing about the next peak, and no tail is added.
+function _geometric_n_tail_factor(shells::AbstractVector{<:Real}, e::Real, n_reached, period::Int = N_TAIL_FIT)
+    (n_reached === nothing || e < N_TAIL_MIN_E || n_reached < N_TAIL_MIN_N) && return (0.0, 0.0)
+    return _geometric_shell_tail(shells, period)
+end
+
+# Geometric tail factor r / (1 - r) of a sum whose last shells fall steadily (one sign, strictly decreasing in
+# magnitude over max(N_TAIL_FIT, period + 1) shells), from a log-linear fit of the last N_TAIL_FIT shells; (0.0, 0.0)
+# otherwise or when r >= N_TAIL_MAX_RATIO.
+function _geometric_shell_tail(shells::AbstractVector{<:Real}, period::Int = N_TAIL_FIT)
+    window = max(N_TAIL_FIT, period + 1)
+    length(shells) < window && return (0.0, 0.0)
+    recent = Float64.(shells[(end - window + 1):end])
+    sgn = sign(recent[end])
+    (sgn != 0 && all(x -> sign(x) == sgn, recent) && all(abs(recent[j + 1]) < abs(recent[j]) for j in 1:(window - 1))) || return (0.0, 0.0)
+    last_shells = recent[(end - N_TAIL_FIT + 1):end]
+    y = log.(abs.(last_shells))
+    k = collect(0.0:(N_TAIL_FIT - 1))
+    slope = sum((k .- sum(k) / N_TAIL_FIT) .* (y .- sum(y) / N_TAIL_FIT)) / sum(abs2, k .- sum(k) / N_TAIL_FIT)
+    r = exp(slope)
+    (0 < r < N_TAIL_MAX_RATIO) || return (0.0, 0.0)
+    return (r / (1 - r), r)
+end
+
 # Defaults of the generic-orbit stopping parameters `beta` (tail budget) and `deep` (deep stop).
 const DEFAULT_GENERIC_BETA = 1e-4
 const DEFAULT_GENERIC_DEEP = 1e-5
@@ -573,6 +631,12 @@ function _circular_mode_summation_scoped(scope, a, p; x=1.0, tol = 1e-8, lmax = 
         circular_mode_flux(a, p, l, m; x, submission = scope)
     end
 
+    shells_inf = Float64[]
+    shells_hor = Float64[]
+    last_inf = (0.0, 0.0, 0.0)
+    last_hor = (0.0, 0.0, 0.0)
+    stopped_inf = false
+    stopped_hor = false
     below_count = 0
     for l in lmin:lmax
         shell_infinity_energy = 0.0
@@ -589,9 +653,12 @@ function _circular_mode_summation_scoped(scope, a, p; x=1.0, tol = 1e-8, lmax = 
         total_infinity_angular += shell_infinity_angular
         total_infinity_carter += shell_infinity_carter
 
+        push!(shells_inf, shell_infinity_energy)
+        last_inf = (shell_infinity_energy, shell_infinity_angular, shell_infinity_carter)
         threshold = tol * abs(total_infinity_energy)
         below_count = abs(shell_infinity_energy) <= threshold ? below_count + 1 : 0
         if below_count >= min_consecutive
+            stopped_inf = true
             break
         end
     end
@@ -612,12 +679,28 @@ function _circular_mode_summation_scoped(scope, a, p; x=1.0, tol = 1e-8, lmax = 
         total_horizon_angular += shell_horizon_angular
         total_horizon_carter += shell_horizon_carter
 
+        push!(shells_hor, shell_horizon_energy)
+        last_hor = (shell_horizon_energy, shell_horizon_angular, shell_horizon_carter)
         threshold = tol * abs(total_horizon_energy)
         below_count = abs(shell_horizon_energy) <= threshold ? below_count + 1 : 0
         if below_count >= min_consecutive
+            stopped_hor = true
             break
         end
     end
+
+    # Geometric l tail beyond the stop (as the n tail of eccentric orbits): the l shells of a circular orbit fall off
+    # geometrically, and min_consecutive shells below tol can still leave a few tol in the shells not evaluated.
+    l_tail_factor_inf, l_tail_ratio_inf = stopped_inf ? _geometric_shell_tail(shells_inf, min_consecutive) : (0.0, 0.0)
+    l_tail_factor_hor, l_tail_ratio_hor = stopped_hor ? _geometric_shell_tail(shells_hor, min_consecutive) : (0.0, 0.0)
+    l_tail_inf = l_tail_factor_inf .* last_inf
+    l_tail_hor = l_tail_factor_hor .* last_hor
+    total_infinity_energy += l_tail_inf[1]
+    total_infinity_angular += l_tail_inf[2]
+    total_infinity_carter += l_tail_inf[3]
+    total_horizon_energy += l_tail_hor[1]
+    total_horizon_angular += l_tail_hor[2]
+    total_horizon_carter += l_tail_hor[3]
 
     total_modes = 2 * sum(lmin:max(something(l_reached_inf, lmin - 1), something(l_reached_hor, lmin - 1)))
 
@@ -636,6 +719,8 @@ function _circular_mode_summation_scoped(scope, a, p; x=1.0, tol = 1e-8, lmax = 
         l_reached = max(something(l_reached_inf, lmin - 1), something(l_reached_hor, lmin - 1)),
         l_reached_inf = l_reached_inf,
         l_reached_hor = l_reached_hor,
+        l_tail_infinity = (energy = l_tail_inf[1], angular_momentum = l_tail_inf[2], carter_constant = l_tail_inf[3], ratio = l_tail_ratio_inf),
+        l_tail_horizon = (energy = l_tail_hor[1], angular_momentum = l_tail_hor[2], carter_constant = l_tail_hor[3], ratio = l_tail_ratio_hor),
     )
 end
 
@@ -673,6 +758,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
     KG = submission_orbit!(scope)
     radial_over_azimuthal = KG["Frequencies"]["ϒr"] / KG["Frequencies"]["ϒϕ"]
+    # The n shells repeat about every Ups_phi / Ups_r shells (lowering m by one and raising n by Ups_phi / Ups_r gives the
+    # same omega). Near the separatrix (zoom-whirl) that is ~ 30 shells, with deep dips between the peaks: at
+    # (a, p, e, x) = (0.254, 8.61, 0.821, -1) the walk stopped in the dip at n = 250 and missed the next peaks (1e-6 of
+    # E_inf at tol = 1e-8). The n stop needs a run of below-threshold shells spanning one such period.
+    n_stop_run = _n_stop_run(minimum_consecutive, radial_over_azimuthal)
     F_orbit = KG["Frequencies"]
     KG_sample = submission_master!(scope)
     Energy_flux_inf = Vector{Float64}()
@@ -691,6 +781,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     total_modes = 0
     n_reached_inf = nothing
     n_reached_hor = nothing
+    last_shell_inf = (0.0, 0.0, 0.0)
+    last_shell_hor = (0.0, 0.0, 0.0)
     below_count_n = 0
 
     shell_n_infinity_energy = 0.0
@@ -741,8 +833,14 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     near_static_zero = [0, 0]
     ecc_eval = (s, l, m, n, max_flux, tail_values) -> begin
         use_levin = use_eccentric_tail_levin(s, m, n)
-        floor = branch_mode_floor(s)
-        mode = _memo_mode((s, l, m, n, 0)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if use_levin
+        floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s)
+        ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"]
+        mode = if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
+            res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
+            res["NearStaticOverflow"] = true
+            res
+        else
+        _memo_mode((s, l, m, n, 0)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s)), zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
@@ -757,6 +855,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                 end
             end
         end; end; end
+        end
         get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
         get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
@@ -780,7 +879,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             record_h5["meta/levin_max_depth"] = levin_max_depth
         end
 
+    n0_reach_inf = 0
     for m in 1:lmax
+        n0_reach_inf = m
         lmin = max(2, abs(m))
         shell_m_infinity_energy = 0.0
         shell_m_infinity_angular = 0.0
@@ -816,7 +917,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     end
 
     below_count_m = 0
+    n0_reach_hor = 0
     for m in 1:lmax
+        n0_reach_hor = m
         lmin = max(2, abs(m))
         shell_m_horizon_energy = 0.0
         shell_m_horizon_angular = 0.0
@@ -864,6 +967,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_infinity_energy, tol, mode_abs_floor)
     branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_horizon_energy, tol, mode_abs_floor)
 
+    prev_peak_m_pos = 1
+    prev_peak_m_neg = 1
+    # |m| reached by the previous n shell's walks; an m shell counts toward the stop only past MWALK_REACH_FRACTION of it
+    prev_reach_pos = n0_reach_inf
+    prev_reach_neg = n0_reach_inf
     for n in 1:nmax
         m_omega_zero = -n * radial_over_azimuthal
         E_estimate_inf = _fit_shell_estimate(model, n_list_inf, Energy_flux_inf, n, p0, abs(shell_n_infinity_energy_last))
@@ -897,7 +1005,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
         Max_flux = 0.0
         Max_m = 1
+        reach_pos = 0
+        reach_neg = 0
         for m in 1:lmax
+            reach_pos = m
             lmin = max(2, abs(m))
             shell_m_infinity_energy = 0.0
             shell_m_infinity_angular = 0.0
@@ -927,14 +1038,21 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_n_infinity_carter += shell_m_infinity_carter
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) ? below_count_m + 1 : 0
+            # Near the ISSO Ups_r << Ups_phi and the n shells of even a nearly circular orbit peak at large m (at
+            # (a, p, e) = (0.932, 2.095, 0.009) the n = 6 shell sits at m = l = 15..27 while m <= 2 are tiny, and the walk
+            # dropped 4e-6 of E_inf there); a shell counts toward the stop only past the peak m of the previous n shell.
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) &&
+                (m >= max(prev_peak_m_pos, floor(Int, MWALK_REACH_FRACTION * prev_reach_pos))) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
         end
 
         below_count_m = 0
+        Max_flux_neg = 0.0
+        Max_m_neg = 1
         for m in -1:-1:-lmax
+            reach_neg = -m
             lmin = max(2, abs(m))
             shell_m_infinity_energy = 0.0
             shell_m_infinity_angular = 0.0
@@ -948,6 +1066,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                 shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
                 shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
                 total_modes += 2
+                if abs(mode["EnergyFlux"]) > Max_flux_neg
+                    Max_flux_neg = abs(mode["EnergyFlux"])
+                    Max_m_neg = abs(m)
+                end
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
                 below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
                 if below_count_l >= minimum_consecutive
@@ -960,28 +1082,42 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_n_infinity_carter += shell_m_infinity_carter
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
+            # As in the positive branch, the streak only counts once the n shell holds a fair part of the previous one:
+            # for retrograde orbits (x = -1) the negative m carry the flux, and at high n it sits at |m| ~ 5..10, past
+            # m = -1, -2, which are tiny (at (a, p, e) = (0.525, 9.52, 0.531) the walk stopped there for n = 22, 25,
+            # 27.., dropping 7.6e-4 of E_inf).
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(m) >= max(Max_m, prev_peak_m_neg, floor(Int, MWALK_REACH_FRACTION * prev_reach_neg))) &&
+                (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
-                shell_n_infinity_energy_last = shell_n_infinity_energy
                 break
             end
         end
+        shell_n_infinity_energy_last = shell_n_infinity_energy
+        prev_peak_m_pos = Max_m
+        prev_peak_m_neg = Max_m_neg
+        prev_reach_pos = reach_pos
+        prev_reach_neg = reach_neg
 
         push!(Energy_flux_inf, shell_n_infinity_energy)
         push!(n_list_inf, n)
+        last_shell_inf = (shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
         total_infinity_energy += shell_n_infinity_energy
         total_infinity_angular += shell_n_infinity_angular
         total_infinity_carter += shell_n_infinity_carter
         branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_infinity_energy, tol, mode_abs_floor)
         n_threshold = _mode_cutoff_threshold(tol * abs(total_infinity_energy), branch_mode_floor_inf[])
         below_count_n = abs(shell_n_infinity_energy) <= n_threshold ? below_count_n + 1 : 0
-        if below_count_n >= minimum_consecutive + 1
+        if below_count_n >= n_stop_run
             n_reached_inf = n
             break
         end
     end
 
     below_count_n = 0
+    prev_peak_m_pos = 1
+    prev_peak_m_neg = 1
+    prev_reach_pos = n0_reach_hor
+    prev_reach_neg = n0_reach_hor
     for n in 1:nmax
         m_omega_zero = -n * radial_over_azimuthal
         E_estimate_hor = _fit_shell_estimate(model, n_list_hor, Energy_flux_hor, n, p0, abs(shell_n_horizon_energy_last))
@@ -1015,7 +1151,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
         Max_flux = 0.0
         Max_m = 1
+        reach_pos = 0
+        reach_neg = 0
         for m in 1:lmax
+            reach_pos = m
             lmin = max(2, abs(m))
             shell_m_horizon_energy = 0.0
             shell_m_horizon_angular = 0.0
@@ -1046,7 +1185,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
             # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) ? below_count_m + 1 : 0
+            # Near the ISSO Ups_r << Ups_phi and the n shells of even a nearly circular orbit peak at large m (at
+            # (a, p, e) = (0.932, 2.095, 0.009) the n = 6 shell sits at m = l = 15..27 while m <= 2 are tiny, and the walk
+            # dropped 4e-6 of E_inf there); a shell counts toward the stop only past the peak m of the previous n shell.
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) &&
+                (m >= max(prev_peak_m_pos, floor(Int, MWALK_REACH_FRACTION * prev_reach_pos))) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
 
                 break
@@ -1054,7 +1197,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         end
 
         below_count_m = 0
+        Max_flux_neg = 0.0
+        Max_m_neg = 1
         for m in -1:-1:-lmax
+            reach_neg = -m
             lmin = max(2, abs(m))
             shell_m_horizon_energy = 0.0
             shell_m_horizon_angular = 0.0
@@ -1068,6 +1214,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
                 shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
                 shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
                 total_modes += 2
+                if abs(mode["EnergyFlux"]) > Max_flux_neg
+                    Max_flux_neg = abs(mode["EnergyFlux"])
+                    Max_m_neg = abs(m)
+                end
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
                 below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
                 if below_count_l >= minimum_consecutive
@@ -1080,26 +1230,47 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_n_horizon_carter += shell_m_horizon_carter
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
+            # As in the positive branch, the streak only counts once the n shell holds a fair part of the previous one:
+            # for retrograde orbits (x = -1) the negative m carry the flux, and at high n it sits at |m| ~ 5..10, past
+            # m = -1, -2, which are tiny (at (a, p, e) = (0.525, 9.52, 0.531) the walk stopped there for n = 22, 25,
+            # 27.., dropping 7.6e-4 of E_inf).
+            below_count_m = !_before_omega_zero(m, m_omega_zero) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(m) >= max(Max_m, prev_peak_m_neg, floor(Int, MWALK_REACH_FRACTION * prev_reach_neg))) &&
+                (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
-                shell_n_horizon_energy_last = shell_n_horizon_energy
                 break
             end
         end
+        shell_n_horizon_energy_last = shell_n_horizon_energy
+        prev_peak_m_pos = Max_m
+        prev_peak_m_neg = Max_m_neg
+        prev_reach_pos = reach_pos
+        prev_reach_neg = reach_neg
 
         push!(Energy_flux_hor, shell_n_horizon_energy)
         push!(n_list_hor, n)
+        last_shell_hor = (shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
         total_horizon_energy += shell_n_horizon_energy
         total_horizon_angular += shell_n_horizon_angular
         total_horizon_carter += shell_n_horizon_carter
         branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_horizon_energy, tol, mode_abs_floor)
         n_threshold = _mode_cutoff_threshold(tol * abs(total_horizon_energy), branch_mode_floor_hor[])
         below_count_n = abs(shell_n_horizon_energy) <= n_threshold ? below_count_n + 1 : 0
-        if below_count_n >= minimum_consecutive + 1
+        if below_count_n >= n_stop_run
             n_reached_hor = n
             break
         end
     end
+
+    tail_factor_inf, tail_ratio_inf = _geometric_n_tail_factor(Energy_flux_inf, e, n_reached_inf, n_stop_run)
+    tail_factor_hor, tail_ratio_hor = _geometric_n_tail_factor(Energy_flux_hor, e, n_reached_hor, n_stop_run)
+    n_tail_inf = tail_factor_inf .* last_shell_inf
+    n_tail_hor = tail_factor_hor .* last_shell_hor
+    total_infinity_energy += n_tail_inf[1]
+    total_infinity_angular += n_tail_inf[2]
+    total_infinity_carter += n_tail_inf[3]
+    total_horizon_energy += n_tail_hor[1]
+    total_horizon_angular += n_tail_hor[2]
+    total_horizon_carter += n_tail_hor[3]
 
     if record
         record_h5["meta/infinity_energy_flux"] = total_infinity_energy
@@ -1121,6 +1292,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         record_h5["meta/infinity_truncation_floor"] = branch_mode_floor_inf[]
         record_h5["meta/horizon_truncation_floor"] = branch_mode_floor_hor[]
         record_h5["meta/total_modes"] = total_modes
+        record_h5["meta/n_tail_infinity"] = collect(n_tail_inf)
+        record_h5["meta/n_tail_horizon"] = collect(n_tail_hor)
+        record_h5["meta/n_tail_ratio_infinity"] = tail_ratio_inf
+        record_h5["meta/n_tail_ratio_horizon"] = tail_ratio_hor
         record_h5["meta/infinity_energy_flux_list"] = Energy_flux_inf
         record_h5["meta/horizon_energy_flux_list"] = Energy_flux_hor
     end
@@ -1160,6 +1335,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         tail_levin_max_depth = levin_max_depth,
         infinity_truncation_floor = branch_mode_floor_inf[],
         horizon_truncation_floor = branch_mode_floor_hor[],
+        n_tail_infinity = (energy = n_tail_inf[1], angular_momentum = n_tail_inf[2], carter_constant = n_tail_inf[3], ratio = tail_ratio_inf),
+        n_tail_horizon = (energy = n_tail_hor[1], angular_momentum = n_tail_hor[2], carter_constant = n_tail_hor[3], ratio = tail_ratio_hor),
         infinity_energy_flux_list = Energy_flux_inf,
         horizon_energy_flux_list = Energy_flux_hor,
         record_file = record ? record_path : nothing,
@@ -1488,7 +1665,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                 mode = _memo_mode((-2, l, 0, 0, k)) do; with_submission_mode(scope; mode = (-2, l, 0, 0, k)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
+                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                 end; end
                 _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
@@ -1521,7 +1698,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                     mode = _memo_mode((-2, l, m, 0, k)) do; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
+                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end; end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
@@ -1565,7 +1742,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
                     mode = _memo_mode((-2, l, m, 0, k)) do; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
+                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
                     end; end
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
@@ -1623,7 +1800,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                 mode = _memo_mode((2, l, 0, 0, k)) do; with_submission_mode(scope; mode = (2, l, 0, 0, k)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
+                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                 end; end
                 _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
@@ -1656,7 +1833,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                     mode = _memo_mode((2, l, m, 0, k)) do; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
+                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end; end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
@@ -1701,7 +1878,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
                     mode = _memo_mode((2, l, m, 0, k)) do; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
+                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
                     end; end
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
@@ -1938,8 +2115,14 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 (fast && (s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
                     _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
                         levin_local_n, levin_max_depth, levin_nmin))
-            floor = branch_mode_floor(s)
-            mode = _memo_mode((s, l, m, n, k)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"], Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"]) do; if fast
+            floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s)
+            ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"]
+            mode = if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
+                res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
+                res["NearStaticOverflow"] = true
+                res
+            else
+            _memo_mode((s, l, m, n, k)) do; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if fast
                 if use_levin
                     levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux))
                     levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
@@ -1956,6 +2139,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                     ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
             end; end; end
+            end
             get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
             get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
             ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
@@ -2006,6 +2190,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
 
         function branch_summation(s::Int)
             shell_list = Float64[]
+            last_shell = (0.0, 0.0, 0.0)
             current_shell_list[] = shell_list
             n_list = Int[]
             total_energy = 0.0
@@ -2514,6 +2699,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
 
                 push!(shell_list, shell_n)
                 push!(n_list, n)
+                last_shell = (shell_n, shell_n_angular, shell_n_carter)
                 total_energy += shell_n
                 total_angular += shell_n_angular
                 total_carter += shell_n_carter
@@ -2532,6 +2718,13 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 end
             end
 
+            # Geometric n tail at high eccentricity, as for eccentric equatorial orbits.
+            tail_factor, tail_ratio = _geometric_n_tail_factor(shell_list, e, n_reached, minimum_consecutive + 1)
+            n_tail = tail_factor .* last_shell
+            total_energy += n_tail[1]
+            total_angular += n_tail[2]
+            total_carter += n_tail[3]
+
             return (
                 energy_flux = total_energy,
                 angular_momentum_flux = total_angular,
@@ -2540,6 +2733,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 n_reached = n_reached,
                 shell_list = shell_list,
                 truncation_floor = branch_mode_floor(s),
+                n_tail = (energy = n_tail[1], angular_momentum = n_tail[2], carter_constant = n_tail[3], ratio = tail_ratio),
             )
         end
 
@@ -2592,6 +2786,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             K_max = Kmax,
             n_reached_inf = inf.n_reached,
             n_reached_hor = hor.n_reached,
+            n_tail_infinity = inf.n_tail,
+            n_tail_horizon = hor.n_tail,
             lmax_hit_inf = cap_hits_inf[1],
             lmax_hit_hor = cap_hits_hor[1],
             kmax_hit_inf = cap_hits_inf[2],

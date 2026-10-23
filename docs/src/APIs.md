@@ -311,6 +311,14 @@ amplitude, as `qnm` does.
 Below `|omega| = 1e-8` the ODE methods lose the `UP` solution;
 `method = "auto"` warns when it falls back to them there.
 
+ISEM's small-frequency expansion (used automatically for real $|\omega| \le 0.1$) is not used for
+$\ell \ge 20$ at high angular compression $(\ell + 1/2)/\sqrt{1 - a^2} \ge 100$ when $|\omega| \ge 10^{-3}$: there it
+returned wrong `UP` solutions without an error, and the ordinary route agrees with an independent ODE integration to
+about `1e-9`. In the point-particle convolutions, every radial solution that does take that expansion with
+$\ell \ge 16$ is checked: the Wronskian $\Delta^{s+1}(R^{\rm in} R^{\rm up\prime} - R^{\rm in\prime} R^{\rm up})$ must not
+vary by more than `1e-6` over the radii of the orbit; otherwise the mode is solved again without the expansion, and
+recorded as a failed mode if that also fails.
+
 ## Point-Particle Single-Mode Fluxes
 
 ### `Teukolsky_pointparticle_mode`
@@ -416,17 +424,17 @@ Keywords:
 
 | keyword | default | meaning |
 | :--- | :--- | :--- |
-| `tol` | `1e-8` | relative truncation tolerance of the mode sums, which add modes in shells of one ℓ (circular orbits), one k (inclined) or one n (eccentric, generic) |
+| `tol` | `1e-8` | relative stopping threshold of the mode sums, which add modes in shells of one ℓ (circular orbits), one k (inclined) or one n (eccentric, generic); each mode is refined to a matching accuracy. It is not a guaranteed error bound: the flux error is typically a few `tol`, and 1–5 `tol` was measured for orbits very close to the separatrix or the ISSO and for very large `p` |
 | `lmax` | `30` | maximum $\ell$ index |
 | `nmax` | `500` | maximum radial shell index |
 | `kmax` | `20` | maximum polar shell index |
-| `minimum_consecutive` | `nothing` (5 for circular equatorial orbits, 2 otherwise) | number of consecutive negligible terms that stops a sum over ℓ, m or (generic orbits) k; the outer `n` sum (eccentric, generic) and `k` sum (inclined) stop after `minimum_consecutive + 1` negligible shells |
+| `minimum_consecutive` | `nothing` (5 for circular equatorial orbits, 2 otherwise) | number of consecutive negligible terms that stops a sum over ℓ, m or (generic orbits) k; the outer `n` sum (eccentric, generic) and `k` sum (inclined) stop after `minimum_consecutive + 1` negligible shells. For eccentric equatorial orbits the `n` run is at least one period $\Upsilon_\phi/\Upsilon_r$ of the shells, which near the separatrix (zoom-whirl orbits) dip and rise again |
 | `N`, `N0` | `64` | initial radial grid interval count of the adaptive sampling (`N`, `K`, `Nmax` and `Kmax` must be powers of 2) |
 | `K`, `K0` | `16` | initial polar grid interval count of the adaptive sampling |
 | `Nmax` | `2^14` | maximum radial grid interval count |
 | `Kmax` | `2^12` | maximum polar grid interval count |
 | `sample_tol` | `1e-3` | adaptive single-mode sampling tolerance |
-| `truncation_floor` | `1e-16` | absolute single-mode refinement floor; the total-flux summation tracks separate infinity and horizon floor values |
+| `truncation_floor` | `1e-16` | absolute single-mode floor; the total-flux summation tracks separate infinity and horizon floors, `min(truncation_floor, tol * branch total)`, which set the cutoffs of the walks, and refines each mode until it is below 1% of that floor on two successive grids |
 | `generic_beta` | `1e-4` | generic orbits, shells with `n ≥ 1`: raises the cutoff below which a mode counts as negligible to at least `generic_beta * tol` times the total flux summed so far (at infinity or at the horizon); `0` disables this |
 | `generic_deep` | `1e-5` | generic orbits: an upward scan in ℓ stops as soon as one mode's energy flux is at most `generic_deep` times the cutoff; `0` disables this |
 | `tail_levin` | `nothing` | eccentric and generic orbits: `true` evaluates the radial shells from `levin_nmin` on with adaptive Levin quadrature instead of a refined trapezoidal grid, `false` never does, `nothing` does so when it is much cheaper |
@@ -439,6 +447,20 @@ Keywords:
 | `fast` | `true` | `false` turns `tail_levin` off and computes generic-orbit modes without reusing cached orbit samples |
 
 It accepts stable bound orbits and marginally stable (critical) bound circular orbits, as classified by `KerrGeodesics`; for other parameters it warns and returns `nothing`.
+
+Tails beyond the stop: where the last shells of a sum fall off geometrically (one sign, decreasing steadily over the
+stopping run, fitted ratio below 0.98), the remaining shells are extrapolated as a geometric series and added, as
+`last_shell * r / (1 - r)`, to the energy, angular-momentum and Carter-constant fluxes. This is done for the `n` sum
+of eccentric and generic orbits with `e >= 0.7` whose `n` walk stopped by itself at `n >= 100`, and for the ℓ sum of
+circular equatorial orbits. At `e ≈ 0.8` and `tol = 1e-8` the tail is about `1e-7` of the energy flux at infinity.
+
+Modes whose flux is negligible on analytic grounds are not computed: with $|\omega| r_{\max} < \ell/2$ the orbit lies
+inside the mode's centrifugal barrier, and a mode whose near-zone bound is below `1e-40` of that of the leading mode is
+recorded as zero (counted in `reached.near_static_zero`); a mode whose radial solve fails twice is also recorded as zero
+there when that bound is below `1e-20`, and otherwise as a failed mode (`reached.failed_modes`, with a warning).
+
+Nearly polar orbits with `abs(x) < 1e-4` (including `x = 0`) are interpolated linearly between `x = -1e-4` and
+`x = 1e-4`, which costs two summations (`reached.small_x_interpolation`).
 
 It returns a `TeukolskyPointParticleFlux`:
 
@@ -458,19 +480,19 @@ It returns a `TeukolskyPointParticleFlux`:
 | `reached` | highest shell indices reached: `l_reached_inf`, `l_reached_hor` and their maximum `l_reached` (circular), `k_reached_inf`, `k_reached_hor` (inclined), or `n_reached_inf`, `n_reached_hor` (eccentric, generic); `nothing` in a `k_reached_*` or `n_reached_*` entry means the sum reached `kmax` or `nmax` before converging. The display groups the `l` and `n` entries as `l_reached = (infinity = …, horizon = …)` and `n_reached = (…)` |
 | `reached.convolution_integral` | named tuple describing whether convolution integrals were needed and which tail strategy was used |
 | `cost` | wall-clock runtime in seconds |
-| `result` | raw mode-summation result |
+| `result` | raw mode-summation result; for eccentric and generic orbits `result.n_tail_infinity` and `result.n_tail_horizon`, and for circular equatorial orbits `result.l_tail_infinity` and `result.l_tail_horizon`, give the extrapolated tail added to the sums (see below) |
 
 Example:
 
 ```julia
-flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 1.0)   # circular equatorial, about 0.3 s after warm-up
+flux = Teukolsky_pointparticle_flux(0.9, 6.0, 0.0, 1.0)   # circular equatorial, about 0.4 s after warm-up
 flux.infinity_energy_flux
 flux.horizon_energy_flux
 flux.reached.l_reached_inf
 ```
 
-A generic orbit such as `(0.9, 6.0, 0.7, 0.5)` sums about 1.3 million modes;
-the run shown on the Home page took about 22 minutes at `tol = 1e-8`.
+A generic orbit such as `(0.9, 6.0, 0.7, 0.5)` sums about 1.5 million modes;
+the run shown on the Home page took about 27 minutes at `tol = 1e-8`.
 
 ```@docs
 Teukolsky_pointparticle_flux

@@ -1727,6 +1727,14 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
         nmax_text = caps.nmax === nothing ? "" : ", nmax = $(caps.nmax)$(caps.nmax_auto ? " (auto)" : "")"
         println(io, "    caps = (lmax = $(caps.lmax)$(caps.lmax_auto ? " (auto)" : ""), kmax = $(caps.kmax)$(caps.kmax_auto ? " (auto)" : "")$(nmax_text), raises = $(caps.raises)),")
     end
+    # Extrapolated tails added to the sums (energy flux), shown only when one was added.
+    for (label, key_inf, key_hor) in (("n_tail", :n_tail_infinity, :n_tail_horizon), ("l_tail", :l_tail_infinity, :l_tail_horizon))
+        tail_inf = _flux_get(flux.result, key_inf)
+        tail_hor = _flux_get(flux.result, key_hor)
+        (tail_inf === nothing || tail_hor === nothing) && continue
+        (iszero(tail_inf.energy) && iszero(tail_hor.energy)) && continue
+        println(io, "    $(label) = (infinity = $(tail_inf.energy + 0.0), horizon = $(tail_hor.energy + 0.0)),")
+    end
     println(io, "    tolerance = $(_flux_tolerance_print_value(flux)),")
     println(io, "    truncation_floor = $(_flux_truncation_floor_print_value(flux)),")
     println(io, "    cost = $(flux.cost) seconds,")
@@ -1734,6 +1742,32 @@ function Base.show(io::IO, ::MIME"text/plain", flux::TeukolskyPointParticleFlux)
 end
 
 _flux_get(result, key::Symbol, default=nothing) = hasproperty(result, key) ? getproperty(result, key) : default
+
+# Nearly polar orbits, |x| < SMALL_POLAR_X (x = 0 exactly included), pass within ~|x| of the poles, where the polar
+# azimuth turns by pi over a phase interval of width ~|x| and Lz / sin^2(theta) concentrates into a spike of finite
+# area. The polar trapezoid cannot resolve that width: at (a, p) = (0, 25), where the flux does not depend on x,
+# |x| = 1e-5 is off by 4e-8, 1e-6 by 1e-5 and 1e-8 by a factor 6, and x = 0 (where the spike was dropped) by 2e-5,
+# with kmax hits and NaN modes at large p. The fluxes are smooth in x through 0, so these orbits are interpolated
+# linearly between x = -SMALL_POLAR_X and +SMALL_POLAR_X, both resolved; the interpolation error is O(SMALL_POLAR_X^2)
+# (1.5e-9 relative at (0.9, 8)). The two runs are summed in total_modes and cost, and reached gains small_x_interpolation.
+const SMALL_POLAR_X = 1e-4
+_small_polar_x(e, x) = abs(x) < SMALL_POLAR_X
+
+function _small_x_flux(run, a, p, e, x)
+    δ = SMALL_POLAR_X
+    plus = run(δ, true)
+    minus = run(-δ, false)
+    (plus === nothing || minus === nothing) && return nothing
+    w = (δ + x) / (2δ)
+    mix(f) = w * f(plus) + (1 - w) * f(minus)
+    return TeukolskyPointParticleFlux(
+        a, p, e, x, plus.orbit_type,
+        mix(f -> f.infinity_energy_flux), mix(f -> f.infinity_angular_momentum_flux), mix(f -> f.infinity_carter_constant_flux),
+        mix(f -> f.horizon_energy_flux), mix(f -> f.horizon_angular_momentum_flux), mix(f -> f.horizon_carter_constant_flux),
+        plus.total_modes + minus.total_modes, plus.tolerance, plus.truncation_floor,
+        merge(plus.reached, (small_x_interpolation = (x_minus = -δ, x_plus = δ, weight_plus = w),)),
+        plus.cost + minus.cost, (plus = plus.result, minus = minus.result))
+end
 
 function _teukolsky_flux_orbit_type(e, x)
     if e == 0.0 && (x == 1.0 || x == -1.0)
@@ -1939,6 +1973,13 @@ export spawn_pointparticle_submission!
     Teukolsky_pointparticle_flux(a, p, e, x; tol=1e-8, lmax=:auto, nmax=:auto, kmax=:auto)
 
 Compute total point-particle fluxes by automatically selecting the mode-summation strategy from the orbit type.
+`tol` is the stopping threshold of the sums, not a guaranteed error bound: a walk over l, m, k or n stops once
+`minimum_consecutive` successive modes or shells are below `tol` times the current shell or branch total, and each
+mode is refined to a matching accuracy. The flux error is therefore typically a few `tol`; measured against
+independent references it reached 1..5 `tol` for orbits very close to the separatrix or the ISSO and for very large
+`p`. Where the shells beyond a stop fall off geometrically, their tail is extrapolated and added (the n tail of
+eccentric and generic orbits with e >= 0.7, the l tail of circular equatorial orbits); the added amounts are reported
+in the result (`n_tail_infinity`, `n_tail_horizon`, `l_tail_infinity`, `l_tail_horizon`).
 `lmax=:auto` and `kmax=:auto` estimate the caps before summing: the energy fluxes of the (l, m = l) modes,
 l = 2..10, of the equatorial circular orbit at the same spin and radius p/(1+e) (prograde for x >= 0) give the
 l falloff, and the cap is the l where the extrapolated tail drops below `tol` times the probe total, plus 3,
@@ -1967,6 +2008,9 @@ shell that is still growing does not count towards the stop, and the positive-m
 walk only stops more than 5 past the m with the largest shell.
 Pass `submission` (see `with_pointparticle_submission`) to reuse the orbit's
 sampling geometry across calls.
+Nearly polar orbits with `abs(x) < 1e-4` (including `x = 0`) are interpolated linearly between
+`x = -1e-4` and `x = 1e-4`, which costs two summations; `reached.small_x_interpolation` records it
+and `submission` is not used for them.
 The keyword `lifecycle_observer` is a diagnostic hook and is not guaranteed to be stable.
 
 Return a `TeukolskyPointParticleFlux` with the total energy, angular-momentum and
@@ -1980,6 +2024,15 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
     if !_teukolsky_flux_bound_orbit(a, p, e, x)
         @warn "The specified parameters do not correspond to a bound orbit." a p e x
         return nothing
+    end
+    if _small_polar_x(e, x)
+        # |x| < SMALL_POLAR_X: interpolate linearly between x = -SMALL_POLAR_X and +SMALL_POLAR_X (see _small_x_flux).
+        return _small_x_flux(a, p, e, x) do xs, rec
+            Teukolsky_pointparticle_flux(a, p, e, xs; submission = nothing, tol, lmax, nmax, kmax, minimum_consecutive, N, N0, K, K0,
+                Nmax, Kmax, sample_tol, record = rec && record, record_path, fast, truncation_floor, mode_abs_floor, zero_low_flux,
+                threaded_sampling, neg_branch_scale, generic_beta, generic_deep, tail_levin, tail_levin_infinity, tail_levin_horizon,
+                levin_nmin, levin_mode_abs_floor, levin_local_n, levin_max_depth, info, stop_requested, lifecycle_observer)
+        end
     end
 
     orbit_type = _teukolsky_flux_orbit_type(e, x)
