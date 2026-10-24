@@ -3754,7 +3754,7 @@ end
 # contains x, for patches ordered in either direction; 0 if none does.
 function _patch_index(patches, x)
     isempty(patches) && return 0
-    forward = patches[1].center_x <= patches[end].center_x
+    forward = patches[1].center_x <= patches[end].next_x
     lo = 1
     hi = length(patches)
     while lo <= hi

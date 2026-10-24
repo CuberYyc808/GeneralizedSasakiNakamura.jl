@@ -238,4 +238,31 @@ end
     @test_throws ArgumentError Teukolsky_pointparticle_flux(ecc...; tail_levin=:sometimes)
 end
 
+# ---------------------------------------------------------------------------------------------------
+# The high-e orbit class (eccentric m-walk rules, MS.HIGH_E_CLASS_MIN) and the geometric n tail (MS.N_TAIL_MIN_E) both
+# switch on at e = 0.7. Across the boundary the two sums must agree to the tolerance once the extrapolated n tail is
+# taken out (measured at (0.9, 6, 0.70, 1): on/off 4.6e-11 relative, 37688 against 52502 modes).
+# ---------------------------------------------------------------------------------------------------
+@testset "high-e class boundary" begin
+    MS = GSN.ModeSummation
+    @test MS.HIGH_E_CLASS_MIN == 0.7
+    @test MS.N_TAIL_MIN_E == 0.7
+    @test !MS.orbit_rules(0.9, 6.0, prevfloat(0.7), 1.0).high_e
+    @test MS.orbit_rules(0.9, 6.0, 0.7, 1.0).high_e
+    shells = [0.5^n for n in 1:20]
+    @test MS._geometric_n_tail_factor(shells, prevfloat(0.7), 200) == (0.0, 0.0)
+    @test MS._geometric_n_tail_factor(shells, 0.7, 200)[2] ≈ 0.5
+    if at_level(:extended)
+        below = Teukolsky_pointparticle_flux(0.9, 6.0, prevfloat(0.7), 1.0; tol=1e-8)
+        at = Teukolsky_pointparticle_flux(0.9, 6.0, 0.7, 1.0; tol=1e-8)
+        @test at.total_modes < below.total_modes
+        E_below = below.infinity_energy_flux - below.result.n_tail_infinity.energy
+        E_at = at.infinity_energy_flux - at.result.n_tail_infinity.energy
+        @test abs(E_at - E_below) <= 1e-8 * abs(E_below)
+        H_below = below.horizon_energy_flux - below.result.n_tail_horizon.energy
+        H_at = at.horizon_energy_flux - at.result.n_tail_horizon.energy
+        @test abs(H_at - H_below) <= 1e-8 * abs(E_below)
+    end
+end
+
 end # flux

@@ -60,9 +60,8 @@ const REFERENCE_PAIRS = (
 # Working precisions: integers are BigFloat bits; "double64" runs the route in Double64 (DoubleFloats.jl
 # must be in the environment), a fixed type of 106 bits.
 bits_list() = [lowercase(strip(s)) == "double64" ? :double64 : parse(Int, s) for s in split(get(ENV, "GSN_AP_BITS", "113,256"), ",")]
-if :double64 in bits_list()
-    using DoubleFloats
-end
+# DoubleFloats.jl must be in the environment: the apparent-point test below always runs in Double64.
+using DoubleFloats
 _precision_bits(bits) = bits === :double64 ? 106 : bits
 _precision_label(bits) = bits === :double64 ? "   d64" : @sprintf("%6d", bits)
 
@@ -202,11 +201,12 @@ end
 # A root of eta 5.4e-7 off the real axis inside the infinity march, (s, l, m, a, omega) = (-2, 2, 2, 0.99, 0.75885)
 # with a and omega the binary doubles: the Taylor patches about real points collapsed onto it and Double64 failed
 # with "noninvertible q0"; the route crosses it with the local series at the apparent point. References: R at
-# unit transmission from an independent 256-bit Frobenius and Taylor solution of the Teukolsky equation.
+# unit transmission from an independent 256-bit Frobenius and Taylor solution of the Teukolsky equation. Double64 is
+# tested whatever GSN_AP_BITS selects.
 @testset "apparent point next to the real axis" begin
     references = ((1.6, 0.06194167414236735 + 0.02117128350690939im), (2.5, -0.22435973040728777 + 0.8634188314161765im),
         (4.0, -3.779344698099683 - 2.9519979793236772im), (10.0, -74.90514587608912 - 41.48465882312736im))
-    for bits in bits_list()
+    for bits in unique([:double64; bits_list()])
         T = bits === :double64 ? Double64 : BigFloat
         setprecision(BigFloat, _precision_bits(bits)) do
             R = GSN.Teukolsky_radial(-2, 2, 2, T(0.99), T(0.75885), GSN.IN)

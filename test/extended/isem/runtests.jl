@@ -529,6 +529,141 @@ end
     end
 end
 
+# The re-solve of Y (closed-form A and B near the horizon) carries the complex-path reflection of the first
+# route over instead of tracing the path again: the amplitude ratios of the re-solved Y must equal those of
+# Teukolsky_radial. The closed-form A and B series use cached powers of r; they must equal the plain
+# truncated-series evaluation of the potentials.
+@testset "Y re-solve: reflection carried over, cached powers" begin
+    Y = Y_radial(-2, 3, 2, 0.9, 2.35, IN)
+    R = Teukolsky_radial(-2, 3, 2, 0.9, 2.35, IN)
+    @test Y.reflection_amplitude / Y.transmission_amplitude ≈ R.reflection_amplitude / R.transmission_amplitude rtol=1e-9
+    @test Y.incidence_amplitude / Y.transmission_amplitude ≈ R.incidence_amplitude / R.transmission_amplitude rtol=1e-9
+    route = D.radial_route(-2, 3, 2, 0.9, 2.35, :IN)
+    p = route.params
+    order = 40
+    a_terms, b_terms = D.OrdinaryPointExpansion.ab_term_counts(:O, order)
+    a1 = zeros(ComplexF64, a_terms); b1 = zeros(ComplexF64, b_terms)
+    D.OrdinaryPointExpansion.direct_ab_series!(a1, b1, p, 0.3, order)
+    T = GSN.ISEM.OrdinaryPointExpansion.Taylor1
+    kappa = sqrt(1 - p.a^2)
+    x = 0.3 + T(ComplexF64, order + 1)
+    r = (1 + kappa - (1 - kappa) * x) / (1 - x)
+    B = -GSN.Potentials.sU(p.s, p.m, p.a, p.omega, p.lambda, r) /
+        ((2kappa) * (r^2 - 2r + p.a^2) / ((r - 1 + kappa)^2 * (r^2 + p.a^2)))^2
+    @test maximum(abs(b1[k] - B.coeffs[k]) * 0.1^(k - 1) for k in 1:b_terms) <=
+        1e-12 * maximum(abs(B.coeffs[k]) * 0.1^(k - 1) for k in 1:b_terms)
+end
+
+# Checked bridge: where the IN combination cancels by 1e4 to 1e12 the bridge (the matched state propagated by
+# the ODE) is compared with the combination at fractions of [match_x, target] and taken when they differ by more
+# than 1e-9. (s, l, m, a, omega) = (-2, 4, 2, 0.99, 0.2) lost 2.2e-4 in Y with the combination. References: the
+# 256-bit arbitrary-precision route.
+@testset "checked bridge where the IN combination cancels" begin
+    # The case only tests the bridge while the automatic choices put it there: no small-frequency expansion, and
+    # a bridge built for the IN combination.
+    route = D.radial_route(-2, 4, 2, 0.99, 0.2, :IN)
+    @test !route.controls.small_frequency_expansion
+    @test route.bridge !== nothing
+    Y = Y_radial(-2, 4, 2, 0.99, 0.2, IN)
+    for (r, value) in (
+            (1.191067359796659, 1.4743689891412899e-5 + 2.746766789959013e-6im),
+            (1.441067359796659, 0.002141795472069203 - 0.0006378110440023181im),
+            (2.1410673597966587, -0.2572090676661004 + 0.05756574073806043im),
+            (6.0, -199.62815073171328 - 74.43225981220208im),
+            (20.0, -6189.784420500376 + 25699.604337704415im))
+        @test Y.Y_solution(r)[1] ≈ value rtol=1e-11
+    end
+end
+
+# Roots of eta and the crossing trigger. The four roots of eta r^4 satisfy eta(r) = 0 and Vieta's relations; the
+# mirror mode (-m, -omega) has the conjugate roots. Only roots within APPARENT_IM_MAX of the real axis are crossed:
+# (3, 2, 0.9, 2.35) has a root 0.047 off the axis near the horizon, which the plain march passes accurately.
+@testset "apparent points: roots and trigger" begin
+    AS = D.ApparentSingularities
+    for (l, m, a, omega) in ((2, 2, 0.99, 0.75885), (3, 2, 0.9, 2.35), (2, -1, 0.5, 1.3))
+        lambda = real(Teukolsky_radial(-2, l, m, a, omega, IN).mode.lambda)
+        params = (s = -2, m = m, a = a, omega = omega, lambda = lambda)
+        xs = AS.eta_roots_x(params)
+        @test length(xs) == 4
+        kappa = sqrt(1 - a^2)
+        rs = [(1 + kappa - (1 - kappa) * x) / (1 - x) for x in xs]
+        c = [GSN.Transformation.eta_coefficient(-2, m, a, omega, lambda, -k) for k in 0:4]
+        for r in rs
+            @test abs(GSN.Transformation.eta(-2, m, a, omega, lambda, r)) <= 1e-10 * sum(abs(c[k+1]) / abs(r)^k for k in 0:4)
+        end
+        @test sum(rs) ≈ -c[2] / c[1] rtol=1e-10
+        @test prod(rs) ≈ c[5] / c[1] rtol=1e-10
+        mirror = AS.eta_roots_x((s = -2, m = -m, a = a, omega = -omega, lambda = lambda))
+        @test all(minimum(abs(conj(x) - y) for y in mirror) <= 1e-10 * max(1, abs(x)) for x in xs)
+    end
+    lambda = real(Teukolsky_radial(-2, 3, 2, 0.9, 2.35, IN).mode.lambda)
+    params = (s = -2, m = 2, a = 0.9, omega = 2.35, lambda = lambda)
+    @test any(x -> 0 < real(x) < 1 && 0.04 < abs(imag(x)) < 0.05, AS.eta_roots_x(params))
+    @test isempty(AS.apparent_points(params))
+    @test isempty(AS.apparent_points((s = -2, m = 2, a = 0.99, omega = 0.75885 + 0.1im, lambda = 1.0 + 0im)))
+    # The local basis at the point is accepted (indices 0 and 2, resonance) with the closed-form A and B, whose
+    # value agrees with the constant term of direct_ab_series!.
+    for omega in (0.75885, 0.76)
+        route = D.radial_route(-2, 2, 2, 0.99, omega, :IN)
+        point = only(AS.apparent_points(route.params))
+        @test abs(imag(point.x1)) < AS.APPARENT_IM_MAX
+        @test AS.apparent_basis(x -> D.OrdinaryPointExpansion.direct_ab_value(route.params, x), point) !== nothing
+        a_out = zeros(ComplexF64, 50); b_out = zeros(ComplexF64, 50)
+        x0 = real(point.x1) - 0.1
+        D.OrdinaryPointExpansion.direct_ab_series!(a_out, b_out, route.params, x0, 20)
+        A, B = D.OrdinaryPointExpansion.direct_ab_value(route.params, x0)
+        @test a_out[1] ≈ A rtol=1e-13
+        @test b_out[1] ≈ B rtol=1e-13
+    end
+end
+
+# A march that starts and ends inside the window of an apparent point holds only the two patches of the crossing,
+# both centred at Re x1; the patch lookup must read the march direction from the first centre and the last end.
+@testset "apparent point: march inside the crossing window" begin
+    AS = D.ApparentSingularities
+    route = D.radial_route(-2, 2, 2, 0.99, 0.75885, :IN)
+    point = only(AS.apparent_points(route.params))
+    h = AS.APPARENT_STEP_FRACTION * point.radius
+    xr = real(point.x1)
+    coefficients = D.gsn_coefficients(route.params; controls=route.controls)
+    for (from, to) in ((xr + 0.8h, xr - 0.8h), (xr - 0.8h, xr + 0.8h))
+        X, dX = D.Matching.route_state(route, from)
+        basis = D.Iteration.iterate_from_state(coefficients, :horizon_in, from, X, dX, to; controls=route.controls)
+        for x in (to, xr - 0.4h, xr + 0.4h)
+            @test D.Iteration.basis_state(basis, x)[1] ≈ D.Matching.route_state(route, x)[1] rtol=1e-9
+        end
+    end
+end
+
+# Across the apparent point the IN and UP solutions of s = -2 and s = +2 keep a constant Wronskian
+# Delta^(s+1) (R_in R_up' - R_in' R_up), on both sides of r1 = 1.8283 (no reference needed).
+@testset "apparent point: radial Wronskians across r1" begin
+    for s in (-2, 2)
+        Rin = Teukolsky_radial(s, 2, 2, 0.99, 0.75885, IN)
+        Rup = Teukolsky_radial(s, 2, 2, 0.99, 0.75885, UP)
+        W(r) = (r^2 - 2r + 0.99^2)^(s + 1) * (Rin.Teukolsky_solution(r)[1] * Rup.Teukolsky_solution(r)[2] -
+            Rin.Teukolsky_solution(r)[2] * Rup.Teukolsky_solution(r)[1])
+        W0 = W(1.6)
+        for r in (1.75, 1.82, 1.84, 1.9, 2.5, 4.0)
+            @test W(r) ≈ W0 rtol=1e-9
+        end
+    end
+end
+
+# The re-solve threshold (RadialFunctions.NEAR_HORIZON_REFINE_TOL = 1e-9): (s, l, m, a, omega) = (-2, 2, -1, 0.5, 3.95)
+# has a first-solve mismatch of 2.7e-9 (3.1e-11 after the re-solve), so a threshold loosened to 5e-9 or more would
+# skip it; Y_radial must return the re-solved Y, not the first one.
+@testset "Y re-solve fires just above its threshold" begin
+    RF = D.RadialFunctions
+    @test RF.NEAR_HORIZON_REFINE_TOL == 1e-9
+    route = D.radial_route(-2, 2, -1, 0.5, 3.95, :IN)
+    first, mismatch = RF._route_y_solution_checked(route, RF._route_y_amplitudes(route))
+    @test 2e-9 < mismatch < 5e-9
+    Y = Y_radial(-2, 2, -1, 0.5, 3.95, IN)
+    r = 1 + sqrt(1 - 0.5^2) * 3
+    @test Y.Y_solution(r)[1] != first(r)[1]
+end
+
 @testset "apparent point next to the real axis" begin
     for (omega, transmission, values) in APPARENT_POINT_REFERENCES
         Y = Y_radial(-2, 2, 2, 0.99, omega, IN)

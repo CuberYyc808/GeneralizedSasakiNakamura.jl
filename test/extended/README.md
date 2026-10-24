@@ -79,6 +79,13 @@ marked "frozen self-value", with looser tolerances.
   imaginary axis.
 * Hard-coded in `isem` / registered suite: negative-frequency and default-tolerance references
   (`test/runtests.jl`, from the same independent tables), and the real-frequency MST value nu = 2.5 + 1.262i.
+* `APPARENT_POINT_REFERENCES` (`isem/runtests.jl`): Y and R of (s, l, m, a) = (-2, 2, 2, 0.99) at omega = 0.758825,
+  0.75885, 0.758875, next to the eta root that crosses the real axis; independent 256-bit horizon Frobenius plus
+  Taylor solution of the Teukolsky equation (reltol 1e-70), Y at the package's transmission amplitude, R at unit
+  transmission. The same R values (omega = 0.75885) are the references of the Double64/BigFloat apparent-point test
+  in `test/arbitrary_precision/runtests.jl`.
+* Checked-bridge case (-2, 4, 2, 0.99, 0.2) in `isem/runtests.jl`: Y from the package's 256-bit arbitrary-precision
+  route (not independent of the GSN equation, independent of the binary64 matching and bridge).
 * The amplitude Wronskian `C_up (4 i k r_+ + 2 s kappa) = 2 i omega B_inc` (unit transmissions) follows from
   the package's asymptotic forms (`common/helpers.jl`); the suite also checks it on the reference values themselves.
 

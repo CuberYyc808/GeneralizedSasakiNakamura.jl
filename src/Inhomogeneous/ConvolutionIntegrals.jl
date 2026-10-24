@@ -4007,13 +4007,13 @@ struct AdaptiveEccentricLevinLeaf
     tail::Float64
 end
 
-AdaptiveEccentricLevinLeaf(level, bin, amp, active) = AdaptiveEccentricLevinLeaf(level, bin, amp, active, Inf)
-
 # Resolution of a segment's samples on its Chebyshev-Lobatto nodes x_k = cos(pi k / (n - 1)): the last two
-# Chebyshev coefficients over the largest one. Small when the n nodes resolve the function on the segment.
+# Chebyshev coefficients over the largest one. Small when the n nodes resolve the function on the segment;
+# Inf (unresolved) for fewer than 4 nodes or non-finite samples.
 function _cheb_tail(v::AbstractVector)
     n = length(v)
     n < 4 && return Inf
+    all(isfinite, v) || return Inf
     N = n - 1
     cmax = 0.0
     tail = 0.0
