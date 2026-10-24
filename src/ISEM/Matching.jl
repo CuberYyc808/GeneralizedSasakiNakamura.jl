@@ -68,6 +68,12 @@ const LOW_FREQUENCY_AXISYMMETRIC_MATCH_X = 0.99
 const ORDINARY_IN_MATCH_X = 0.7
 const ORDINARY_UP_MATCH_X = 0.3
 const BRIDGE_CONDITION_LIMIT = 1.0e12
+# Below that limit an IN route whose matched combination cancels by more than BRIDGE_CHECK_LIMIT builds the
+# bridge as a check and uses it only where the two disagree by more than BRIDGE_CHECK_TOL: (s, l, m, a, omega)
+# = (-2, 4, 2, 0.99, 0.2) cancels by 1.2e11 and its Y was off by 2.2e-4 just outside match_x.
+const BRIDGE_CHECK_LIMIT = 1.0e4
+const BRIDGE_CHECK_TOL = 1.0e-9
+const BRIDGE_CHECK_FRACTIONS = (0.02, 0.1, 0.3, 1.0)
 # Diagnostic switch: ISEM_PHYSICAL_BRIDGE=0 disables the physical bridge (_needs_bridge)
 # and the small-frequency endpoint bridge, so routes evaluate the matched bases directly.
 const PHYSICAL_BRIDGE = get(ENV, "ISEM_PHYSICAL_BRIDGE", "1") != "0"
@@ -336,15 +342,20 @@ function _build_bridge(
     coefficient1,
     basis1,
     coefficient2,
-    basis2,
+    basis2;
+    combination_bases=nothing,
 )
-    _needs_bridge(target, coefficient1, basis1, coefficient2, basis2;
+    needed = _needs_bridge(target, coefficient1, basis1, coefficient2, basis2;
         tolerance=(branch == :UP && ctrl.small_frequency_expansion ?
-            ctrl.tolerance : nothing)) || return nothing
+            ctrl.tolerance : nothing))
+    # Between BRIDGE_CHECK_LIMIT and BRIDGE_CONDITION_LIMIT the bridge is built only as a check (see below).
+    checked = !needed && PHYSICAL_BRIDGE && combination_bases !== nothing &&
+        _eval_condition(target, coefficient1, basis1, coefficient2, basis2) > log(BRIDGE_CHECK_LIMIT)
+    (needed || checked) || return nothing
     abs(target_x - match_x) > 100eps(Float64) || return nothing
     kind = branch == :IN ? :horizon_in : :infinity_out
-    try
-        return iterate_from_state(
+    bridge = try
+        iterate_from_state(
             coefficients,
             kind,
             match_x,
@@ -359,6 +370,25 @@ function _build_bridge(
     catch err
         message = sprint(showerror, err)
         startswith(message, "ISEM GSN hybrid recurrence failed") || rethrow()
+        return nothing
+    end
+    checked || return bridge
+    # Checked bridge: kept only where the matched combination and the propagated matched state disagree by more
+    # than BRIDGE_CHECK_TOL between match_x and target_x, i.e. where the cancellation actually cost digits (the
+    # loss shows just outside match_x: at (-2, 4, 2, 0.99, 0.2) 2e-4 at x = 0.71, 8e-12 at the far end x = 0.998);
+    # otherwise the route is left as it was.
+    try
+        b1, b2 = combination_bases
+        worst = 0.0
+        for f in BRIDGE_CHECK_FRACTIONS
+            x = match_x + f * (target_x - match_x)
+            combined = coefficient1 * _bridge_state(b1, x)[1] + coefficient2 * _bridge_state(b2, x)[1]
+            propagated = _bridge_state(bridge, x)[1]
+            worst = max(worst, abs(propagated - combined) / abs(propagated))
+        end
+        return worst > BRIDGE_CHECK_TOL ? bridge : nothing
+    catch err
+        err isa InterruptException && rethrow()
         return nothing
     end
 end
@@ -1115,7 +1145,8 @@ function _match_body(
                 incidence,
                 _basis_tuple(i_in),
                 reflection,
-                _basis_tuple(i_out),
+                _basis_tuple(i_out);
+                combination_bases=(i_in, i_out),
             ), nothing)
         end
         mst_eval_plan = if mst_plan === nothing
