@@ -1244,10 +1244,7 @@ end
 # either a wrong near-horizon solution or a conversion that loses that much just
 # beyond r_+ + kappa (see y_radial_function).
 const NEAR_HORIZON_CHECK_TOL = 1e-7
-# Re-solve above this mismatch (four times the solve). At 1e-9 it fired on 13 of 80 (a, l, omega) grid cases
-# (omega = 2.5, 4.3) whose Y was already within 1e-8 of BigFloat without it (2e-9 with it); at 1e-8 it keeps
-# (3, 0.9, 2.35), mismatch ~5e-7, and fires on 2 of the 80.
-const NEAR_HORIZON_REFINE_TOL = 1e-8
+const NEAR_HORIZON_REFINE_TOL = 1e-9
 
 function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
     (s == -2 && omega isa Real && !iszero(omega) && trans isa Number && isfinite(trans) &&
