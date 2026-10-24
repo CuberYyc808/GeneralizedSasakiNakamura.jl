@@ -4,6 +4,7 @@ using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
 using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
 using ..AsymptoticAmplitudes: _try_unit_pair
+using ..ComplexPathAmplitudes: _infinity_in_coefficients, _infinity_out_coefficients, _infinity_solutions
 using ..Matching:
     Route,
     ConjugatedRoute,
@@ -1282,6 +1283,70 @@ _warn_near_horizon_mismatch(mismatch, s, m, a, omega) =
         "differs from the Teukolsky horizon series by $(mismatch) near the " *
         "horizon; Y may be inaccurate." s m a omega maxlog = 20
 
+# Y of s = -2 IN at real omega > 0 from the two Teukolsky series at infinity, Y = e^{-i psi} (B_inc R_in + B_ref R_out)
+# / r^2, wherever their truncation stays below the conversion's own error, eps (2 omega r)^4 (at least
+# TWO_WAVE_SERIES_TOL); the converted Y = C11 X + C12 X' elsewhere. The conversion
+# amplifies the rounding of (X, X') by about 16 omega^4 r^4 (Y at r = 160: 2e-6 at (a, l, omega) = (0.9, 2, 3), 7e-6
+# at omega = 6), the series not at all (2e-13, 3e-13), given an accurate B_ref (Matching._complex_path_reflection).
+# Coefficients are built per Y function and read only, so evaluation is thread safe and allocates nothing.
+const TWO_WAVE_SERIES_TOL = 1e-14
+const TWO_WAVE_SERIES_ORDER = 400
+
+struct TwoWaveYSolution{F,X} <: Function
+    a::Float64
+    m::Int
+    omega::Float64
+    rplus::Float64
+    rminus::Float64
+    incidence::ComplexF64
+    reflection::ComplexF64
+    cin::Vector{ComplexF64}
+    cout::Vector{ComplexF64}
+    r_two::Float64
+    conversion::F
+    xsol::X
+end
+
+_two_wave_series_ok(err, omega, r) = err <= max(TWO_WAVE_SERIES_TOL, eps(Float64) * (2 * omega * r)^4)
+
+function (y::TwoWaveYSolution)(r)
+    (r isa Real && r >= y.r_two) || return y.conversion(r)
+    Rin, dRin, Rout, dRout, err = _infinity_solutions(-2, y.a, y.omega, ComplexF64(r), y.cin, y.cout)
+    _two_wave_series_ok(err, y.omega, r) || return y.conversion(r)
+    R = y.incidence * Rin + y.reflection * Rout
+    dR = y.incidence * dRin + y.reflection * dRout
+    psi = y.omega * rstar_from_r(y.a, r) - y.a * y.m / (y.rplus - y.rminus) * log((r - y.rplus) / (r - y.rminus))
+    delta = r^2 - 2r + y.a^2
+    K = (r^2 + y.a^2) * y.omega - y.a * y.m
+    e = cis(-psi) / r^2
+    X = y.xsol(rstar_from_r(y.a, r))[1]
+    return (e * R, e * (dR - (im * K / delta + 2 / r) * R), X, zero(Float64))
+end
+
+# Radii scanned once per Y function for the first one where the series qualify (their truncation falls with r).
+const TWO_WAVE_RADII = (3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0, 60.0, 80.0, 120.0, 160.0,
+    250.0, 400.0, 1000.0)
+
+function _two_wave_y_solution(route::Route, amps, conversion)
+    p = route.params
+    (p.s == -2 && route.branch === :IN && isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return conversion
+    a, w, lambda = Float64(p.a), Float64(real(p.omega)), real(p.lambda)
+    kappa = sqrt(1 - a^2)
+    cin = _infinity_in_coefficients(-2, p.m, a, w, lambda, TWO_WAVE_SERIES_ORDER)
+    cout = _infinity_out_coefficients(-2, p.m, a, w, lambda, TWO_WAVE_SERIES_ORDER)
+    r_two = Inf
+    for r in TWO_WAVE_RADII
+        r > 1 + kappa || continue
+        if _two_wave_series_ok(_infinity_solutions(-2, a, w, ComplexF64(r), cin, cout)[5], w, r)
+            r_two = r
+            break
+        end
+    end
+    isfinite(r_two) || return conversion
+    return TwoWaveYSolution(a, p.m, w, 1 + kappa, 1 - kappa, ComplexF64(amps.incidence), ComplexF64(amps.reflection),
+        cin, cout, r_two, conversion, gsn_solution_rstar(route))
+end
+
 # Wrap a route as a YRadialFunction (s = -2 IN or s = +2 UP), with the GSN
 # amplitudes converted by the Teukolsky factors.
 #
@@ -1321,6 +1386,7 @@ function y_radial_function(route::Route)
 end
 
 function _y_radial_function(route::Route, amps, ysoln)
+    ysoln = _two_wave_y_solution(route, amps, ysoln)
     isem = _isem_module()
     isdefined(isem, :YRadialFunction) || error("ISEM.YRadialFunction is not loaded.")
     y_type = getfield(isem, :YRadialFunction)

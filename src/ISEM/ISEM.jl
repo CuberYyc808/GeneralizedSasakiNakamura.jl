@@ -43,6 +43,8 @@ include("Iteration.jl")
 using .Iteration
 include("ManoSuzukiTakasugiInfinity.jl")
 using .ManoSuzukiTakasugiInfinity
+include("ComplexPathAmplitudes.jl")
+using .ComplexPathAmplitudes: ComplexPathAmplitudes
 include("Matching.jl")
 using .Matching
 include("AsymptoticAmplitudes.jl")

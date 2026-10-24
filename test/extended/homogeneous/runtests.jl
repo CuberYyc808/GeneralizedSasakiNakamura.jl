@@ -18,9 +18,11 @@ if !@isdefined(GSN)
 end
 include(joinpath(@__DIR__, "..", "common", "helpers.jl"))
 include(data_file("radial_references.jl"))
+include(data_file("complex_path_references.jl"))
 
 const D = GSN.ISEM
 const CF = GSN.ConversionFactors
+const CPA = D.ComplexPathAmplitudes
 
 dominant(x, y) = max(abs(x), abs(y))
 branch_symbol(bc) = bc == IN ? :IN : :UP
@@ -433,6 +435,85 @@ end
         @test isapprox(r_from_rstar(a, rs), rr; rtol=1e-10)
         @test rstar_from_r(a, rr * 1.001) > rs
     end
+end
+
+# ---------------------------------------------------------------------------------------------------
+# 12. High frequency: the reflected amplitude from the complex path (ISEM.ComplexPathAmplitudes), standalone and
+#     through the route (Matching._complex_path_reflection, taken where the route's |B_ref / B_inc| < 1e-6), and Y at
+#     large r from the two infinity series (RadialFunctions.TwoWaveYSolution). The reflection is compared relative
+#     to itself; |dB_ref / B_inc| <= 1e-30 counts as exact (it moves R(r) at r = 1e4 by 1e-14), which is where the
+#     Float64 path floor sits for B_ref / B_inc ~ 1e-60 - 1e-74 at omega = 10. Superradiant modes (k <= 0) keep the
+#     route's value and are not tested here.
+# ---------------------------------------------------------------------------------------------------
+complex_path_ratio_ok(q, ref) = abs(q - ref) <= max(1e-8 * abs(ref), 1e-30)
+is_superradiant(a, m, omega) = omega <= m * a / (2 * kerr_rplus(a))
+
+@testset "complex path: 896-bit grid, real omega >= 1" begin
+    for ref in GRID_REFERENCES
+        g = GRID_BY_ID[ref.id]
+        (isreal(g.omega) && real(g.omega) >= 1) || continue
+        w = real(g.omega)
+        bc = ref.branch == "IN" ? IN : UP
+        @testset "grid$(ref.id) $(ref.branch)" begin
+            R = Teukolsky_radial(g.s, g.l, g.m, g.a, w, bc)
+            q_ref = ref.reflection / ref.incidence
+            res = CPA.complex_path_amplitudes(g.s, g.m, g.a, w, real(R.mode.lambda), Symbol(ref.branch))
+            @test abs(res.ratio - q_ref) <= 1e-9 * abs(q_ref)
+            @test complex_path_ratio_ok(R.reflection_amplitude / R.incidence_amplitude, q_ref)
+        end
+    end
+end
+
+@testset "complex path: BigFloat sweep (s = -2..2, a to 0.9999, omega to 20)" begin
+    for ref in level_subset(COMPLEX_PATH_REFERENCES, 7)
+        is_superradiant(ref.a, ref.m, ref.omega) && continue
+        bc = ref.branch === :IN ? IN : UP
+        @testset "s=$(ref.s) l=$(ref.l) m=$(ref.m) a=$(ref.a) omega=$(ref.omega) $(ref.branch)" begin
+            R = Teukolsky_radial(ref.s, ref.l, ref.m, ref.a, ref.omega, bc)
+            q_ref = ref.reflection / ref.incidence
+            q = R.reflection_amplitude / R.incidence_amplitude
+            @test isapprox(R.incidence_amplitude / R.transmission_amplitude, ref.incidence; rtol=1e-9)
+            if abs(q_ref) < D.Matching.COMPLEX_PATH_RATIO
+                # The regime the route hands to the complex path: the method itself and the route's result.
+                res = CPA.complex_path_amplitudes(ref.s, ref.m, ref.a, ref.omega, real(R.mode.lambda), ref.branch)
+                @test complex_path_ratio_ok(res.ratio, q_ref)
+                @test complex_path_ratio_ok(q, q_ref)
+            else
+                # Kept from the matching (reflection not small): its own accuracy class.
+                @test abs(q - q_ref) <= 1e-6 * abs(q_ref)
+            end
+        end
+    end
+end
+
+@testset "complex path: exact extremal against the a = 1 - 1e-10 limit" begin
+    for ref in COMPLEX_PATH_EXTREMAL_LIMITS
+        lam = real(Teukolsky_radial(ref.s, ref.l, ref.m, 1.0, ref.omega, IN).mode.lambda)
+        res = CPA.complex_path_amplitudes(ref.s, ref.m, 1.0, ref.omega, lam, ref.branch)
+        @test abs(res.ratio - ref.ratio) <= 1e-4 * abs(ref.ratio)   # O(kappa) = 1.4e-5 from the limit
+    end
+    @test_throws DomainError CPA.complex_path_amplitudes(-2, 2, 1.0, 1.0, 0.0, :IN)   # omega = m / 2
+end
+
+@testset "complex path: Y at large r" begin
+    for ref in COMPLEX_PATH_Y_REFERENCES
+        y = Y_radial(-2, ref.l, ref.m, ref.a, ref.omega, IN)
+        Y, dY = y.Y_solution(ref.r)
+        @test abs(Y - ref.Y) <= 1e-10 * abs(ref.Y)
+        @test abs(dY - ref.dY) <= 1e-10 * abs(ref.dY)
+    end
+end
+
+@testset "complex path: threads" begin
+    cases = [(-2, 2, 0.9, 3.0, :IN), (2, 3, 0.5, 4.0, :UP), (0, -2, 0.99, 6.0, :IN), (-1, 4, 0.9999, 2.0, :UP), (1, 1, 0.0, 10.0, :IN)]
+    lambdas = [real(Teukolsky_radial(s, max(2, abs(s), abs(m)), m, a, w, IN).mode.lambda) for (s, m, a, w, _) in cases]
+    serial = [CPA.complex_path_amplitudes(c[1], c[2], c[3], c[4], lambdas[i], c[5]).ratio for (i, c) in enumerate(cases)]
+    parallel = Vector{ComplexF64}(undef, length(cases))
+    Threads.@threads for i in eachindex(cases)
+        c = cases[i]
+        parallel[i] = CPA.complex_path_amplitudes(c[1], c[2], c[3], c[4], lambdas[i], c[5]).ratio
+    end
+    @test parallel == serial
 end
 
 end # homogeneous

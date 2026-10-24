@@ -1,6 +1,8 @@
 module Matching
 
 using ..CoefficientTables: CoefficientSet, gsn_coefficients
+using ..ComplexPathAmplitudes: complex_path_amplitudes
+import ...ConversionFactors
 using ..Iteration: ScaledMarchStepLimit
 using ..Iteration:
     Basis,
@@ -1376,7 +1378,7 @@ function radial_route(
         return ConjugatedRoute(positive_route, params)
     end
     coefficients = gsn_coefficients(params; controls=ctrl)
-    return match_route(coefficients, branch; controls=ctrl)
+    return _complex_path_reflection(match_route(coefficients, branch; controls=ctrl))
 end
 
 function radial_route(
@@ -1393,8 +1395,49 @@ function radial_route(
     end
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     coeffs = coefficients === nothing ? gsn_coefficients(params; controls=ctrl) : coefficients
-    return match_route(coeffs, branch; controls=ctrl)
+    return _complex_path_reflection(match_route(coeffs, branch; controls=ctrl))
 end
+
+# High frequency: the reflected amplitude of a real-frequency IN or UP route is exponentially small next to the
+# incident one, and the matching leaves it wrong by about eps |incidence| (|B_ref / B_inc| = 2e-17 at (s, l, m, a,
+# omega) = (-2, 2, 2, 0.9, 3) came out 8e3 times too large). Where the route's own Teukolsky ratio is below
+# COMPLEX_PATH_RATIO, the reflection is replaced by the one of ComplexPathAmplitudes (the Teukolsky equation along
+# a path in the complex r plane), scaled by the route's incidence; the incidence and the bases are kept, so X(r) at
+# large r (incidence * infinity_in + reflection * infinity_out) carries the corrected reflection as well. On 474
+# BigFloat(256) references (s = -2..2, a = 0..0.9999, omega = 1.5..20) the complex path was the more accurate of the
+# two in every case below this ratio. Superradiant modes (k <= 0) and a failed path keep the route's value.
+const COMPLEX_PATH_RATIO = 1e-6
+
+function _complex_path_reflection(route::Route)
+    p = route.params
+    route.branch in (:IN, :UP) || return route
+    (isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return route
+    s, m, a, w = p.s, p.m, Float64(p.a), Float64(real(p.omega))
+    lambda = real(p.lambda)
+    w - m * a / (2 * (1 + sqrt(1 - a^2))) > 0 || return route
+    incidence_factor, reflection_factor = route.branch === :IN ?
+        (ConversionFactors.Binc(s, m, a, w, lambda), ConversionFactors.Bref(s, m, a, w, lambda)) :
+        (ConversionFactors.Cinc(s, m, a, w, lambda), ConversionFactors.Cref(s, m, a, w, lambda))
+    incidence = incidence_factor * route.incidence
+    reflection = reflection_factor * route.reflection
+    (isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence)) || return route
+    result = try
+        complex_path_amplitudes(s, m, a, w, lambda, route.branch; reflection_only=true)
+    catch err
+        err isa Union{DomainError, ArgumentError, ErrorException} || rethrow()
+        return route
+    end
+    isfinite(result.reflection) || return route
+    # The complex path returns the reflection at unit Teukolsky transmission; the route's transmission is
+    # solution_scale times the transmission factor (as in RadialFunctions._route_y_amplitudes).
+    transmission = route.solution_scale * (route.branch === :IN ?
+        ConversionFactors.Btrans(s, m, a, w, lambda) : ConversionFactors.Ctrans(s, m, a, w, lambda))
+    fields = Any[getfield(route, f) for f in fieldnames(typeof(route))]
+    fields[findfirst(==(:reflection), fieldnames(typeof(route)))] = ComplexF64(result.reflection * transmission / reflection_factor)
+    return typeof(route)(fields...)
+end
+
+_complex_path_reflection(route) = route
 
 function _bridge_covers(basis::Basis, x)
     if basis.endpoint_valid
