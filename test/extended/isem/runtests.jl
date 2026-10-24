@@ -10,6 +10,32 @@ include(data_file("positive_axis_references.jl"))
 const D = GSN.ISEM
 const ManoSuzukiTakasugi = D.ManoSuzukiTakasugiInfinity
 
+# A root of eta next to the real axis is an apparent singular point of the GSN equation (indices 0 and 2); the
+# march crosses it with the local series there. At (a, omega) = (0.99, 0.75885) the root sits 5.4e-7 off the axis
+# inside the infinity march and Y and R were off by 1e-5 for r >= 2.5 (2e-8 at 0.758825). References: a
+# 256-bit Frobenius and Taylor solution of the Teukolsky equation (independent of the package), Y at the
+# transmission amplitude of the Y_radial, R at unit transmission.
+const APPARENT_POINT_REFERENCES = (
+    (0.758825, -0.31376787919279 - 1.5099278761015753im, (
+        (1.6, -0.0001919294512230703 - 0.03944212951983358im, 0.06196125861434297 + 0.021157814861745953im),
+        (2.5, -0.03140105137520152 - 0.21795182034141078im, -0.22413060796175868 + 0.8638083208020874im),
+        (4.0, -0.0936241900616728 - 0.4528311890443997im, -3.78222256230439 - 2.9513070805832im),
+        (10.0, -0.2587515454453383 - 1.2954389248743146im, -74.96427901256192 - 41.44769219833001im),
+    )),
+    (0.75885, -0.31353258957389696 - 1.5104084098732011im, (
+        (1.6, -0.00016785360329777375 - 0.0394445051251324im, 0.06194167414236735 + 0.02117128350690939im),
+        (2.5, -0.03127712779083412 - 0.21795096278211148im, -0.22435973040728777 + 0.8634188314161765im),
+        (4.0, -0.09334583340316902 - 0.4528365899768461im, -3.779344698099683 - 2.9519979793236772im),
+        (10.0, -0.2579364466822946 - 1.2954383242132024im, -74.90514587608912 - 41.48465882312736im),
+    )),
+    (0.758875, -0.31329705232533384 - 1.5108890696145332im, (
+        (1.6, -0.00014377276107632104 - 0.039446865116803856im, 0.06192208730000463 + 0.021184742444062276im),
+        (2.5, -0.03115319766932767 - 0.21795003063619703im, -0.2245886342995928 + 0.8630293485679645im),
+        (4.0, -0.09306746909565793 - 0.4528418213742149im, -3.776467403117647 - 2.9526871594297353im),
+        (10.0, -0.25712134625812316 - 1.2954372166097412im, -74.84600595956529 - 41.52156815244435im),
+    )),
+)
+
 dominant(x, y) = max(abs(x), abs(y))
 point(id) = only(p for p in STRONG_DAMPING_POINTS if p.id == id)
 grid_point(id) = only(g for g in GRID_POINTS if g.id == id)
@@ -500,6 +526,18 @@ end
             (2.135889894354067, -6.159933395114302e-5 - 0.0002231571935558409im),
             (2.435889894354067, 0.00022078735920180818 - 0.00015241009181221746im))
         @test Y.Y_solution(r)[1] ≈ value rtol=1e-8
+    end
+end
+
+@testset "apparent point next to the real axis" begin
+    for (omega, transmission, values) in APPARENT_POINT_REFERENCES
+        Y = Y_radial(-2, 2, 2, 0.99, omega, IN)
+        R = Teukolsky_radial(-2, 2, 2, 0.99, omega, IN)
+        @test Y.transmission_amplitude ≈ transmission rtol=1e-10
+        for (r, Yref, Rref) in values
+            @test Y.Y_solution(r)[1] ≈ Yref rtol=1e-9
+            @test R.Teukolsky_solution(r)[1] ≈ Rref rtol=1e-9
+        end
     end
 end
 

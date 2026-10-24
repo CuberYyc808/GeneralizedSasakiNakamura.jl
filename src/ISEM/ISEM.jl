@@ -23,6 +23,8 @@ include("CoefficientTables.jl")
 using .CoefficientTables
 include("GeneratedBackend.jl")
 using .GeneratedBackend
+include("ApparentSingularities.jl")
+using .ApparentSingularities
 include("OrdinaryPointExpansion.jl")
 using .OrdinaryPointExpansion
 include("LargeFrequencyExpansion.jl")

@@ -1,6 +1,8 @@
 module Iteration
 
 using ..CoefficientTables: CoefficientSet
+using ..OrdinaryPointExpansion: direct_ab_value
+using ..ApparentSingularities: apparent_points, apparent_basis, apparent_jump, next_apparent, APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
 using ..LargeFrequencyExpansion: LargeFrequencyExpansionPlan, large_frequency_expansion_plan, large_frequency_expansion_ab!
 using ..NearExtreme: near_extreme_selected
@@ -467,6 +469,26 @@ function _local_ab!(work, coefficients, x, order)
         work.avec, work.bvec, work.ordinary_dd, x, order)
     return ordinary_ab_series!(
         work.avec, work.bvec, work.pq, coefficients, x, order)
+end
+
+# Apparent-point crossing (ApparentSingularities) for a march at current_x towards target_x with the given
+# (value, derivative) states: `cap` bounds the next step so that it stops short of the next point; past that,
+# `jumps` holds the states carried across it by the local series and `x_b` the point they reach.
+function _apparent_crossing!(apparent, coefficients, current_x, target_x, direction, states)
+    none = (cap = Inf, x_b = current_x, jumps = nothing)
+    isempty(apparent) && return none
+    point = next_apparent(apparent, current_x, target_x, direction)
+    point === nothing && return none
+    reach = APPARENT_STEP_FRACTION * point.radius
+    ahead = direction * (real(point.x1) - current_x)
+    ahead > reach * (1 + 1e-6) && return (cap = ahead - reach, x_b = current_x, jumps = nothing)
+    filter!(q -> q !== point, apparent)
+    x_b = direction * (target_x - real(point.x1)) <= reach ? target_x : real(point.x1) + direction * reach
+    basis = apparent_basis(x -> direct_ab_value(coefficients.params, x), point)
+    basis === nothing && return none
+    jumps = map(state -> apparent_jump(basis, point, current_x, state[1], state[2], x_b), states)
+    any(isnothing, jumps) && return none
+    return (cap = Inf, x_b = x_b, jumps = jumps)
 end
 
 _param_a(params) = hasproperty(params, :a) ? getproperty(params, :a) : sin(getproperty(params, :nu))
@@ -1446,9 +1468,20 @@ function _build_basis_series(
         endpoint_reason,
     )
 
+    apparent = apparent_points(coefficients.params)
     while direction * (match_x - current_x) > 100eps(Float64)
         step_count += 1
         step_budget !== nothing && step_count > step_budget && return nothing
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, match_x, direction,
+            ((current_value, current_derivative),))
+        if crossing.jumps !== nothing
+            jump = crossing.jumps[1]
+            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -1477,7 +1510,7 @@ function _build_basis_series(
         radius_cap = min(0.20, singular_distance)
         local_radius = min(radius_cap, _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
         min_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, max(min_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        h_abs = min(remaining, crossing.cap, max(min_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _single_step(
             finite_coeffs, direction, h_abs, min_step, tol, effective_order)
         certified_steps && !(best.score <= tol) && return nothing
@@ -1637,8 +1670,19 @@ function _hybrid_state(
         end
     end
 
+    apparent = apparent_points(coefficients.params)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
+            ((current_value, current_derivative),))
+        if crossing.jumps !== nothing
+            jump = crossing.jumps[1]
+            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -1667,7 +1711,7 @@ function _hybrid_state(
         local_radius = min(radius_cap,
             _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining,
+        h_abs = min(remaining, crossing.cap,
             max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _single_step(
             finite_coeffs, direction, h_abs, min_abs_step, tol, effective_order)
@@ -1891,8 +1935,21 @@ function _hybrid_pair(
         end
     end
 
+    apparent = apparent_points(coefficients.params)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
+            ((value1, deriv1), (value2, deriv2)))
+        if crossing.jumps !== nothing
+            jump1, jump2 = crossing.jumps
+            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
+            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x = crossing.x_b
+            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -1922,7 +1979,7 @@ function _hybrid_pair(
         r2 = _endpoint_effective_radius!(work.radius_buffer2, coeffs2, radius_cap)
         local_radius = min(radius_cap, r1, r2)
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining,
+        h_abs = min(remaining, crossing.cap,
             max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _pair_step(coeffs1, coeffs2, direction, h_abs,
             min_abs_step, tol, eff1, eff2)
@@ -2037,8 +2094,19 @@ function iterate_from_state(
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
 
+    apparent = apparent_points(coefficients.params)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
+            ((current_value, current_derivative),))
+        if crossing.jumps !== nothing
+            jump = crossing.jumps[1]
+            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -2066,7 +2134,7 @@ function iterate_from_state(
         radius_cap = min(0.20, singular_distance)
         local_radius = min(radius_cap, _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _single_step(finite_coeffs, direction, h_abs,
             min_abs_step, tol, effective_order)
         next_x = current_x + best.h
@@ -2181,12 +2249,25 @@ function iterate_logscaled_from_state(
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
 
+    apparent = apparent_points(coefficients.params)
     while direction * (target_x - current_x) >
             100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
         step_count <= _MAX_MARCH_STEPS || error(
             "ISEM GSN log-scaled propagation exceeded $(_MAX_MARCH_STEPS) steps at x=$(current_x) " *
             "(target x=$(target_x))")
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
+            ((state.X, state.dXdx),))
+        if crossing.jumps !== nothing
+            jump = crossing.jumps[1]
+            push!(patches, LogScaledPatch(jump.center, current_x, jump.coeffs, state.log_scale),
+                LogScaledPatch(jump.center, crossing.x_b, jump.coeffs, state.log_scale))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x = crossing.x_b
+            state = logscaled_state(jump.X, jump.dXdx, state.log_scale)
+            continue
+        end
         a_terms, b_terms = _local_ab!(work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
         b_coeffs = @view work.bvec[1:b_terms]
@@ -2213,7 +2294,7 @@ function iterate_logscaled_from_state(
         local_radius = min(radius_cap, _endpoint_effective_radius!(
             work.radius_buffer, finite_coeffs, radius_cap))
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, max(min_abs_step,
+        h_abs = min(remaining, crossing.cap, max(min_abs_step,
             min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _single_step(
             finite_coeffs, direction, h_abs, min_abs_step, tol, effective_order)
@@ -2438,8 +2519,21 @@ function iterate_pair_from_state(
     truncations1 = Truncation[]
     truncations2 = Truncation[]
 
+    apparent = apparent_points(coefficients.params)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
+            ((value1, deriv1), (value2, deriv2)))
+        if crossing.jumps !== nothing
+            jump1, jump2 = crossing.jumps
+            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
+            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x = crossing.x_b
+            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -2472,7 +2566,7 @@ function iterate_pair_from_state(
         r2 = _endpoint_effective_radius!(radius2, coeffs2, radius_cap)
         local_radius = min(radius_cap, r1, r2)
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _pair_step(coeffs1, coeffs2, direction, h_abs,
             min_abs_step, tol, eff1, eff2)
         next_x = current_x + best.h
@@ -2598,8 +2692,21 @@ function _build_pair_from_horizon_seed(
     _record_truncation!(truncations2, :horizon, kind2,
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
 
+    apparent = apparent_points(coefficients.params)
     while direction * (match_x - current_x) > 100eps(Float64)
         step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, current_x, match_x, direction,
+            ((value1, deriv1), (value2, deriv2)))
+        if crossing.jumps !== nothing
+            jump1, jump2 = crossing.jumps
+            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
+            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - current_x))
+            min_step = min(min_step, abs(crossing.x_b - current_x))
+            current_x = crossing.x_b
+            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
+            continue
+        end
         a_terms, b_terms = _local_ab!(
             work, coefficients, current_x, order)
         a_coeffs = @view work.avec[1:a_terms]
@@ -2632,7 +2739,7 @@ function _build_pair_from_horizon_seed(
         r2 = _endpoint_effective_radius!(radius2, coeffs2, radius_cap)
         local_radius = min(radius_cap, r1, r2)
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
         best = _pair_step(coeffs1, coeffs2, direction, h_abs,
             min_abs_step, tol, eff1, eff2)
         next_x = current_x + best.h
@@ -3785,6 +3892,7 @@ function logscaled_basis_state(basis::LogScaledBasis, x)
         patch.coeffs, Float64(x) - patch.center_x)
     return logscaled_state(value, derivative, patch.log_scale)
 end
+
 
 # Number of patches in a basis.
 basis_patch_count(basis::Basis) = length(basis.patches)

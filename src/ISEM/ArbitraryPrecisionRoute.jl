@@ -23,6 +23,8 @@ using ..Parameters: DEFAULT_TOLERANCE, DEFAULT_MATCH_X
 using ..CoefficientTables: CoefficientSet, gsn_coefficients
 using ..OrdinaryPointExpansion: ab_term_counts, ordinary_ab_series!, ordinary_point_coeffs!, poly_pair
 using ..LocalSolutionAtZero: zero_local_solution, is_horizon_threshold
+using ..ApparentSingularities: apparent_points, apparent_point_in, apparent_basis, apparent_jump, next_apparent,
+    APPARENT_STEP_FRACTION
 using ..LocalSolutionAtInfinity: infinity_local_solution
 using ..Matching: ConjugatedRoute
 using ..RadialFunctions: TeukolskySolution, TeukolskyRadialEvaluator, TeukolskyTupleEvaluator,
@@ -847,8 +849,35 @@ function _continue(work::_Workspace, coefficients::CoefficientSet, x0, X, dX, ta
     patches = SeriesPatch{R,C}[]
     cancellation = 1.0
     x = x0
+    direction = target >= x0 ? 1 : -1
+    apparent = apparent_points(coefficients.params)
     for _ in 1:MAX_PATCHES
-        patch, x, X, dX, step_cancellation = _taylor_step(work, coefficients, x, X, dX, target, order, tolerance)
+        # An apparent point next to the path is crossed with its local series (ApparentSingularities).
+        stop = target
+        point = isempty(apparent) ? nothing : next_apparent(apparent, x, target, direction)
+        if point !== nothing
+            reach = R(APPARENT_STEP_FRACTION * point.radius)
+            local_point = apparent_point_in(R, point, coefficients.params)
+            xr = real(local_point.x1)
+            if direction * (xr - x) <= reach * (1 + 1e-6)
+                filter!(q -> q !== point, apparent)
+                x_b = direction * (target - xr) <= reach ? target : xr + direction * reach
+                basis = apparent_basis(local_point) do z
+                    ordinary_ab_series!(work.a, work.b, work.pq, coefficients, z, 2)
+                    return work.a[1], work.b[1]
+                end
+                jump = basis === nothing ? nothing : apparent_jump(basis, local_point, x, X, dX, x_b)
+                if jump !== nothing
+                    push!(patches, SeriesPatch{R,C}(jump.center, x, jump.coeffs), SeriesPatch{R,C}(jump.center, x_b, jump.coeffs))
+                    x, X, dX = x_b, jump.X, jump.dXdx
+                    x == target && return patches, X, dX, cancellation
+                    continue
+                end
+            else
+                stop = xr - direction * reach
+            end
+        end
+        patch, x, X, dX, step_cancellation = _taylor_step(work, coefficients, x, X, dX, stop, order, tolerance)
         cancellation = max(cancellation, step_cancellation)
         push!(patches, patch)
         x == target && return patches, X, dX, cancellation

@@ -17,7 +17,7 @@ export ordinary_ab_series!, ordinary_ab_series
 export ordinary_scaled_y_ab_series!
 export shifted_ab!, shifted_infinity_ab!
 export ordinary_point_coeffs!
-export DIRECT_AB_KEY, direct_ab_series!
+export DIRECT_AB_KEY, direct_ab_series!, direct_ab_value
 export endpoint_power_lookup
 export poly_value, poly_pair, poly_triple
 export series_issue, denom_ok
@@ -572,6 +572,30 @@ const HORIZON_SHIFT_MAX_X = 0.1
 const DIRECT_AB_KEY = :GSN_ISEM_DIRECT_AB
 const DIRECT_AB_MAX_X = 0.7
 
+# r as a truncated series with its powers r^2 ... r^n computed once: the closed-form potentials take
+# powers of r dozens of times (sU of s = -2, order 41: 135 us per call with the powers taken each time,
+# 62 us cached).
+struct _PowerCachedSeries{T}
+    powers::Vector{T}
+end
+
+function _PowerCachedSeries(r, n::Integer)
+    powers = [r]
+    for _ in 2:n
+        push!(powers, powers[end] * r)
+    end
+    return _PowerCachedSeries(powers)
+end
+
+Base.literal_pow(::typeof(^), c::_PowerCachedSeries, ::Val{k}) where {k} =
+    k <= length(c.powers) ? c.powers[k] : c.powers[1]^k
+Base.:-(c::_PowerCachedSeries) = -c.powers[1]
+for op in (:+, :-, :*, :/)
+    @eval Base.$op(c::_PowerCachedSeries, y) = $op(c.powers[1], y)
+    @eval Base.$op(y, c::_PowerCachedSeries) = $op(y, c.powers[1])
+    @eval Base.$op(c::_PowerCachedSeries, d::_PowerCachedSeries) = $op(c.powers[1], d.powers[1])
+end
+
 # Taylor series of A and B about a real x0 from the closed-form GSN potentials:
 # with g = dx/dr*, X'' + A X' + B X = 0 in x has A = (dg/dx - F) / g and
 # B = -U / g^2, for X_{r*r*} - F X_{r*} - U X = 0. Its B is good to about 2e-13
@@ -585,8 +609,9 @@ function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
     r = (rplus - rminus * x) / (1 - x)
     delta = r^2 - 2r + a^2
     g = (rplus - rminus) * delta / ((r - rminus)^2 * (r^2 + a^2))
-    A = (derivative(g) - sF(s, m, a, omega, lambda, r)) / g
-    B = -sU(s, m, a, omega, lambda, r) / g^2
+    cached = _PowerCachedSeries(r, 7)
+    A = (derivative(g) - sF(s, m, a, omega, lambda, cached)) / g
+    B = -sU(s, m, a, omega, lambda, cached) / g^2
     a_terms, b_terms = ab_term_counts(:O, order)
     for k in 1:a_terms
         a_out[k] = getcoeff(A, k - 1)
@@ -595,6 +620,20 @@ function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
         b_out[k] = getcoeff(B, k - 1)
     end
     return a_terms, b_terms
+end
+
+# A and B at a (complex) point x from the closed-form potentials, as in direct_ab_series!.
+function direct_ab_value(params, x)
+    s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
+    kappa = sqrt(1 - a^2)
+    rplus, rminus = 1 + kappa, 1 - kappa
+    r = (rplus - rminus * x) / (1 - x)
+    drdx = (rplus - rminus) / (1 - x)^2
+    delta = r^2 - 2r + a^2
+    den = (r - rminus)^2 * (r^2 + a^2)
+    g = (rplus - rminus) * delta / den
+    dgdr = (rplus - rminus) * ((2r - 2) - delta * (2 / (r - rminus) + 2r / (r^2 + a^2))) / den
+    return (dgdr * drdx - sF(s, m, a, omega, lambda, r)) / g, -sU(s, m, a, omega, lambda, r) / g^2
 end
 
 # Taylor series of A and B about the ordinary point x0: by shifting the horizon
