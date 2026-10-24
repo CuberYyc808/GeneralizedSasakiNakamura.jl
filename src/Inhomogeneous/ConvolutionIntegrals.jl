@@ -4004,7 +4004,33 @@ struct AdaptiveEccentricLevinLeaf
     bin::Int
     amp::ComplexF64
     active::Bool
+    tail::Float64
 end
+
+AdaptiveEccentricLevinLeaf(level, bin, amp, active) = AdaptiveEccentricLevinLeaf(level, bin, amp, active, Inf)
+
+# Resolution of a segment's samples on its Chebyshev-Lobatto nodes x_k = cos(pi k / (n - 1)): the last two
+# Chebyshev coefficients over the largest one. Small when the n nodes resolve the function on the segment.
+function _cheb_tail(v::AbstractVector)
+    n = length(v)
+    n < 4 && return Inf
+    N = n - 1
+    cmax = 0.0
+    tail = 0.0
+    for j in 0:N
+        c = zero(ComplexF64)
+        for k in 0:N
+            w = (k == 0 || k == N) ? 0.5 : 1.0
+            c += w * v[k+1] * cospi(j * k / N)
+        end
+        c = abs(c) * ((j == 0 || j == N) ? 1.0 : 2.0) / N
+        cmax = max(cmax, c)
+        j >= N - 1 && (tail += c)
+    end
+    return cmax > 0 ? tail / cmax : 0.0
+end
+
+_cheb_tail(vs::Vararg{AbstractVector}) = maximum(_cheb_tail(v) for v in vs)
 
 @inline function _adaptive_levin_depth_alpha(tol0::Float64, min_depth::Int, max_depth::Int, tol_max::Float64)
     if !(tol0 > 0.0) || !(tol_max > tol0) || max_depth <= min_depth
@@ -4181,8 +4207,8 @@ function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::In
     bundle = _cached_adaptive_eccentric_segment_bundle!(cache, KG, local_n, level, bin)
     KG_samp = bundle["sample"]
     if two_wave !== nothing
-        amp = _two_wave_segment_amplitude!(cache, bundle, two_wave, Ysol, SH, s, a, ω, m, n, local_n, level, bin)
-        amp === nothing || return amp
+        res = _two_wave_segment_amplitude!(cache, bundle, two_wave, Ysol, SH, s, a, ω, m, n, local_n, level, bin)
+        res === nothing || return res
     end
     Ysamp = if s == 2
         threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_samp) : y_sample_p2_isem(Ysol, KG_samp)
@@ -4195,10 +4221,11 @@ function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::In
         (_levin_1d_local_phase_factor_from_values(factored.phase_p; local_order = local_n),
             _levin_1d_local_phase_factor_from_values(factored.phase_m; local_order = local_n))
     end
-    return ComplexF64((
+    amp = ComplexF64((
         _levin_1d_integral_local_phase_factored(jac .* factored.smooth_p, factor_p) +
         _levin_1d_integral_local_phase_factored(jac .* factored.smooth_m, factor_m)
     ) * factored.prefactor)
+    return amp, _cheb_tail(factored.smooth_p, factored.smooth_m, factored.phase_p, factored.phase_m)
 end
 
 function _two_wave_segment_amplitude!(cache, bundle, w::YTwoWave, Ysol, SH, s::Int, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int)
@@ -4218,12 +4245,15 @@ function _two_wave_segment_amplitude!(cache, bundle, w::YTwoWave, Ysol, SH, s::I
         (_levin_1d_local_phase_factor_from_values(inn.phase_p .- shift; local_order = local_n),
             _levin_1d_local_phase_factor_from_values(inn.phase_m .- shift; local_order = local_n))
     end
-    return ComplexF64((
+    in_p = inn.smooth_p .* rotate
+    in_m = inn.smooth_m .* rotate
+    amp = ComplexF64((
         _levin_1d_integral_local_phase_factored(jac .* out.smooth_p, factor_p) +
         _levin_1d_integral_local_phase_factored(jac .* out.smooth_m, factor_m) +
-        _levin_1d_integral_local_phase_factored(jac .* inn.smooth_p .* rotate, in_factor_p) +
-        _levin_1d_integral_local_phase_factored(jac .* inn.smooth_m .* rotate, in_factor_m)
+        _levin_1d_integral_local_phase_factored(jac .* in_p, in_factor_p) +
+        _levin_1d_integral_local_phase_factored(jac .* in_m, in_factor_m)
     ) * out.prefactor)
+    return amp, _cheb_tail(out.smooth_p, out.smooth_m, in_p, in_m, out.phase_p, out.phase_m)
 end
 
 function _adaptive_eccentric_levin_result(amp::ComplexF64, KG_sample::Dict, Ysol, SH, s::Int, a, ω, m::Int)
@@ -4297,12 +4327,12 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω)
 
     segment_evaluations = 0
-    root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling, two_wave = two_wave)
+    root, root_tail = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling, two_wave = two_wave)
     segment_evaluations += 1
     # A low-flux verdict needs two consecutive refinement levels below the floor, the later at least
     # min_depth: the single-segment root (and the first split) can miss a narrow periapsis burst of a
     # high-eccentricity orbit and come out orders of magnitude too small.
-    leaves = AdaptiveEccentricLevinLeaf[AdaptiveEccentricLevinLeaf(0, 0, root, true)]
+    leaves = AdaptiveEccentricLevinLeaf[AdaptiveEccentricLevinLeaf(0, 0, root, true, root_tail)]
     previous_total = root
     split_count = 0
     passed_once = false
@@ -4318,16 +4348,16 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
             child_level = leaf.level + 1
             left_bin = 2 * leaf.bin
             right_bin = left_bin + 1
-            left = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, left_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
-            right = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, right_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
+            left, left_tail = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, left_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
+            right, right_tail = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, right_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
             segment_evaluations += 2
             child_amp = left + right
             child_energy = abs(_adaptive_eccentric_levin_result(child_amp, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
             leaf_energy = abs(_adaptive_eccentric_levin_result(leaf.amp, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
             low_flux = mode_abs_floor > 0.0 && child_level >= min_depth &&
                 child_energy < mode_abs_floor && leaf_energy < mode_abs_floor
-            push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, left_bin, left, !low_flux))
-            push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, right_bin, right, !low_flux))
+            push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, left_bin, left, !low_flux, left_tail))
+            push!(new_leaves, AdaptiveEccentricLevinLeaf(child_level, right_bin, right, !low_flux, right_tail))
             changed = true
             split_count += 1
         end
@@ -4352,9 +4382,13 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
             current_tol = _adaptive_levin_depth_tol(current_depth, adaptive_tol0, min_depth, max_depth, depth_tol_max)
             if current_depth >= min_depth && global_relerr < current_tol &&
                     (energy_abs_tol <= 0.0 || abs(current_energy - previous_energy) <= energy_abs_tol)
-                # Two consecutive levels must pass: under-resolved levels can agree by chance. At (0.9, 8, 0.95, 1)
-                # (l, m, n) = (12, -11, 208) gave 2.1e-13 at levels 1 and 2 against a true 1.3e-34 (1.5e-8 of E_inf).
-                passed_once && (stop_reason = "global_converged"; break)
+                # Under-resolved levels can agree by chance: at (0.9, 8, 0.95, 1) (l, m, n) = (12, -11, 208) levels 1
+                # and 2 gave 2.1e-13 against a true 1.3e-34 (1.5e-8 of E_inf). A passing level is accepted at once when
+                # every active segment resolves its samples (Chebyshev tail <= tol), else a second passing level is
+                # required. Over the 27,678 Levin modes of (0.9, 8, 0.95, 1) up to n = 400 the single level saved 42%
+                # of the segment evaluations (442 s -> 271-319 s for the sum) and moved E_inf by 3e-11 relative.
+                worst_tail = maximum((leaf.tail for leaf in leaves if leaf.active); init = 0.0)
+                (passed_once || worst_tail <= tol) && (stop_reason = "global_converged"; break)
                 passed_once = true
             else
                 passed_once = false
