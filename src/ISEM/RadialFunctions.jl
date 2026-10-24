@@ -12,7 +12,9 @@ using ..Matching:
     route_state
 using ..Matching: route_plan_of, route_truncations
 using ..Iteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
-using ..Matching: _mano_suzuki_takasugi_evaluation_region
+using ..Matching: _mano_suzuki_takasugi_evaluation_region, match_route
+using ..CoefficientTables: gsn_coefficients
+using ..OrdinaryPointExpansion: DIRECT_AB_KEY
 
 export compact_kappa, compact_r_plus, compact_r_minus
 export y_from_x, x_from_y
@@ -20,7 +22,7 @@ export r_from_x, x_from_r
 export dx_dr, dr_dx, dx_drstar
 export gsn_solution_rstar, gsn_radial_function
 export route_teukolsky_solution, teukolsky_radial_function
-export y_branch_supported, route_y_solution, y_radial_function
+export y_branch_supported, route_y_solution, y_radial_function, near_horizon_y
 
 # Teukolsky horizon solutions R_in -> Delta^{-s} e^{-i k r*} and R_out -> e^{+i k r*}
 # (leading coefficient one, r* as in Coordinates) at real r near r_+, from the
@@ -1199,7 +1201,7 @@ function route_y_solution(route::Route; amplitudes=nothing)
         p.lambda,
         r,
     )
-    return getfield(tt, :GSN_to_Y_solution_from_matrix)(
+    ysoln = getfield(tt, :GSN_to_Y_solution_from_matrix)(
         r -> rstar_from_r(p.a, r),
         teukolsky_from_gsn_matrix,
         gsn_solution_rstar(route),
@@ -1210,17 +1212,118 @@ function route_y_solution(route::Route; amplitudes=nothing)
         p.lambda,
         amps.trans,
     )
+    return first(near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans))
 end
+
+function _route_y_solution_checked(route::Route, amps)
+    p = route.params
+    iszero(p.omega) && error("ISEM Y transformation requires nonzero omega.")
+    tt = _teukolsky_transformation_module()
+    ysoln = getfield(tt, :GSN_to_Y_solution_from_matrix)(
+        r -> rstar_from_r(p.a, r),
+        r -> Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(
+            p.s, p.m, p.a, p.omega, p.lambda, r),
+        gsn_solution_rstar(route),
+        p.s, p.m, p.a, p.omega, p.lambda, amps.trans)
+    return near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans)
+end
+
+# Y of s = -2 IN near the horizon from the Teukolsky horizon series,
+# Y = trans e^{-i phi} R_in / r^2 with d phi/dr = K / Delta, R_in the unit horizon
+# series and `trans` the Teukolsky transmission amplitude of the solution, for
+# r - r_+ < kappa (half the series' radius 2 kappa). The conversion Y = C11 X +
+# C12 dX/dr* cancels there: to O(Delta^2) at the horizon (3e-7 at r - r_+ = 1e-3
+# for (a, omega) = (0.8, 0.9) with X good to 1e-13), and by 1e4 to 1e6 for
+# l = 3, omega = 2.3 - 3 at a >= 0.8, where Y is small next to C11 X and C12 X'
+# (4e-7 at r_+ + 0.05 for (0.9, 2.35)).
+#
+# Self-check: the converted Y must agree with the series at r_+ + kappa / 2 and
+# r_+ + kappa; returns the wrapped solution and the mismatch. A mismatch means
+# either a wrong near-horizon solution or a conversion that loses that much just
+# beyond r_+ + kappa (see y_radial_function).
+const NEAR_HORIZON_CHECK_TOL = 1e-7
+const NEAR_HORIZON_REFINE_TOL = 1e-9
+
+function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
+    (s == -2 && omega isa Real && !iszero(omega) && trans isa Number && isfinite(trans) &&
+        !iszero(trans)) || return ysoln, 0.0
+    kappa = sqrt(1 - Float64(a)^2)
+    kappa > 1e-3 || return ysoln, 0.0
+    rplus = 1 + kappa
+    rminus = 1 - kappa
+    function series_y(r)
+        Rin, dRin, _, _, tail = teukolsky_horizon_pair(s, m, a, omega, lambda, r)
+        phase = omega * rstar_from_r(a, r) -
+            a * m / (rplus - rminus) * log((r - rplus) / (r - rminus))
+        delta = r^2 - 2r + a^2
+        K = (r^2 + a^2) * omega - a * m
+        e = trans * exp(-im * phase)
+        Y = e * Rin / r^2
+        dY = e * (dRin / r^2 - 2Rin / r^3 - im * K / delta * Rin / r^2)
+        return Y, dY, tail
+    end
+    r_max = rplus + kappa
+    mismatch = 0.0
+    for f in (0.5, 1.0)
+        S, _, tail = series_y(rplus + f * kappa)
+        tail <= 1e-14 || return ysoln, 0.0
+        mismatch = max(mismatch, abs(ysoln(rplus + f * kappa)[1] / S - 1))
+    end
+    return (r -> begin
+        rplus < r < r_max || return ysoln(r)
+        Y, dY, tail = series_y(r)
+        tail <= 1e-14 || return ysoln(r)
+        return (Y, dY, ysoln(r)[3], zero(abs(Y)))
+    end), mismatch
+end
+
+_warn_near_horizon_mismatch(mismatch, s, m, a, omega) =
+    mismatch <= NEAR_HORIZON_CHECK_TOL || @warn "Y_radial: Y converted from X " *
+        "differs from the Teukolsky horizon series by $(mismatch) near the " *
+        "horizon; Y may be inaccurate." s m a omega maxlog = 20
 
 # Wrap a route as a YRadialFunction (s = -2 IN or s = +2 UP), with the GSN
 # amplitudes converted by the Teukolsky factors.
+#
+# Real-frequency s = -2 IN routes whose near-horizon mismatch exceeds
+# NEAR_HORIZON_REFINE_TOL are solved again with the horizon-side ODE
+# coefficients from the closed-form potentials (DIRECT_AB_KEY), and the solution
+# with the smaller mismatch is kept; a mismatch above NEAR_HORIZON_CHECK_TOL
+# warns. Where Y = C11 X + C12 X' cancels strongly the X error of the tables
+# shows up in Y: (l, a, omega) = (3, 0.9, 2.35) had 2e-7 at r_+ + 0.7 (1e-8
+# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10). The re-solve costs about
+# four times the first solve.
 function y_radial_function(route::Route)
     _check_y_branch(route)
+    amps = _route_y_amplitudes(route)
+    ysoln, mismatch = _route_y_solution_checked(route, amps)
+    p = route.params
+    if mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
+        refined = try
+            task_local_storage(DIRECT_AB_KEY, true) do
+                match_route(gsn_coefficients(p; controls=route.controls), route.branch;
+                    controls=route.controls)
+            end
+        catch err
+            err isa InterruptException && rethrow()
+            nothing
+        end
+        if refined isa Route
+            refined_amps = _route_y_amplitudes(refined)
+            refined_ysoln, refined_mismatch = _route_y_solution_checked(refined, refined_amps)
+            if refined_mismatch < mismatch
+                route, amps, ysoln, mismatch = refined, refined_amps, refined_ysoln, refined_mismatch
+            end
+        end
+    end
+    _warn_near_horizon_mismatch(mismatch, p.s, p.m, p.a, p.omega)
+    return _y_radial_function(route, amps, ysoln)
+end
+
+function _y_radial_function(route::Route, amps, ysoln)
     isem = _isem_module()
     isdefined(isem, :YRadialFunction) || error("ISEM.YRadialFunction is not loaded.")
     y_type = getfield(isem, :YRadialFunction)
-    amps = _route_y_amplitudes(route)
-    ysoln = route_y_solution(route; amplitudes=amps)
     xsoln = r -> gsn_solution_rstar(route)(rstar_from_r(route.params.a, r))[1]
     yscalar = r -> ysoln(r)[1]
     return y_type(

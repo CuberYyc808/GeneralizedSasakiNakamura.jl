@@ -786,14 +786,23 @@ function _horizon_tail_metric(coeffs, x)
     return tail / max(abs(value), eps(Float64))
 end
 
+# Largest horizon seed at real frequencies. The tail can pass far out, but the
+# series then loses accuracy beyond about x = 0.3 although the checks below pass:
+# horizon_order = 160 put the seed at x = 0.56 for (a, omega) = (0.7, 1.4) and Y
+# was off by 1e-9 at r = 4.7 and 6e-7 at r = 50 (2e-11 and 2e-8 with the seed at
+# 0.3), and at the default order Y of (0.7, 2.5) was off by 1e-8 at r <= 12
+# (2e-10). Complex frequencies keep their seeds: capping loses 3e-8 for s = -1,
+# a = 0.99, omega = 0.5 - 0.5i.
+const _HORIZON_SEED_MAX_X = 0.3
+
 # Seed point for a horizon Frobenius series with exponent mu: start from the
 # radius allowed by the tail and shrink until max(tail, ODE residual, roundoff)
 # <= tol. Returns (seed_x, score), the best seed if tol is never met.
 function select_horizon_seed(coeffs, mu, a_coeffs, b_coeffs,
-        match_x; tol=1e-14, tail_aware=false)
+        match_x; tol=1e-14, tail_aware=false, max_seed=1.0)
     radius = tail_aware ? _endpoint_tail_radius(coeffs, tol, match_x) :
         _endpoint_last_term_radius(coeffs, tol, match_x)
-    seed_x = max(_MIN_STEP, min(match_x, _RADIUS_SAFETY * radius))
+    seed_x = max(_MIN_STEP, min(match_x, max_seed, _RADIUS_SAFETY * radius))
     best_seed = seed_x
     best_score = Inf
     for _ in 0:32
@@ -829,6 +838,38 @@ function _tail_metric(coeffs, value, h, order::Integer)
     return tail
 end
 
+# Roundoff of a Taylor step relative to the state (value, h * derivative): eps
+# times the summed term sizes. A long step at a high order can sum terms that
+# grow far beyond the state and cancel, which the last-terms tail does not see:
+# ordinary_order = 160 took steps whose terms reached 1e10 times Y and lost up
+# to 4e-2 at r = 6-12 for omega = 4.3. Steps are shortened until this is below
+# _ROUNDOFF_TOL (or tol, if larger); 1e-12 still left 2e-8 there, 1e-14 doubles
+# the default solve time for no gain at r <= 12.
+const _ROUNDOFF_TOL = 1e-13
+
+function _roundoff_metric(coeffs, value, derivative, h, order::Integer)
+    s0 = 0.0
+    s1 = 0.0
+    power = 1.0
+    @inbounds for k in 0:order
+        term = abs(coeffs[k + 1]) * power
+        s0 += term
+        s1 += k * term
+        power *= abs(h)
+    end
+    denom = max(abs(value) + abs(h) * abs(derivative), floatmin(Float64))
+    return eps(Float64) * (s0 + s1) / denom
+end
+
+# Tail score with the roundoff check folded in: the tail alone while the
+# roundoff is acceptable, otherwise at least the roundoff (so the step shrinks).
+@inline function _step_score(coeffs, value, derivative, h, order, tol)
+    tail = _tail_metric(coeffs, value, h, order)
+    roundoff = _roundoff_metric(coeffs, value, derivative, h, order)
+    return roundoff <= max(tol, _ROUNDOFF_TOL) ? (tail, false) :
+        (max(tail, roundoff), true)
+end
+
 # Step shrink factor from the tail score: the order-based estimate of the step
 # that would meet tol, clamped to [0.05, 0.9]; 1 when tol is already met.
 @inline function _step_factor(score, tol, order)
@@ -850,7 +891,7 @@ function _single_step(coeffs, direction, h_start, min_step, tol, order)
     for _ in 0:_MAX_REJECTIONS
         h = direction * h_abs
         value, derivative = poly_pair(coeffs, h)
-        score = _tail_metric(coeffs, value, h, order)
+        score, roundoff_limited = _step_score(coeffs, value, derivative, h, order, tol)
         if score < best_score
             best_score = score
             best_h = h
@@ -858,7 +899,8 @@ function _single_step(coeffs, direction, h_start, min_step, tol, order)
             best_derivative = derivative
         end
         score <= tol && break
-        next_h = max(min_step, _step_factor(score, tol, order) * h_abs)
+        factor = roundoff_limited ? 0.5 : _step_factor(score, tol, order)
+        next_h = max(min_step, factor * h_abs)
         next_h < h_abs * (1 - 8eps(Float64)) || break
         h_abs = next_h
     end
@@ -879,8 +921,8 @@ function _pair_step(coeffs1, coeffs2, direction, h_start, min_step, tol,
         h = direction * h_abs
         value1, deriv1 = poly_pair(coeffs1, h)
         value2, deriv2 = poly_pair(coeffs2, h)
-        score1 = _tail_metric(coeffs1, value1, h, order1)
-        score2 = _tail_metric(coeffs2, value2, h, order2)
+        score1, limited1 = _step_score(coeffs1, value1, deriv1, h, order1, tol)
+        score2, limited2 = _step_score(coeffs2, value2, deriv2, h, order2, tol)
         score = max(score1, score2)
         if score < best_score
             best_score = score
@@ -891,7 +933,7 @@ function _pair_step(coeffs1, coeffs2, direction, h_start, min_step, tol,
             best_deriv2 = deriv2
         end
         score <= tol && break
-        factor = min(
+        factor = (limited1 || limited2) ? 0.5 : min(
             _step_factor(score1, tol, order1),
             _step_factor(score2, tol, order2),
         )
@@ -3136,6 +3178,7 @@ end
         match_x;
         tol=max(getproperty(controls, :tolerance), _ENDPOINT_SEED_TARGET),
         tail_aware=_tail_seed(coefficients),
+        max_seed=isreal(coefficients.params.omega) ? _HORIZON_SEED_MAX_X : 1.0,
     )
     return seed
 end

@@ -402,17 +402,21 @@ function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
             UNIT_TEUKOLSKY_TRANS)
     end
 
-    Ysoln = TeukolskyTransformation.GSN_to_Y_solution_from_matrix(
-        r -> rstar_from_r(a, r),
-        teukolsky_from_gsn_matrix,
-        X_func.GSN_solution,
-        s,
-        m,
-        a,
-        omega,
-        lambda,
-        branch_transmission_amplitude,
-    )
+    Ysoln, near_horizon_mismatch = RadialFunctions.near_horizon_y(
+        TeukolskyTransformation.GSN_to_Y_solution_from_matrix(
+            r -> rstar_from_r(a, r),
+            teukolsky_from_gsn_matrix,
+            X_func.GSN_solution,
+            s,
+            m,
+            a,
+            omega,
+            lambda,
+            branch_transmission_amplitude,
+        ),
+        s, m, a, omega, lambda,
+        branch_transmission_amplitude * X_func.transmission_amplitude)
+    RadialFunctions._warn_near_horizon_mismatch(near_horizon_mismatch, s, m, a, omega)
 
     conv_incidence = s == -2 ?
         ConversionFactors.Binc(s, m, a, omega, lambda) :

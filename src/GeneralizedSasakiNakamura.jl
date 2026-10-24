@@ -593,7 +593,7 @@ At $|a| = 1$ every `method` uses the exact-extremal solver. Otherwise, at the su
 
 `tol` (or its alias `tolerance`; `tol` takes precedence) is the tolerance of ISEM, and the absolute and relative tolerance of the ODE solver (default: `1e-12`) for the ODE methods.
 `xm` is the ISEM matching point in the compact coordinate $x = (r - r_+)/(r - r_-)$ and must lie in (0, 1). Omit `xm` for automatic matching; an explicit `xm` can introduce a cancellation error in the incidence amplitude that the matching tolerance does not bound.
-`N` sets the order of the ISEM series, and `sfe` and `lfe` switch the small-frequency and the large-frequency expansions of ISEM on (`true`) or off (`false`); with `nothing`, ISEM chooses them automatically.
+`N` sets the order of the ISEM series (in Float64 the default orders are already at round-off, so a larger `N` does not make the result more accurate), and `sfe` and `lfe` switch the small-frequency and the large-frequency expansions of ISEM on (`true`) or off (`false`); with `nothing`, ISEM chooses them automatically.
 For `omega` with a nonzero imaginary part, `lfe = true` is not supported, and `sfe = true` is supported only for purely imaginary `omega` with $\operatorname{Im}\omega < 0$ and $|\omega| \le 0.1$; an unsupported choice makes ISEM fail with an error.
 The ODE methods ignore `xm`, `N`, `sfe` and `lfe`.
 

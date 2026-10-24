@@ -433,4 +433,74 @@ end
     @test route.metadata.real_axis_state_anchor_status == :uncertified_reference
 end
 
+
+# Y of (s, l, m) = (-2, 2, 2) IN against the arbitrary-precision ISEM route (BigFloat, 128 bits). At
+# (0.8, 0.9) a root of eta lies at |x| = 0.018 and at (0.99, 0.76) the spin is near extremal; the
+# horizon series then starts at x = 0.0044 and 1.4e-5, where the ordinary-point tables lost accuracy,
+# and Y was off by 1.9e-5 and 1.0e-6.
+@testset "Y_radial near-horizon eta root and near-extremal spin" begin
+    cases = (
+        (a=0.8, omega=0.9, Binc=-0.1967227989305077 - 0.06031655565123782im, values=(
+            (1.65, -5.3041199166342485e-6 + 7.029647394976064e-5im),
+            (4.6, 0.0007788147782264832 + 0.0013176010911668276im),
+            (8.727272727272727, -0.00010182220971743213 + 0.0032539268760606796im),
+            (16.98181818181818, -0.00012501508161515818 + 0.006081144556473915im))),
+        (a=0.99, omega=0.76, Binc=-0.11979126428149878 + 0.235639527029718im, values=(
+            (1.191067359796659, -0.00029202965093516234 + 6.348887746159922e-5im),
+            (4.141067359796659, -0.08446071086301973 - 0.47444525468646986im),
+            (8.31006123617878, -0.18624348949649558 - 1.0646036183542564im),
+            (16.648048988943025, -0.34527511799302757 - 2.191390351029131im))),
+    )
+    for c in cases
+        Y = Y_radial(-2, 2, 2, c.a, c.omega, IN)
+        @test Y.incidence_amplitude ≈ c.Binc rtol=1e-9
+        for (r, value) in c.values
+            @test Y.Y_solution(r)[1] ≈ value rtol=1e-8
+        end
+    end
+end
+
+# Y of s = -2 IN within 1e-3 of the horizon (BigFloat references as above); the conversion from X
+# cancels to O(Delta^2) there and was off by 3e-7 before Y was taken from the horizon series. The
+# near-horizon self-check stays silent on these accurate solutions.
+@testset "Y_radial at the horizon" begin
+    for (a, omega, r, value) in (
+            (0.8, 0.9, 1.6009999999999998, -2.5830353169653824e-8 - 1.8238705196620167e-8im),
+            (0.99, 0.76, 1.1420673597966589, -8.98478715291685e-8 + 3.3888274825497095e-8im))
+        Y = @test_logs Y_radial(-2, 2, 2, a, omega, IN)
+        @test Y.Y_solution(r)[1] ≈ value rtol=1e-8
+        @test Y_radial(-2, 2, 2, a, omega, IN; method="linear", tol=1e-13).Y_solution(r)[1] ≈
+            value rtol=1e-8
+    end
+end
+
+# Explicit high orders (BigFloat references as above): long Taylor steps summed terms 1e10 times Y
+# and N = 160 lost 1.2e-2 at r = 4.7 for (a, omega) = (0.7, 4.3); B_inc was off by 3.3e-8.
+@testset "Y_radial at high explicit order" begin
+    Binc = -0.011168093935733895 + 0.006381594331719654im
+    for N in (80, 160, 320)
+        Y = Y_radial(-2, 2, 2, 0.7, 4.3, IN; N=N)
+        @test Y.incidence_amplitude ≈ Binc rtol=1e-11
+        @test Y.Y_solution(4.714142842854285)[1] ≈
+            4.2356415261602264e-5 + 2.2845225993916564e-6im rtol=1e-7
+        @test Y.Y_solution(8.83103894804935)[1] ≈
+            1.0282074639295974e-5 - 4.500451875050217e-6im rtol=1e-7
+    end
+end
+
+
+# l = 3, a = 0.9, omega = 2.35 (BigFloat references as above): Y = C11 X + C12 X' cancels by 1e4 to 1e6,
+# so the table error of X showed up as 4e-7 in Y near the horizon and 2e-7 at r_+ + 1. The horizon
+# series and the re-solve with the closed-form potentials bring both below 1e-8, without a warning.
+@testset "Y_radial where the X to Y conversion cancels" begin
+    Y = @test_logs Y_radial(-2, 3, 2, 0.9, 2.35, IN)
+    for (r, value) in (
+            (1.4858898943540673, 1.0643405556774709e-7 - 4.841638507594095e-6im),
+            (1.6358898943540672, 1.832967184115095e-5 + 5.1650634486980915e-5im),
+            (2.135889894354067, -6.159933395114302e-5 - 0.0002231571935558409im),
+            (2.435889894354067, 0.00022078735920180818 - 0.00015241009181221746im))
+        @test Y.Y_solution(r)[1] ≈ value rtol=1e-8
+    end
+end
+
 end # isem

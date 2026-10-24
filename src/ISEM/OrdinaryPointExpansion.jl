@@ -6,6 +6,8 @@ using ..CoefficientTables:
     RationalCoefficients,
     evaluate_ordinary_coefficients!,
     evaluate_ordinary_variable!
+using ...Potentials: sF, sU
+using TaylorSeries: Taylor1, getcoeff, derivative
 
 export PQLayout
 export pq_layout, split_starts, ab_term_counts
@@ -15,6 +17,7 @@ export ordinary_ab_series!, ordinary_ab_series
 export ordinary_scaled_y_ab_series!
 export shifted_ab!, shifted_infinity_ab!
 export ordinary_point_coeffs!
+export DIRECT_AB_KEY, direct_ab_series!
 export endpoint_power_lookup
 export poly_value, poly_pair, poly_triple
 export series_issue, denom_ok
@@ -551,9 +554,54 @@ function ordinary_scaled_y_ab_series!(a_out, b_out, pq,
     return na, nb
 end
 
+# Below this x the ordinary-point tables lose accuracy: they form B from O(1)
+# terms that cancel to O(x^2) near the horizon, so B carries a relative error
+# of about 1e-12 / x^2 (4e-8 at x = 0.0044, 9e-3 at x = 1e-5), while the Taylor
+# shift of the horizon rational functions stays at about 2e-13 there. The
+# horizon series of Y starts at a small x when a root of eta lies near the
+# horizon or the spin is near extremal, and its first patches then took the
+# table values: Y(r) of (s, l, m) = (-2, 2, 2) was off by 1.9e-5 at
+# (a, omega) = (0.8, 0.9) and 1.0e-6 at (0.99, 0.76) without any warning. The
+# shift loses accuracy towards x = 1 (relative B error 2e-10 at 0.5, 1e-6 at
+# 0.9), so it is used only below this point; up to 0.25 it made Y of
+# (0.95, 0.9) jump by 4e-9 between neighbouring omega (1e-10 with the tables).
+const HORIZON_SHIFT_MAX_X = 0.1
+
+# Task-local switch (set by the Y self-check re-solve): real points between
+# HORIZON_SHIFT_MAX_X and DIRECT_AB_MAX_X take A and B from direct_ab_series!.
+const DIRECT_AB_KEY = :GSN_ISEM_DIRECT_AB
+const DIRECT_AB_MAX_X = 0.7
+
+# Taylor series of A and B about a real x0 from the closed-form GSN potentials:
+# with g = dx/dr*, X'' + A X' + B X = 0 in x has A = (dg/dx - F) / g and
+# B = -U / g^2, for X_{r*r*} - F X_{r*} - U X = 0. Its B is good to about 2e-13
+# where the tables are off by 1e-12 to 2e-12 (x = 0.2 - 0.4 for s = -2,
+# l = 3, a = 0.9, omega = 2.35), at about 0.1 ms per call.
+function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
+    s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
+    kappa = sqrt(1 - a^2)
+    rplus, rminus = 1 + kappa, 1 - kappa
+    x = x0 + Taylor1(ComplexF64, order + 1)
+    r = (rplus - rminus * x) / (1 - x)
+    delta = r^2 - 2r + a^2
+    g = (rplus - rminus) * delta / ((r - rminus)^2 * (r^2 + a^2))
+    A = (derivative(g) - sF(s, m, a, omega, lambda, r)) / g
+    B = -sU(s, m, a, omega, lambda, r) / g^2
+    a_terms, b_terms = ab_term_counts(:O, order)
+    for k in 1:a_terms
+        a_out[k] = getcoeff(A, k - 1)
+    end
+    for k in 1:b_terms
+        b_out[k] = getcoeff(B, k - 1)
+    end
+    return a_terms, b_terms
+end
+
 # Taylor series of A and B about the ordinary point x0: by shifting the horizon
-# rational functions when `metadata.horizon_shift` is set and the shift is
-# accepted, otherwise from the ordinary-point tables.
+# rational functions when `metadata.horizon_shift` is set or x0 is a real point
+# below HORIZON_SHIFT_MAX_X, and the shift is accepted; from the closed-form
+# potentials when DIRECT_AB_KEY is set and x0 is real and below DIRECT_AB_MAX_X;
+# otherwise from the ordinary-point tables.
 function ordinary_ab_series!(
     a_out::AbstractVector{<:Complex},
     b_out::AbstractVector{<:Complex},
@@ -562,8 +610,14 @@ function ordinary_ab_series!(
     x0,
     order::Integer,
 )
-    use_shift = hasproperty(coefficients.metadata, :horizon_shift) &&
-        getproperty(coefficients.metadata, :horizon_shift)
+    if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
+            coefficients.params.omega isa Real &&
+            get(task_local_storage(), DIRECT_AB_KEY, false)
+        return direct_ab_series!(a_out, b_out, coefficients.params, x0, order)
+    end
+    use_shift = (hasproperty(coefficients.metadata, :horizon_shift) &&
+        getproperty(coefficients.metadata, :horizon_shift)) ||
+        (x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X)
     if use_shift
         accepted, a_terms, b_terms, _ = shifted_ab!(
             a_out, b_out, pq, coefficients.horizon, x0, order)

@@ -156,7 +156,7 @@ Meaning of the keywords:
 | `tol` | `nothing` | tolerance of ISEM (chosen automatically when `nothing`; `1e-14` at real frequency), or `abstol = reltol` of the ODE methods (`1e-12` when `nothing`) |
 | `tolerance` | `nothing` | the same setting as `tol`; `tol` takes precedence when both are given |
 | `xm` | `nothing` | ISEM matching point in $x = (r - r_+)/(r - r_-)$, which is `0` at the horizon and `1` at infinity; `"auto"` and `"ISEM"` require `0 < xm < 1` |
-| `N` | `nothing` | ISEM expansion order; chosen automatically when omitted |
+| `N` | `nothing` | ISEM expansion order; chosen automatically when omitted. In Float64 the defaults (24 to 40) are already at round-off; larger `N` gives longer series steps at the same accuracy (within 1e-8 relative in `Y` up to r = 12 for N = 24 to 320), not a more accurate result |
 | `sfe`, `lfe` | `nothing` | switches for the small-frequency expansion (MST, the Mano–Suzuki–Takasugi series) and the large-frequency (eikonal) expansion of ISEM; `nothing` selects them automatically |
 | `data_type` | `ComplexF64` | number type of the ODE methods, e.g. `Complex{BigFloat}` |
 | `ODE_algorithm` | `AutoVern9(Rosenbrock23(autodiff=false))` | solver of the ODE methods; to pass another, add and load DifferentialEquations.jl in your own environment |
