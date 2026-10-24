@@ -529,15 +529,19 @@ function _orbit_check_radii(KG)
     return (0.8 * p, p, 1.25 * p)
 end
 
-function _isem_wronskian_check(s, l, m, a, omega, radii)
+# `route` (optional) is the Y route already built for this mode (IN for s = -2, UP for s = +2); its Teukolsky
+# solution stands in for that branch, so only the other branch is solved here.
+function _isem_wronskian_check(s, l, m, a, omega, radii; route = nothing)
     radii === nothing && return nothing
     (isreal(omega) && 0 < abs(omega) <= ISEM_WRONSKIAN_CHECK_MAX_OMEGA && l >= ISEM_WRONSKIAN_CHECK_MIN_L) || return nothing
     control = _inhomogeneous_small_frequency_expansion_control(l, a, omega)
     sfe = control === :auto ? nothing : control
     root = parentmodule(@__MODULE__)
     teukolsky_radial = getfield(root, :Teukolsky_radial)
-    Rin = teukolsky_radial(s, l, m, a, real(omega), getfield(root, :IN); method = "ISEM", sfe = sfe)
-    Rup = teukolsky_radial(s, l, m, a, real(omega), getfield(root, :UP); method = "ISEM", sfe = sfe)
+    solve(bc) = teukolsky_radial(s, l, m, a, real(omega), bc; method = "ISEM", sfe = sfe)
+    own = route === nothing ? nothing : ISEM.teukolsky_radial_function(route)
+    Rin = own !== nothing && s == -2 ? own : solve(getfield(root, :IN))
+    Rup = own !== nothing && s == 2 ? own : solve(getfield(root, :UP))
     ws = ComplexF64[]
     for r in radii
         w = try
@@ -567,7 +571,7 @@ end
         small_frequency_expansion = _inhomogeneous_small_frequency_expansion_control(l, a, omega),
         large_frequency_expansion = :auto)
     hasproperty(route, :controls) && route.controls.small_frequency_expansion &&
-        _isem_wronskian_check(s, l, m, a, omega, check_radii)
+        _isem_wronskian_check(s, l, m, a, omega, check_radii; route = route)
     return ISEM.y_radial_function(route)
 end
 
@@ -4078,9 +4082,108 @@ function _adaptive_eccentric_factored_segment(bundle::Dict, Ysamp::Dict, SH, s::
     end
 end
 
-function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::Int, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int; threaded_sampling::Bool = false)
+# Phase factorizations of an adaptive Levin segment. The phases depend on (s, m, n) and the segment only, so the
+# l walk of one (s, m, n) builds them once (they took about two thirds of a segment's cost at e = 0.95). Kept in the
+# geometry owner under its lock for the last LEVIN_PHASE_GROUPS (s, m, n) groups; no owner, no reuse.
+const LEVIN_PHASE_GROUPS = 1
+
+function _cached_levin_phase_factors!(build, cache, key::NTuple{7, Int})
+    owner = cache isa EccentricFluxCache ? cache.geometry_owner : nothing
+    owner === nothing && return build()
+    group = (key[1], key[2], key[3])
+    return lock(owner.lock) do
+        owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
+        factors = owner.levin_phase_factors
+        haskey(factors, key) && return factors[key]
+        value = build()
+        if !(group in owner.levin_phase_groups)
+            push!(owner.levin_phase_groups, group)
+            while length(owner.levin_phase_groups) > LEVIN_PHASE_GROUPS
+                old = popfirst!(owner.levin_phase_groups)
+                filter!(entry -> (entry.first[1], entry.first[2], entry.first[3]) != old, factors)
+            end
+        end
+        factors[key] = value
+        return value
+    end
+end
+
+# Y of s = -2 IN split into its two waves at large r, Y = e^{-i phi} (A_in R_in + A_out R_out) / r^2 with the
+# Teukolsky series at infinity and the route's Teukolsky amplitudes (phi as in the Y definition). Y_out varies
+# slowly; Y_in carries e^{-2 i omega r*}. A single Levin phase leaves that factor in the "smooth" part, and at
+# e = 0.95 the adaptive refinement split the apoapsis half of the orbit down to its deepest level (about 200
+# leaves per tenth of the radial phase against 1 or 2 near periapsis).
+struct YTwoWave{O, F}
+    m::Int
+    a::Float64
+    omega::Float64
+    A_in::ComplexF64
+    A_out::ComplexF64
+    in_series::ISEM.RadialFunctions.TeukolskyInfinityInSeries
+    out_series::O
+    conversion::F
+    tolerance::Float64
+end
+
+const TWO_WAVE_TOL = 1e-12
+
+function _y_two_wave(Ysol, s::Int, l::Int, m::Int, a, ω)
+    (s == -2 && ω isa Real && ω > 0) || return nothing
+    Ysol isa ISEM.YRadialFunction || return nothing
+    A_in = ComplexF64(Ysol.incidence_amplitude)
+    A_out = ComplexF64(Ysol.reflection_amplitude)
+    (isfinite(A_in) && isfinite(A_out)) || return nothing
+    lambda = Ysol.mode.lambda
+    params = ISEM.gsn_parameters(s, l, m, a, ω; lambda = lambda)
+    RF = ISEM.RadialFunctions
+    return YTwoWave(m, Float64(a), Float64(ω), A_in, A_out,
+        RF.teukolsky_infinity_in_series(s, m, a, ω, lambda),
+        RF.teukolsky_infinity_series(params, 40, TWO_WAVE_TOL),
+        ISEM.TeukolskyTransformation._GSN_to_Y_coeffs_minus2_in(m, a, ω, lambda), TWO_WAVE_TOL)
+end
+
+# Samples of the two waves (dicts like y_sample_m2_isem's, with the given Binc) on the segment, or nothing if a
+# series misses its tolerance at any point.
+function _y_two_wave_samples(w::YTwoWave, KG_samp::Dict, Binc)
+    r_vals = KG_samp["r"]
+    N = length(r_vals)
+    Yi = Vector{ComplexF64}(undef, N); Ypi = similar(Yi); Xi = similar(Yi)
+    Yo = similar(Yi); Ypo = similar(Yi); Xo = similar(Yi)
+    a, ω, m = w.a, w.omega, w.m
+    κ = sqrt(1 - a^2)
+    rp, rm = 1 + κ, 1 - κ
+    @inbounds for i in 1:N
+        r = r_vals[i]
+        rs = rstar_from_r(a, r)
+        out = w.out_series(r)
+        out === nothing && return nothing
+        Rin, dRin, err = w.in_series(r, rs)
+        err <= w.tolerance || return nothing
+        phase = ω * rs - a * m / (rp - rm) * log((r - rp) / (r - rm))
+        e = exp(-im * phase)
+        Δ = r^2 - 2r + a^2
+        K = (r^2 + a^2) * ω - a * m
+        F11, F12, F21, F22 = w.conversion(r, rs)
+        det = F11 * F22 - F12 * F21
+        for (A, R, dR, Yv, Ypv, Xv) in ((w.A_in, Rin, dRin, Yi, Ypi, Xi), (w.A_out, out[1], out[2], Yo, Ypo, Xo))
+            Y = e * A * R / r^2
+            Yp = e * A * (dR / r^2 - 2R / r^3 - im * K / Δ * R / r^2)
+            Yv[i] = Y
+            Ypv[i] = Yp
+            Xv[i] = (F22 * Y - F12 * Yp) / det
+        end
+    end
+    return (in = Dict("Y" => Yi, "Yp" => Ypi, "X" => Xi, "Binc" => Binc),
+        out = Dict("Y" => Yo, "Yp" => Ypo, "X" => Xo, "Binc" => Binc))
+end
+
+function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::Int, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int; threaded_sampling::Bool = false, two_wave = nothing)
     bundle = _cached_adaptive_eccentric_segment_bundle!(cache, KG, local_n, level, bin)
     KG_samp = bundle["sample"]
+    if two_wave !== nothing
+        amp = _two_wave_segment_amplitude!(cache, bundle, two_wave, Ysol, SH, s, a, ω, m, n, local_n, level, bin)
+        amp === nothing || return amp
+    end
     Ysamp = if s == 2
         threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_samp) : y_sample_p2_isem(Ysol, KG_samp)
     else
@@ -4088,12 +4191,39 @@ function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::In
     end
     factored = _adaptive_eccentric_factored_segment(bundle, Ysamp, SH, s, a, ω, m, n)
     jac = (π / 2^level) / π
-    factor_p = _levin_1d_local_phase_factor_from_values(factored.phase_p; local_order = local_n)
-    factor_m = _levin_1d_local_phase_factor_from_values(factored.phase_m; local_order = local_n)
+    factor_p, factor_m = _cached_levin_phase_factors!(cache, (s, m, n, local_n, level, bin, 0)) do
+        (_levin_1d_local_phase_factor_from_values(factored.phase_p; local_order = local_n),
+            _levin_1d_local_phase_factor_from_values(factored.phase_m; local_order = local_n))
+    end
     return ComplexF64((
         _levin_1d_integral_local_phase_factored(jac .* factored.smooth_p, factor_p) +
         _levin_1d_integral_local_phase_factored(jac .* factored.smooth_m, factor_m)
     ) * factored.prefactor)
+end
+
+function _two_wave_segment_amplitude!(cache, bundle, w::YTwoWave, Ysol, SH, s::Int, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int)
+    KG_samp = bundle["sample"]
+    parts = _y_two_wave_samples(w, KG_samp, GridSampling._isem_gsn_incidence_amplitude(Ysol))
+    parts === nothing && return nothing
+    jac = (π / 2^level) / π
+    out = _adaptive_eccentric_factored_segment(bundle, parts.out, SH, s, a, ω, m, n)
+    inn = _adaptive_eccentric_factored_segment(bundle, parts.in, SH, s, a, ω, m, n)
+    shift = 2ω .* KG_samp["rs"]
+    rotate = exp.(2im .* (ω .* KG_samp["rs"]))
+    factor_p, factor_m = _cached_levin_phase_factors!(cache, (s, m, n, local_n, level, bin, 0)) do
+        (_levin_1d_local_phase_factor_from_values(out.phase_p; local_order = local_n),
+            _levin_1d_local_phase_factor_from_values(out.phase_m; local_order = local_n))
+    end
+    in_factor_p, in_factor_m = _cached_levin_phase_factors!(cache, (s, m, n, local_n, level, bin, 1)) do
+        (_levin_1d_local_phase_factor_from_values(inn.phase_p .- shift; local_order = local_n),
+            _levin_1d_local_phase_factor_from_values(inn.phase_m .- shift; local_order = local_n))
+    end
+    return ComplexF64((
+        _levin_1d_integral_local_phase_factored(jac .* out.smooth_p, factor_p) +
+        _levin_1d_integral_local_phase_factored(jac .* out.smooth_m, factor_m) +
+        _levin_1d_integral_local_phase_factored(jac .* inn.smooth_p .* rotate, in_factor_p) +
+        _levin_1d_integral_local_phase_factored(jac .* inn.smooth_m .* rotate, in_factor_m)
+    ) * out.prefactor)
 end
 
 function _adaptive_eccentric_levin_result(amp::ComplexF64, KG_sample::Dict, Ysol, SH, s::Int, a, ω, m::Int)
@@ -4134,6 +4264,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
         depth_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX,
         max_depth::Int = 8,
         mode_abs_floor::Float64 = 1e-16,
+        energy_abs_tol::Float64 = 0.0,
         zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
         cache = nothing)
@@ -4163,9 +4294,10 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
+    two_wave = _y_two_wave(Ysol, s, l, m, a, ω)
 
     segment_evaluations = 0
-    root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling)
+    root = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling, two_wave = two_wave)
     segment_evaluations += 1
     # A low-flux verdict needs two consecutive refinement levels below the floor, the later at least
     # min_depth: the single-segment root (and the first split) can miss a narrow periapsis burst of a
@@ -4173,6 +4305,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     leaves = AdaptiveEccentricLevinLeaf[AdaptiveEccentricLevinLeaf(0, 0, root, true)]
     previous_total = root
     split_count = 0
+    passed_once = false
     stop_reason = "max_depth"
     while true
         new_leaves = AdaptiveEccentricLevinLeaf[]
@@ -4185,8 +4318,8 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
             child_level = leaf.level + 1
             left_bin = 2 * leaf.bin
             right_bin = left_bin + 1
-            left = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, left_bin; threaded_sampling = threaded_sampling)
-            right = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, right_bin; threaded_sampling = threaded_sampling)
+            left = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, left_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
+            right = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, child_level, right_bin; threaded_sampling = threaded_sampling, two_wave = two_wave)
             segment_evaluations += 2
             child_amp = left + right
             child_energy = abs(_adaptive_eccentric_levin_result(child_amp, KG_sample, Ysol, SH, s, a, ω, m)["EnergyFlux"])
@@ -4217,9 +4350,14 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
             global_relerr = abs(current_energy - previous_energy) / scale
             current_depth = maximum((leaf.level for leaf in leaves); init = 0)
             current_tol = _adaptive_levin_depth_tol(current_depth, adaptive_tol0, min_depth, max_depth, depth_tol_max)
-            if current_depth >= min_depth && global_relerr < current_tol
-                stop_reason = "global_converged"
-                break
+            if current_depth >= min_depth && global_relerr < current_tol &&
+                    (energy_abs_tol <= 0.0 || abs(current_energy - previous_energy) <= energy_abs_tol)
+                # Two consecutive levels must pass: under-resolved levels can agree by chance. At (0.9, 8, 0.95, 1)
+                # (l, m, n) = (12, -11, 208) gave 2.1e-13 at levels 1 and 2 against a true 1.3e-34 (1.5e-8 of E_inf).
+                passed_once && (stop_reason = "global_converged"; break)
+                passed_once = true
+            else
+                passed_once = false
             end
         end
 

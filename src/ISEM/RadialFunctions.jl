@@ -177,6 +177,73 @@ function (series::TeukolskyInfinitySeries)(r)
     return (scale*value,scale*slope/r,error+eps(Float64)*abs(phase))
 end
 
+# Ingoing Teukolsky solution at infinity, R_in = e^{-i omega r*} sum_n c_n r^{-1-n}
+# (c_0 = 1), from the Teukolsky equation times Delta, Delta^2 R'' + Delta (2 (s+1)
+# (r - 1)) R' + (K^2 - 2 i s (r - 1) K + Delta (4 i s omega r - lambda)) R = 0, with
+# R = e^{-i omega r*} h: Delta^2 h'' + Delta (2 (s+1)(r - 1) - 2 i omega rho) h' +
+# (Delta (4 i s omega - 2 i omega r - lambda) - 8 i s omega r (r - 1) -
+# 2 a m omega rho + a^2 m^2 + 2 i s a m (r - 1)) h = 0, rho = r^2 + a^2. The
+# series is asymptotic; it is summed to its smallest term.
+struct TeukolskyInfinityInSeries
+    s::Int
+    a::Float64
+    omega::Float64
+    coefficients::Vector{ComplexF64}
+end
+
+function teukolsky_infinity_in_series(s, m, a, omega, lambda; order::Int=60)
+    w = Float64(omega)
+    pmul(p, q) = (out = zeros(ComplexF64, length(p) + length(q) - 1);
+        for i in eachindex(p), j in eachindex(q); out[i+j-1] += p[i] * q[j]; end; out)
+    padd(ps...) = (out = zeros(ComplexF64, maximum(length, ps));
+        for p in ps; out[1:length(p)] .+= p; end; out)
+    D = ComplexF64[a^2, -2, 1]
+    rho = ComplexF64[a^2, 0, 1]
+    P2 = pmul(D, D)
+    P1 = pmul(D, padd(-2im * w .* rho, ComplexF64[-2(s + 1), 2(s + 1)]))
+    P0 = padd(pmul(D, ComplexF64[4im * s * w - lambda, -2im * w]),
+        ComplexF64[0, 8im * s * w, -8im * s * w], -2a * m * w .* rho,
+        ComplexF64[a^2 * m^2 - 2im * s * a * m, 2im * s * a * m])
+    at(v, k) = 0 <= k < length(v) ? v[k+1] : 0.0im
+    c = zeros(ComplexF64, order + 1)
+    c[1] = 1
+    for n in 1:order
+        acc = 0.0im
+        for d in 1:5
+            j = n - d
+            j < 0 && break
+            acc += (at(P2, 5 - d) * (j + 1) * (j + 2) - at(P1, 4 - d) * (j + 1) +
+                at(P0, 3 - d)) * c[j+1]
+        end
+        c[n+1] = -acc / (2im * w * n)
+    end
+    return TeukolskyInfinityInSeries(Int(s), Float64(a), w, c)
+end
+
+# (R_in, dR_in/dr, relative truncation error) at r, with r* = rstar.
+function (series::TeukolskyInfinityInSeries)(r, rstar)
+    c = series.coefficients
+    a = series.a
+    inv_r = inv(r)
+    power = inv_r
+    h = 0.0im
+    hp = 0.0im
+    last = Inf
+    for n in 0:(length(c) - 1)
+        term = c[n+1] * power
+        abs(term) > last && break
+        h += term
+        hp -= (n + 1) * term * inv_r
+        last = abs(term)
+        last <= eps(Float64) * abs(h) && break
+        power *= inv_r
+    end
+    delta = r^2 - 2r + a^2
+    e = exp(-im * series.omega * rstar)
+    return e * h, e * (hp - im * series.omega * (r^2 + a^2) / delta * h),
+        last / max(abs(h), floatmin(Float64))
+end
+
 struct TeukolskyPairEvaluator{R,C,T,E}
     route::R
     converter::C

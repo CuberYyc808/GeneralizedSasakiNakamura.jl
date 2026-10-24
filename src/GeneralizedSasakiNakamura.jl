@@ -2013,8 +2013,8 @@ in the result (`n_tail_infinity`, `n_tail_horizon`, `l_tail_infinity`, `l_tail_h
 l = 2..10, of the equatorial circular orbit at the same spin and radius p/(1+e) (prograde for x >= 0) give the
 l falloff, and the cap is the l where the extrapolated tail drops below `tol` times the probe total, plus 3,
 clamped to 30..150; `kmax` takes the same value. If a sum still reaches an automatic cap with modes above the
-cutoff, the cap is raised by half (at most 150) and the sum repeated, at most twice. An integer keeps that cap
-fixed. `nmax=:auto` (eccentric and generic orbits) takes
+cutoff, the cap is raised by half (at most 150) and the sum repeated, at most twice; the repeated sum evaluates
+its modes again, since no per-mode results are kept between modes. An integer keeps that cap fixed. `nmax=:auto` (eccentric and generic orbits) takes
 `0.75 (lmax + log(1/tol)) w_p / Omega_r`, clamped to 100..20000, with `w_p` the azimuthal rate at periapsis
 `p/(1+e)` and `Omega_r` the radial frequency, and is raised the same way when the n sum reaches it. The caps used
 are reported in `reached.caps`.

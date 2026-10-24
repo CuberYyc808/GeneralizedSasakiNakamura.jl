@@ -154,3 +154,27 @@ end
     @test isapprox(f.infinity_energy_flux, 1.0528034712962e-6; rtol = 5e-7)
     @test !isapprox(f.infinity_energy_flux - tail.energy, 1.0528034712962e-6; rtol = 3e-6)
 end
+
+@testset "eccentric adaptive Levin at e = 0.95" begin
+    # Deep-refinement references (two-wave and single-phase Levin, 11 levels, agree to 2e-10; trapezoid agrees).
+    # (12, -11, 208) once stopped at level 2 where two under-resolved levels agreed on 2.1e-13; (2, 2, 400) once
+    # stopped at relative energy change 1e-6 relaxed to 1e-2 with depth, 1.7e-5 off.
+    CI = GSN.ConvolutionIntegrals
+    scope, owned = MS.ensure_public_submission(nothing, 0.9, 8.0, 0.95, 1.0)
+    MS._with_public_scope(scope, owned) do
+        MS.with_submission_operation(scope) do
+            KG = MS.submission_master!(scope)
+            levin(l, m, n) = MS.with_submission_mode(scope; mode = (-2, l, m, n, 0)) do cache
+                CI.convolution_integral_eccentric_adaptive_levin_isem(KG, -2, l, m, n; tol = 1e-8,
+                    mode_abs_floor = 1e-16, energy_abs_tol = 2.85e-15, cache = cache)["EnergyFlux"]
+            end
+            @test levin(12, -11, 208) < 1e-20
+            ref = levin(2, 2, 400)
+            deep = MS.with_submission_mode(scope; mode = (-2, 2, 2, 400, 0)) do cache
+                CI.convolution_integral_eccentric_adaptive_levin_isem(KG, -2, 2, 2, 400; tol = 1e-8, tol0 = 1e-12,
+                    max_depth = 11, mode_abs_floor = 1e-16, cache = cache)["EnergyFlux"]
+            end
+            @test ref ≈ deep rtol = 1e-8
+        end
+    end
+end

@@ -80,6 +80,10 @@ mutable struct EccentricGeometryOwner <: AbstractSubmissionGeometryOwner
     samples::Dict{Int, Dict}
     cheby_samples::Dict{Int, Dict}
     adaptive_segments::Dict{Tuple{Int, Int, Int}, Any}
+    # Adaptive Levin phase factorizations keyed by (s, m, n, local_n, level, bin, wave), kept for at most
+    # LEVIN_PHASE_GROUPS (s, m, n) groups: the l walk of one (s, m, n) reuses them, and memory stays bounded.
+    levin_phase_factors::Dict{NTuple{7, Int}, Any}
+    levin_phase_groups::Vector{NTuple{3, Int}}
     lock::ReentrantLock
     context::NamedTuple
     stats::Dict{String, Int}
@@ -102,7 +106,8 @@ InclinedGeometryOwner(master::Dict; observer = nothing) = InclinedGeometryOwner(
     Dict{Int, Dict}(), Dict{Int, Dict}(), ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 EccentricGeometryOwner(master::Dict; observer = nothing) = EccentricGeometryOwner(master, Dict{Int, Dict}(),
-    Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), ReentrantLock(),
+    Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{NTuple{7, Int}, Any}(), NTuple{3, Int}[],
+    ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 
 function _check_submission_geometry_unlocked(owner::AbstractSubmissionGeometryOwner, master)
@@ -159,7 +164,7 @@ function _release_submission_geometry!(owner::AbstractSubmissionGeometryOwner)
         for field in fieldnames(typeof(owner))
             field in (:stats, :master) && continue
             value = getfield(owner, field)
-            value isa AbstractDict && empty!(value)
+            (value isa AbstractDict || field == :levin_phase_groups) && empty!(value)
         end
         owner.master = nothing
         owner.observer = nothing
