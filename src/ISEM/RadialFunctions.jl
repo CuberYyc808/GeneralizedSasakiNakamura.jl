@@ -1357,8 +1357,7 @@ end
 # with the smaller mismatch is kept; a mismatch above NEAR_HORIZON_CHECK_TOL
 # warns. Where Y = C11 X + C12 X' cancels strongly the X error of the tables
 # shows up in Y: (l, a, omega) = (3, 0.9, 2.35) had 2e-7 at r_+ + 0.7 (1e-8
-# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10). The re-solve costs about
-# four times the first solve.
+# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10).
 function y_radial_function(route::Route)
     _check_y_branch(route)
     amps = _route_y_amplitudes(route)
@@ -1367,9 +1366,9 @@ function y_radial_function(route::Route)
     if mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
         refined = try
             task_local_storage(DIRECT_AB_KEY, true) do
-                # The same high-frequency reflection as radial_route, which this rebuild bypasses.
-                Matching._complex_path_reflection(match_route(gsn_coefficients(p; controls=route.controls),
-                    route.branch; controls=route.controls))
+                # The complex-path reflection of the first route, which this rebuild bypasses.
+                Matching._carry_complex_path_reflection(match_route(gsn_coefficients(p; controls=route.controls),
+                    route.branch; controls=route.controls), route)
             end
         catch err
             err isa InterruptException && rethrow()

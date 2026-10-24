@@ -1442,19 +1442,44 @@ end
 # two in every case below this ratio. Superradiant modes (k <= 0) and a failed path keep the route's value.
 const COMPLEX_PATH_RATIO = 1e-6
 
-function _complex_path_reflection(route::Route)
+# Whether the route's reflection is taken from the complex path (see _complex_path_reflection).
+function _complex_path_switch(route::Route)
     p = route.params
-    route.branch in (:IN, :UP) || return route
-    (isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return route
+    route.branch in (:IN, :UP) || return false
+    (isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return false
     s, m, a, w = p.s, p.m, Float64(p.a), Float64(real(p.omega))
     lambda = real(p.lambda)
-    w - m * a / (2 * (1 + sqrt(1 - a^2))) > 0 || return route
+    w - m * a / (2 * (1 + sqrt(1 - a^2))) > 0 || return false
     incidence_factor, reflection_factor = route.branch === :IN ?
         (ConversionFactors.Binc(s, m, a, w, lambda), ConversionFactors.Bref(s, m, a, w, lambda)) :
         (ConversionFactors.Cinc(s, m, a, w, lambda), ConversionFactors.Cref(s, m, a, w, lambda))
     incidence = incidence_factor * route.incidence
     reflection = reflection_factor * route.reflection
-    (isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence)) || return route
+    return isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence)
+end
+
+function _with_reflection(route::Route, reflection)
+    fields = Any[getfield(route, f) for f in fieldnames(typeof(route))]
+    fields[findfirst(==(:reflection), fieldnames(typeof(route)))] = ComplexF64(reflection)
+    return typeof(route)(fields...)
+end
+
+# A route of the same mode rebuilt from other ODE coefficients (the Y re-solve) takes the complex-path
+# reflection of `source` instead of tracing the path again: the path value depends on the mode alone, and
+# the GSN reflection scales with the solution scale as the transmission does.
+function _carry_complex_path_reflection(route::Route, source::Route)
+    (source.branch === route.branch && _complex_path_switch(source)) || return _complex_path_reflection(route)
+    _complex_path_switch(route) || return route
+    return _with_reflection(route, source.reflection * (route.solution_scale / source.solution_scale))
+end
+
+function _complex_path_reflection(route::Route)
+    _complex_path_switch(route) || return route
+    p = route.params
+    s, m, a, w = p.s, p.m, Float64(p.a), Float64(real(p.omega))
+    lambda = real(p.lambda)
+    reflection_factor = route.branch === :IN ? ConversionFactors.Bref(s, m, a, w, lambda) :
+        ConversionFactors.Cref(s, m, a, w, lambda)
     result = try
         complex_path_amplitudes(s, m, a, w, lambda, route.branch; reflection_only=true)
     catch err
@@ -1466,9 +1491,7 @@ function _complex_path_reflection(route::Route)
     # solution_scale times the transmission factor (as in RadialFunctions._route_y_amplitudes).
     transmission = route.solution_scale * (route.branch === :IN ?
         ConversionFactors.Btrans(s, m, a, w, lambda) : ConversionFactors.Ctrans(s, m, a, w, lambda))
-    fields = Any[getfield(route, f) for f in fieldnames(typeof(route))]
-    fields[findfirst(==(:reflection), fieldnames(typeof(route)))] = ComplexF64(result.reflection * transmission / reflection_factor)
-    return typeof(route)(fields...)
+    return _with_reflection(route, result.reflection * transmission / reflection_factor)
 end
 
 _complex_path_reflection(route) = route
