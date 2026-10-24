@@ -71,6 +71,9 @@ const BRIDGE_CONDITION_LIMIT = 1.0e12
 # Below that limit an IN route whose matched combination cancels by more than BRIDGE_CHECK_LIMIT builds the
 # bridge as a check and uses it only where the two disagree by more than BRIDGE_CHECK_TOL: (s, l, m, a, omega)
 # = (-2, 4, 2, 0.99, 0.2) cancels by 1.2e11 and its Y was off by 2.2e-4 just outside match_x.
+# Lower edge of that check window: a cancellation of 1e4 costs at most eps * 1e4 ~ 2e-12 of the basis
+# accuracy, far below the 1e-9 switch criterion BRIDGE_CHECK_TOL, so cancellations below it never need a
+# bridge and are not checked (no extra solve for them).
 const BRIDGE_CHECK_LIMIT = 1.0e4
 const BRIDGE_CHECK_TOL = 1.0e-9
 const BRIDGE_CHECK_FRACTIONS = (0.02, 0.1, 0.3, 1.0)
