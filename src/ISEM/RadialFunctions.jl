@@ -12,6 +12,7 @@ using ..Matching:
     evaluate_route,
     route_state
 using ..Matching: route_plan_of, route_truncations
+import ..Matching
 using ..Iteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
 using ..Matching: _mano_suzuki_takasugi_evaluation_region, match_route
 using ..CoefficientTables: gsn_coefficients
@@ -1366,8 +1367,9 @@ function y_radial_function(route::Route)
     if mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
         refined = try
             task_local_storage(DIRECT_AB_KEY, true) do
-                match_route(gsn_coefficients(p; controls=route.controls), route.branch;
-                    controls=route.controls)
+                # The same high-frequency reflection as radial_route, which this rebuild bypasses.
+                Matching._complex_path_reflection(match_route(gsn_coefficients(p; controls=route.controls),
+                    route.branch; controls=route.controls))
             end
         catch err
             err isa InterruptException && rethrow()

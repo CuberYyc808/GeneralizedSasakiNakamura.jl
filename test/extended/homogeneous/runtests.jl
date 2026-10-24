@@ -457,9 +457,15 @@ is_superradiant(a, m, omega) = omega <= m * a / (2 * kerr_rplus(a))
         @testset "grid$(ref.id) $(ref.branch)" begin
             R = Teukolsky_radial(g.s, g.l, g.m, g.a, w, bc)
             q_ref = ref.reflection / ref.incidence
-            res = CPA.complex_path_amplitudes(g.s, g.m, g.a, w, real(R.mode.lambda), Symbol(ref.branch))
-            @test abs(res.ratio - q_ref) <= 1e-9 * abs(q_ref)
-            @test complex_path_ratio_ok(R.reflection_amplitude / R.incidence_amplitude, q_ref)
+            q = R.reflection_amplitude / R.incidence_amplitude
+            if abs(q_ref) < D.Matching.COMPLEX_PATH_RATIO
+                res = CPA.complex_path_amplitudes(g.s, g.m, g.a, w, real(R.mode.lambda), Symbol(ref.branch))
+                @test abs(res.ratio - q_ref) <= 1e-9 * abs(q_ref)
+                @test complex_path_ratio_ok(q, q_ref)
+            else
+                # Not switched: the matching's own class (section 3: 1e-9 in dominant units).
+                @test abs(q - q_ref) <= max(1e-6 * abs(q_ref), 1e-10)
+            end
         end
     end
 end
@@ -480,7 +486,7 @@ end
                 @test complex_path_ratio_ok(q, q_ref)
             else
                 # Kept from the matching (reflection not small): its own accuracy class.
-                @test abs(q - q_ref) <= 1e-6 * abs(q_ref)
+                @test abs(q - q_ref) <= max(1e-6 * abs(q_ref), 1e-10)
             end
         end
     end
