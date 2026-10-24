@@ -49,6 +49,10 @@ include("AsymptoticAmplitudes.jl")
 using .AsymptoticAmplitudes
 include("RadialFunctions.jl")
 using .RadialFunctions
+include("ManoSuzukiTakasugiGeneric.jl")
+using .ManoSuzukiTakasugiGeneric
+include("ArbitraryPrecisionRoute.jl")
+using .ArbitraryPrecisionRoute
 include("ComplexRational.jl")
 using .ComplexRational
 include("ComplexFrequency.jl")

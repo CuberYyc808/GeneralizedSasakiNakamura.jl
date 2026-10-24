@@ -2,6 +2,7 @@
 # Each monomial's polynomial in c = cos(nu) carries its exact factor (1 - c)^k as u^k.
 # Split scope: endpoint=infinity, basis=ic, spin=0.
 # Do not edit by hand.
+# Element type follows the arguments: ComplexF64 for binary64 inputs, Complex{BigFloat} for BigFloat inputs.
 
 module GSNEndpoint_i_ic_s0
 
@@ -14,68 +15,69 @@ const LEN_GSN_ENDPOINT_i_ic_s0 = 38
 # Shared-preamble constructor blocks: split_direct_gsn_generated_constructors.jl
 
 @noinline function _construct_gsn_endpoint_basis_i_ic_s0_block_1!(coeffs, cp2, cp3, cp4, u)
-    coeffs[1] = ComplexF64(-32*cp4)
-    coeffs[2] = ComplexF64(-16*cp3 + 64*cp4)
-    coeffs[3] = ComplexF64(32*cp3*u)
-    coeffs[4] = ComplexF64(8*cp2*u)
-    coeffs[5] = ComplexF64(0)
-    coeffs[6] = ComplexF64(0)
-    coeffs[7] = ComplexF64(0)
-    coeffs[8] = ComplexF64(0)
+    coeffs[1] = eltype(coeffs)(-32*cp4)
+    coeffs[2] = eltype(coeffs)(-16*cp3 + 64*cp4)
+    coeffs[3] = eltype(coeffs)(32*cp3*u)
+    coeffs[4] = eltype(coeffs)(8*cp2*u)
+    coeffs[5] = eltype(coeffs)(0)
+    coeffs[6] = eltype(coeffs)(0)
+    coeffs[7] = eltype(coeffs)(0)
+    coeffs[8] = eltype(coeffs)(0)
     return nothing
 end
 
 @noinline function _construct_gsn_endpoint_basis_i_ic_s0_block_2!(coeffs, cp2, cp3, cp4, u)
-    coeffs[9] = ComplexF64(0)
-    coeffs[10] = ComplexF64(0)
-    coeffs[11] = ComplexF64(16*cp4)
-    coeffs[12] = ComplexF64(16*cp3 - 32*cp4)
-    coeffs[13] = ComplexF64(8*cp2*u - 16*cp3*u)
-    coeffs[14] = ComplexF64(-8*cp2*u)
-    coeffs[15] = ComplexF64(0)
-    coeffs[16] = ComplexF64(0)
+    coeffs[9] = eltype(coeffs)(0)
+    coeffs[10] = eltype(coeffs)(0)
+    coeffs[11] = eltype(coeffs)(16*cp4)
+    coeffs[12] = eltype(coeffs)(16*cp3 - 32*cp4)
+    coeffs[13] = eltype(coeffs)(8*cp2*u - 16*cp3*u)
+    coeffs[14] = eltype(coeffs)(-8*cp2*u)
+    coeffs[15] = eltype(coeffs)(0)
+    coeffs[16] = eltype(coeffs)(0)
     return nothing
 end
 
 @noinline function _construct_gsn_endpoint_basis_i_ic_s0_block_3!(coeffs, lambda, m, omega, o2, sn, cp7, cp8, cp9, cp10, u, up2)
-    coeffs[17] = ComplexF64(0)
-    coeffs[18] = ComplexF64(0)
-    coeffs[19] = ComplexF64(0)
-    coeffs[20] = ComplexF64(0)
-    coeffs[21] = ComplexF64(1024*o2*cp10)
-    coeffs[22] = ComplexF64(4096*o2*cp9*u)
-    coeffs[23] = ComplexF64(8192*o2*cp8*u - 6144*o2*cp9*u - 256*lambda*cp8 - 512*sn*m*omega*cp8)
-    coeffs[24] = ComplexF64(-256*cp7 + 10240*o2*cp7*up2 - 4096*o2*cp8*up2 - 512*lambda*cp7 + 768*lambda*cp8 - 1536*sn*m*omega*cp7*u)
+    coeffs[17] = eltype(coeffs)(0)
+    coeffs[18] = eltype(coeffs)(0)
+    coeffs[19] = eltype(coeffs)(0)
+    coeffs[20] = eltype(coeffs)(0)
+    coeffs[21] = eltype(coeffs)(1024*o2*cp10)
+    coeffs[22] = eltype(coeffs)(4096*o2*cp9*u)
+    coeffs[23] = eltype(coeffs)(8192*o2*cp8*u - 6144*o2*cp9*u - 256*lambda*cp8 - 512*sn*m*omega*cp8)
+    coeffs[24] = eltype(coeffs)(-256*cp7 + 10240*o2*cp7*up2 - 4096*o2*cp8*up2 - 512*lambda*cp7 + 768*lambda*cp8 - 1536*sn*m*omega*cp7*u)
     return nothing
 end
 
 @noinline function _construct_gsn_endpoint_basis_i_ic_s0_block_4!(coeffs, lambda, m, omega, m2, o2, sn, cp2, cp3, cp4, cp5, cp6, cp7, cp8, u, up2, up3, up4)
-    coeffs[25] = ComplexF64(-448*cp6 + 640*cp7 + 64*cp8 + 8704*o2*cp6*up2 - 8192*o2*cp7*up2 + 1024*o2*cp8*up2 + 64*m2*cp6*u + 64*m2*cp7*u - 512*lambda*cp6*u + 768*lambda*cp7*u - 2304*sn*m*omega*cp6*u + 1536*sn*m*omega*cp7*u)
-    coeffs[26] = ComplexF64(-128*cp5*u + 768*cp6*u + 128*cp7*u + 5120*o2*cp5*up3 - 2048*o2*cp6*up3 + 128*m2*cp5*up2 + 128*m2*cp6*up2 - 256*lambda*cp5*u + 768*lambda*cp6*u - 256*lambda*cp7*u - 2048*sn*m*omega*cp5*up2 + 512*sn*m*omega*cp6*up2)
-    coeffs[27] = ComplexF64(192*cp5*u - 384*cp6*u - 64*cp7*u + 2048*o2*cp4*up3 - 1536*o2*cp5*up3 + 128*m2*cp4*up2 + 64*m2*cp5*up2 - 64*m2*cp6*up2 - 64*lambda*cp4*up2 + 256*lambda*cp5*up2 - 1152*sn*m*omega*cp4*up2 + 768*sn*m*omega*cp5*up2)
-    coeffs[28] = ComplexF64(-64*cp5*up2 + 512*o2*cp3*up4 + 64*m2*cp3*up3 + 64*m2*cp4*up3 + 64*lambda*cp4*up2 - 384*sn*m*omega*cp3*up3)
-    coeffs[29] = ComplexF64(64*o2*cp2*up4 + 16*m2*cp2*up3 + 16*m2*cp3*up3 - 64*sn*m*omega*cp2*up3)
-    coeffs[30] = ComplexF64(256*cp8)
-    coeffs[31] = ComplexF64(512*cp7 - 1024*cp8)
-    coeffs[32] = ComplexF64(512*cp6 - 1792*cp7 + 1536*cp8)
+    coeffs[25] = eltype(coeffs)(-448*cp6 + 640*cp7 + 64*cp8 + 8704*o2*cp6*up2 - 8192*o2*cp7*up2 + 1024*o2*cp8*up2 + 64*m2*cp6*u + 64*m2*cp7*u - 512*lambda*cp6*u + 768*lambda*cp7*u - 2304*sn*m*omega*cp6*u + 1536*sn*m*omega*cp7*u)
+    coeffs[26] = eltype(coeffs)(-128*cp5*u + 768*cp6*u + 128*cp7*u + 5120*o2*cp5*up3 - 2048*o2*cp6*up3 + 128*m2*cp5*up2 + 128*m2*cp6*up2 - 256*lambda*cp5*u + 768*lambda*cp6*u - 256*lambda*cp7*u - 2048*sn*m*omega*cp5*up2 + 512*sn*m*omega*cp6*up2)
+    coeffs[27] = eltype(coeffs)(192*cp5*u - 384*cp6*u - 64*cp7*u + 2048*o2*cp4*up3 - 1536*o2*cp5*up3 + 128*m2*cp4*up2 + 64*m2*cp5*up2 - 64*m2*cp6*up2 - 64*lambda*cp4*up2 + 256*lambda*cp5*up2 - 1152*sn*m*omega*cp4*up2 + 768*sn*m*omega*cp5*up2)
+    coeffs[28] = eltype(coeffs)(-64*cp5*up2 + 512*o2*cp3*up4 + 64*m2*cp3*up3 + 64*m2*cp4*up3 + 64*lambda*cp4*up2 - 384*sn*m*omega*cp3*up3)
+    coeffs[29] = eltype(coeffs)(64*o2*cp2*up4 + 16*m2*cp2*up3 + 16*m2*cp3*up3 - 64*sn*m*omega*cp2*up3)
+    coeffs[30] = eltype(coeffs)(256*cp8)
+    coeffs[31] = eltype(coeffs)(512*cp7 - 1024*cp8)
+    coeffs[32] = eltype(coeffs)(512*cp6 - 1792*cp7 + 1536*cp8)
     return nothing
 end
 
 @noinline function _construct_gsn_endpoint_basis_i_ic_s0_block_5!(coeffs, cp4, cp5, cp6, cp7, u, up2)
-    coeffs[33] = ComplexF64(256*cp5*up2 - 1024*cp6*up2)
-    coeffs[34] = ComplexF64(64*cp4*u - 576*cp5*u + 1024*cp6*u - 256*cp7*u)
-    coeffs[35] = ComplexF64(-128*cp4*up2 + 256*cp5*up2)
-    coeffs[36] = ComplexF64(64*cp4*up2)
-    coeffs[37] = ComplexF64(0)
-    coeffs[38] = ComplexF64(0)
+    coeffs[33] = eltype(coeffs)(256*cp5*up2 - 1024*cp6*up2)
+    coeffs[34] = eltype(coeffs)(64*cp4*u - 576*cp5*u + 1024*cp6*u - 256*cp7*u)
+    coeffs[35] = eltype(coeffs)(-128*cp4*up2 + 256*cp5*up2)
+    coeffs[36] = eltype(coeffs)(64*cp4*up2)
+    coeffs[37] = eltype(coeffs)(0)
+    coeffs[38] = eltype(coeffs)(0)
     return nothing
 end
 
 function construct_gsn_endpoint_basis_i_ic_s0(lambda, m, nu, omega)
-    lambda = ComplexF64(lambda)
-    m = Float64(m)
-    nu = Float64(nu)
-    omega = ComplexF64(omega)
+    _CT = promote_type(typeof(complex(lambda)), typeof(complex(omega)), typeof(complex(float(nu))))
+    lambda = _CT(lambda)
+    m = real(_CT)(m)
+    nu = real(_CT)(nu)
+    omega = _CT(omega)
     m2 = m * m
     o2 = omega * omega
     s1 = sin(nu)
@@ -95,7 +97,7 @@ function construct_gsn_endpoint_basis_i_ic_s0(lambda, m, nu, omega)
     up2 = u * u
     up3 = up2 * u
     up4 = up3 * u
-    coeffs = Vector{ComplexF64}(undef, LEN_GSN_ENDPOINT_i_ic_s0)
+    coeffs = Vector{_CT}(undef, LEN_GSN_ENDPOINT_i_ic_s0)
     _construct_gsn_endpoint_basis_i_ic_s0_block_1!(coeffs, cp2, cp3, cp4, u)
     _construct_gsn_endpoint_basis_i_ic_s0_block_2!(coeffs, cp2, cp3, cp4, u)
     _construct_gsn_endpoint_basis_i_ic_s0_block_3!(coeffs, lambda, m, omega, o2, sn, cp7, cp8, cp9, cp10, u, up2)

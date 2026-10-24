@@ -37,7 +37,7 @@ function is_horizon_threshold(params)
     azimuthal = a * getproperty(params, :m)
     isreal(rotation) || return false
     return abs(rotation - azimuthal) <=
-        8 * eps(Float64) * max(abs(rotation), abs(azimuthal))
+        8 * eps(typeof(float(real(rotation)))) * max(abs(rotation), abs(azimuthal))
 end
 
 # Frobenius exponent at the horizon: -i nu_h for the ingoing branch, +i nu_h for
@@ -53,7 +53,7 @@ end
 # and exponent mu. With `guarded`, stops at the first ill-conditioned denominator
 # or suspicious coefficient and returns (effective order, reason).
 function _horizon_coefficients!(
-    coeffs::Vector{ComplexF64},
+    coeffs::AbstractVector{<:Complex},
     a_power,
     b_power,
     mu,
@@ -62,12 +62,13 @@ function _horizon_coefficients!(
 )
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("coefficient buffer is too short."))
-    mu = ComplexF64(mu)
-    coeffs[1] = 1.0 + 0.0im
+    C = eltype(coeffs)
+    mu = convert(C, mu)
+    coeffs[1] = one(C)
     a_minus_one = a_power(-1)
     b_minus_two = b_power(-2)
     @inbounds for n in 1:order
-        numerator = 0.0 + 0.0im
+        numerator = zero(C)
         for j in 0:(n - 1)
             numerator += a_power(j) * (mu + n - j - 1) * coeffs[n - j]
         end
@@ -100,7 +101,7 @@ function zero_local_solution(
     mu = horizon_exponent(coefficients.params, branch)
     a_power = endpoint_power_lookup(a_coeffs, -1)
     b_power = endpoint_power_lookup(b_coeffs, -2)
-    solution_coeffs = Vector{ComplexF64}(undef, order + 1)
+    solution_coeffs = Vector{eltype(a_coeffs)}(undef, order + 1)
     effective_order, reason = _horizon_coefficients!(
         solution_coeffs,
         a_power,
@@ -111,7 +112,7 @@ function zero_local_solution(
     )
     minimum_order = min(2, Int(order))
     effective_order >= minimum_order || error(
-        "ISEM GSN horizon recurrence lost Float64 credibility before order $minimum_order: $reason")
+        "ISEM GSN horizon recurrence lost floating-point credibility before order $minimum_order: $reason")
     effective_order < order && resize!(solution_coeffs, effective_order + 1)
     return (
         branch=branch,
@@ -127,7 +128,7 @@ function zero_local_solution(
 end
 
 function _horizon_numerator(coeffs, a_power, b_power, mu, n::Int)
-    numerator = zero(ComplexF64)
+    numerator = zero(eltype(coeffs))
     @inbounds for j in 0:(n - 1)
         numerator +=
             a_power(j) * (mu + n - j - 1) * coeffs[n - j]
@@ -135,7 +136,7 @@ function _horizon_numerator(coeffs, a_power, b_power, mu, n::Int)
     @inbounds for j in -1:(n - 2)
         numerator += b_power(j) * coeffs[n - j - 1]
     end
-    return ComplexF64(numerator)
+    return numerator
 end
 
 # Coefficient of x^(mu+n-2) contributed by the non-logarithmic terms
@@ -146,7 +147,7 @@ function _horizon_log_forcing(coeffs, a_power, mu, n::Int)
     @inbounds for j in 0:(n - 1)
         forcing += a_power(j) * coeffs[n - j]
     end
-    return ComplexF64(forcing)
+    return forcing
 end
 
 # At the threshold frequency (nu_h = 0) the two horizon exponents coincide; this
@@ -165,9 +166,10 @@ function zero_log_solution(
     base = zero_local_solution(coefficients, :in, order)
     a_power = endpoint_power_lookup(base.A, -1)
     b_power = endpoint_power_lookup(base.B, -2)
-    mu = ComplexF64(base.exponent)
-    companion = Vector{ComplexF64}(undef, order + 1)
-    companion[1] = zero(ComplexF64)
+    C = eltype(base.coefficients)
+    mu = convert(C, base.exponent)
+    companion = Vector{C}(undef, order + 1)
+    companion[1] = zero(C)
     a_minus_one = a_power(-1)
     b_minus_two = b_power(-2)
     @inbounds for n in 1:order
@@ -183,7 +185,7 @@ function zero_log_solution(
             error("threshold logarithmic horizon recurrence is ill-conditioned at n=$n")
         companion[n + 1] = -numerator / denominator
         series_issue(companion, n + 1) == :none ||
-            error("threshold logarithmic horizon recurrence lost Float64 credibility at n=$n")
+            error("threshold logarithmic horizon recurrence lost floating-point credibility at n=$n")
     end
     return (
         branch=normalized,
@@ -197,7 +199,7 @@ function zero_log_solution(
         truncation_reason=:threshold_log_companion,
         representation=:threshold_log_frobenius,
         log_exponent=mu,
-        log_coefficient=one(ComplexF64),
+        log_coefficient=one(C),
         log_coefficients=base.coefficients,
     )
 end

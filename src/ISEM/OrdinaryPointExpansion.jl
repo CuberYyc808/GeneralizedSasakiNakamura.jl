@@ -24,6 +24,15 @@ const _SERIES_RATIO_LIMIT = inv(sqrt(eps(Float64)))
 const _DENOM_REL_LIMIT = 64eps(Float64)
 const _SHIFT_EPS_LIMIT = 1e-13
 
+# The same guard limits in the working floating type; Float64 uses the constants above.
+@inline _series_mag_limit(::Type{Float64}) = _SERIES_MAG_LIMIT
+@inline _series_mag_limit(::Type{T}) where {T<:AbstractFloat} = sqrt(floatmax(T))
+@inline _series_ratio_limit(::Type{Float64}) = _SERIES_RATIO_LIMIT
+@inline _series_ratio_limit(::Type{T}) where {T<:AbstractFloat} = inv(sqrt(eps(T)))
+@inline _denom_rel_limit(::Type{Float64}) = _DENOM_REL_LIMIT
+@inline _denom_rel_limit(::Type{T}) where {T<:AbstractFloat} = 64eps(T)
+@inline _working_float(value) = typeof(float(real(value)))
+
 @inline _finite_complex(z) = isfinite(real(z)) && isfinite(imag(z))
 
 # Check the newest series coefficient for non-finite values, over/underflow, or
@@ -31,12 +40,13 @@ const _SHIFT_EPS_LIMIT = 1e-13
 function series_issue(coeffs, index::Integer, scale::Real=1.0)
     coeff = coeffs[index]
     _finite_complex(coeff) || return :nonfinite_coefficient
+    T = _working_float(coeff)
 
-    magnitude = abs(coeff) / max(abs(scale), floatmin(Float64))
+    magnitude = abs(coeff) / max(abs(scale), floatmin(T))
     !isfinite(magnitude) && return :coefficient_too_large
-    magnitude > _SERIES_MAG_LIMIT && return :coefficient_too_large
+    magnitude > _series_mag_limit(T) && return :coefficient_too_large
     !iszero(coeff) && iszero(magnitude) && return :coefficient_too_small
-    0 < magnitude < floatmin(Float64) && return :coefficient_too_small
+    0 < magnitude < floatmin(T) && return :coefficient_too_small
 
     if index >= 3
         previous2 = abs(coeffs[index - 2])
@@ -45,8 +55,8 @@ function series_issue(coeffs, index::Integer, scale::Real=1.0)
         if previous2 > 0 && previous1 > 0 && current > 0
             ratio1 = previous1 / previous2
             ratio2 = current / previous1
-            growth1 = !isfinite(ratio1) || ratio1 > _SERIES_RATIO_LIMIT
-            growth2 = !isfinite(ratio2) || ratio2 > _SERIES_RATIO_LIMIT
+            growth1 = !isfinite(ratio1) || ratio1 > _series_ratio_limit(T)
+            growth2 = !isfinite(ratio2) || ratio2 > _series_ratio_limit(T)
             if growth1 && growth2
                 return :consecutive_ratio_growth
             end
@@ -58,10 +68,17 @@ end
 # A recurrence denominator is usable if finite and not small relative to `scale`.
 function denom_ok(denominator, scale)
     _finite_complex(denominator) || return false
-    denom_scale = max(abs(scale), floatmin(Float64))
-    return abs(denominator) > _DENOM_REL_LIMIT * denom_scale
+    T = _working_float(denominator)
+    denom_scale = max(abs(scale), floatmin(T))
+    return abs(denominator) > _denom_rel_limit(T) * denom_scale
 end
 
+function _q0_ok(q0::Union{Real,Complex})
+    _finite_complex(q0) && !iszero(q0) || return false
+    return _finite_complex(inv(complex(float(q0))))
+end
+
+# Double-double work values of the ill-conditioned shifts: the binary64 inverse is checked.
 function _q0_ok(q0)
     _finite_complex(q0) && !iszero(q0) || return false
     return _finite_complex(inv(ComplexF64(q0)))
@@ -125,9 +142,9 @@ function _check_regular_leading_terms(numerator, shift::Integer)
 end
 
 function _ordinary_rational_series_from_pq_len!(
-    out::Vector{ComplexF64},
+    out::AbstractVector{<:Complex},
     out_len::Integer,
-    pq::Vector{ComplexF64},
+    pq::AbstractVector{<:Complex},
     p_start::Integer,
     p_len::Integer,
     q_start::Integer,
@@ -139,7 +156,7 @@ function _ordinary_rational_series_from_pq_len!(
     inv_q0 = inv(q0)
     order = out_len - 1
     @inbounds for n in 0:order
-        acc = n < p_len ? pq[p_start + n] : 0.0 + 0.0im
+        acc = n < p_len ? pq[p_start + n] : zero(eltype(out))
         for k in 1:min(n, q_len - 1)
             acc -= pq[q_start + k] * out[n - k + 1]
         end
@@ -434,7 +451,7 @@ end
 # `out_len` entries of `out`, after removing a common leading power of the
 # argument from the denominator.
 function rational_series_from_coefficients!(
-    out::Vector{ComplexF64},
+    out::AbstractVector{<:Complex},
     out_len::Integer,
     numerator,
     denominator,
@@ -448,7 +465,7 @@ function rational_series_from_coefficients!(
     order = out_len - 1
     @inbounds for n in 0:order
         p_index = n + shift
-        acc = p_index < length(numerator) ? numerator[p_index + 1] : 0.0 + 0.0im
+        acc = p_index < length(numerator) ? numerator[p_index + 1] : zero(eltype(out))
         for k in 1:min(n, length(denominator) - shift - 1)
             acc -= denominator[shift + k + 1] * out[n - k + 1]
         end
@@ -460,8 +477,8 @@ end
 # Laurent series of A and B about the horizon (:H, in x) or infinity (:I, in y),
 # written into `a_out` and `b_out`; returns the numbers of terms.
 function endpoint_ab_series!(
-    a_out::Vector{ComplexF64},
-    b_out::Vector{ComplexF64},
+    a_out::AbstractVector{<:Complex},
+    b_out::AbstractVector{<:Complex},
     endpoint::EndpointCoefficientSet,
     group::Symbol,
     order::Integer,
@@ -479,17 +496,18 @@ function endpoint_ab_series(coefficients::CoefficientSet, group::Symbol, order::
     group in (:H, :I) || throw(ArgumentError("endpoint group must be :H or :I."))
     endpoint = group == :H ? coefficients.horizon : coefficients.infinity
     a_terms, b_terms = ab_term_counts(group, order)
-    a_coeffs = Vector{ComplexF64}(undef, a_terms)
-    b_coeffs = Vector{ComplexF64}(undef, b_terms)
+    C = eltype(endpoint.A.numerator)
+    a_coeffs = Vector{C}(undef, a_terms)
+    b_coeffs = Vector{C}(undef, b_terms)
     endpoint_ab_series!(a_coeffs, b_coeffs, endpoint, group, order)
     return a_coeffs, b_coeffs
 end
 
 # Taylor series of A and B from P/Q values already evaluated at the expansion point.
 function ordinary_ab_series!(
-    a_out::Vector{ComplexF64},
-    b_out::Vector{ComplexF64},
-    pq::Vector{ComplexF64},
+    a_out::AbstractVector{<:Complex},
+    b_out::AbstractVector{<:Complex},
+    pq::AbstractVector{<:Complex},
     s::Integer,
     order::Integer,
 )
@@ -537,9 +555,9 @@ end
 # rational functions when `metadata.horizon_shift` is set and the shift is
 # accepted, otherwise from the ordinary-point tables.
 function ordinary_ab_series!(
-    a_out::Vector{ComplexF64},
-    b_out::Vector{ComplexF64},
-    pq::Vector{ComplexF64},
+    a_out::AbstractVector{<:Complex},
+    b_out::AbstractVector{<:Complex},
+    pq::AbstractVector{<:Complex},
     coefficients::CoefficientSet,
     x0,
     order::Integer,
@@ -558,9 +576,10 @@ end
 # Allocating form of ordinary_ab_series!; returns (A series, B series, P/Q work vector).
 function ordinary_ab_series(coefficients::CoefficientSet, x0, order::Integer)
     a_terms, b_terms = ab_term_counts(:O, order)
-    pq = Vector{ComplexF64}(undef, coefficients.ordinary.value_count)
-    a_coeffs = Vector{ComplexF64}(undef, a_terms)
-    b_coeffs = Vector{ComplexF64}(undef, b_terms)
+    C = eltype(coefficients.ordinary.coefficients)
+    pq = Vector{C}(undef, coefficients.ordinary.value_count)
+    a_coeffs = Vector{C}(undef, a_terms)
+    b_coeffs = Vector{C}(undef, b_terms)
     ordinary_ab_series!(a_coeffs, b_coeffs, pq, coefficients, x0, order)
     return a_coeffs, b_coeffs, pq
 end
@@ -568,7 +587,7 @@ end
 # Taylor coefficients of a solution about an ordinary point from the A and B
 # series and the initial value c0 and slope c1.
 function ordinary_point_coeffs!(
-    coeffs::Vector{ComplexF64},
+    coeffs::AbstractVector{<:Complex},
     a_coeffs,
     b_coeffs,
     c0,
@@ -577,11 +596,12 @@ function ordinary_point_coeffs!(
 )
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("solution coefficient buffer is too short."))
-    coeffs[1] = ComplexF64(c0)
-    order >= 1 && (coeffs[2] = ComplexF64(c1))
+    C = eltype(coeffs)
+    coeffs[1] = convert(C, c0)
+    order >= 1 && (coeffs[2] = convert(C, c1))
     order < 2 && return coeffs
     @inbounds for n in 0:(order - 2)
-        numerator = 0.0 + 0.0im
+        numerator = zero(C)
         for j in 0:n
             numerator += a_coeffs[j + 1] * (n - j + 1) * coeffs[n - j + 2]
             numerator += b_coeffs[j + 1] * coeffs[n - j + 1]
@@ -596,14 +616,14 @@ end
 function endpoint_power_lookup(coeffs, first_power::Integer)
     return p -> begin
         idx = p - first_power + 1
-        1 <= idx <= length(coeffs) ? coeffs[idx] : 0.0 + 0.0im
+        1 <= idx <= length(coeffs) ? coeffs[idx] : zero(eltype(coeffs))
     end
 end
 
 # Horner evaluation of a polynomial, with first (and second) derivatives in the
 # _pair and _triple versions.
 function poly_value(coeffs, z)
-    isempty(coeffs) && return 0.0 + 0.0im
+    isempty(coeffs) && return zero(eltype(coeffs))
     value = coeffs[end]
     @inbounds for i in (length(coeffs) - 1):-1:1
         value = value * z + coeffs[i]
@@ -613,10 +633,11 @@ end
 
 function poly_pair(coeffs, z)
     n = length(coeffs) - 1
-    n < 0 && return 0.0 + 0.0im, 0.0 + 0.0im
-    n == 0 && return coeffs[1], 0.0 + 0.0im
+    C = eltype(coeffs)
+    n < 0 && return zero(C), zero(C)
+    n == 0 && return coeffs[1], zero(C)
     value = coeffs[n + 1]
-    derivative = 0.0 + 0.0im
+    derivative = zero(C)
     @inbounds for i in n:-1:1
         derivative = derivative * z + value
         value = value * z + coeffs[i]
@@ -626,11 +647,12 @@ end
 
 function poly_triple(coeffs, z)
     n = length(coeffs) - 1
-    n < 0 && return 0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im
-    n == 0 && return coeffs[1], 0.0 + 0.0im, 0.0 + 0.0im
+    C = eltype(coeffs)
+    n < 0 && return zero(C), zero(C), zero(C)
+    n == 0 && return coeffs[1], zero(C), zero(C)
     value = coeffs[n + 1]
-    derivative = 0.0 + 0.0im
-    second = 0.0 + 0.0im
+    derivative = zero(C)
+    second = zero(C)
     @inbounds for i in n:-1:1
         second = second * z + 2 * derivative
         derivative = derivative * z + value

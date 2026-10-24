@@ -51,6 +51,7 @@ using ..Parameters:
     gsn_controls,
     gsn_parameters,
     horizon_tail,
+    is_binary64_parameters,
     select_spin_regime
 
 export Route, ConjugatedRoute, RoutePlan
@@ -156,6 +157,13 @@ struct RoutePlan
     infinity_patches::Int
     angular_compression::Float64
     phase_compression::Float64
+end
+
+# The arbitrary-precision route lives in a sibling module included after this one; it is looked
+# up at call time.
+function _arbitrary_precision_route(params::GSNParameters, branch; kwargs...)
+    module_ = getfield(parentmodule(@__MODULE__), :ArbitraryPrecisionRoute)
+    return module_.arbitrary_precision_route(params, branch; kwargs...)
 end
 
 function _normalized_route_branch(branch)
@@ -1339,6 +1347,13 @@ function radial_route(
     kwargs...,
 )
     params = gsn_parameters(s, l, m, a, omega; lambda=lambda, nu=nu)
+    # Inputs beyond binary64 take the arbitrary-precision series route (ArbitraryPrecisionRoute.jl),
+    # which honours N, xm and tol and chooses its own orders and seeds from the precision.
+    if !is_binary64_parameters(params)
+        return _arbitrary_precision_route(params, branch;
+            N=get(kwargs, :N, nothing), xm=get(kwargs, :xm, nothing),
+            tol=get(kwargs, :tol, nothing), controls=controls)
+    end
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     if isreal(params.omega) && params.omega < 0
         positive_params = GSNParameters(
@@ -1371,6 +1386,11 @@ function radial_route(
     coefficients=nothing,
     kwargs...,
 )
+    if !is_binary64_parameters(params)
+        return _arbitrary_precision_route(params, branch;
+            N=get(kwargs, :N, nothing), xm=get(kwargs, :xm, nothing),
+            tol=get(kwargs, :tol, nothing), controls=controls)
+    end
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     coeffs = coefficients === nothing ? gsn_coefficients(params; controls=ctrl) : coefficients
     return match_route(coeffs, branch; controls=ctrl)

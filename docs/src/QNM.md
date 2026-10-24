@@ -357,6 +357,39 @@ B^{\mathrm{T}}_{\ell m\omega_q}
 To compare it with a reference defined with $2\omega_q$ in place of
 $2i\omega_q$, divide the reference value by $i$.
 
+## Arbitrary precision
+
+`QNM.qnm_arbitrary_precision(a, s, l, m, n; bits=256)` polishes the binary64 Leaver root of
+`qnm_frequency` to `bits` bits by the secant method on the GSN incidence amplitude of the
+arbitrary-precision ISEM route (complex frequency, MST infinity side; see
+[Arbitrary precision](arbitrary_precision.md)), and returns the root together with the frequency
+derivative of the incidence amplitude at the root, `incidence_derivative` in the GSN normalization
+(`dB_inc/domega`, the quantity the excitation factors use) and `incidence_derivative_teukolsky`
+(`Binc/Btrans(omega_n)` times it, the Teukolsky-normalized derivative). The derivative is a
+fourth-order central difference evaluated at a raised working precision. `residual` is
+`|B_inc(omega)|` at the returned root; dividing it by `|incidence_derivative|` bounds the root error.
+
+```julia
+r = QNM.qnm_arbitrary_precision(2 // 5, -2, 2, 2, 0; bits=128)   # a = 2/5 exactly; 0.4 would be the binary double
+r.omega                          # 0.43984192173538717348945862919377... - 0.08688196202939836340751756727816...im
+r.incidence_derivative_teukolsky # dA_inc/domega at the root
+```
+
+Against 22 independently computed roots of the s = -2, (2, 2) modes at `a = 2/5` and `9/10`
+(n = 0..9 and the second n = 8 root; each obtained on another machine by the MST incidence zero of
+the QNM paclet at 120 digits and by a Leaver continued fraction at 100 digits, agreeing to 80-89
+digits, with the Teukolsky incidence derivative by central differences certified to 38-45 digits;
+`test/arbitrary_precision/qnm_runtests.jl`), the polished frequencies agree to 30.7-34.8 digits at
+113 bits and the derivatives to 29.0-33.3; at 256 bits the two quick cases agree to 74.8-77.0 digits
+on the frequency and 53-57 on the derivative, beyond the reference's own certification. A polish
+costs 5-15 s at 113 bits and 13-35 s at 256 bits; `type=Double64` (DoubleFloats.jl) polishes in that
+fixed-precision type to about 30 digits in a similar time (the complex-frequency routes keep their MST
+data in BigFloat). Near the root the incidence amplitude vanishes by
+nature, so the route is built in its root-search mode (the cancellation of the incidence numerator
+is not counted as a loss) and the secant estimates its own root error, |B_ref| tol / |dB_inc/domega|,
+tightening the route tolerance when that exceeds the requested one. Frequencies with negative real
+part are handled through the mirror mode, so both branches can be polished.
+
 ## Result types
 
 `qnm` returns one of four types:

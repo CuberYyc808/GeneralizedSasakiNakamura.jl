@@ -13,6 +13,7 @@ makedocs(
         "Home" => "index.md",
         "Examples" => "examples.md",
         "Quasinormal modes" => "QNM.md",
+        "Arbitrary precision" => "arbitrary_precision.md",
         "API Reference" => "APIs.md",
     ],
     checkdocs = :none,

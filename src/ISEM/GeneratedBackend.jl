@@ -127,9 +127,9 @@ function _split_starts(layout::_PQLayout)
     return ap, aq, bp, bq
 end
 
-_view_range(values::Vector{ComplexF64}, start::Int, len::Int) = @view values[start:(start + len - 1)]
+_view_range(values::AbstractVector, start::Int, len::Int) = @view values[start:(start + len - 1)]
 
-function _split_endpoint(values::Vector{ComplexF64}, s::Integer, group::Symbol, basis::Symbol)
+function _split_endpoint(values::AbstractVector, s::Integer, group::Symbol, basis::Symbol)
     layout = _layout_for(s, group)
     ap, aq, bp, bq = _split_starts(layout)
     A = RationalCoefficients(
@@ -156,7 +156,7 @@ end
 
 # Resolve the ordinary-point basis: :auto uses :ys for |a| = |sin(nu)| <= 1e-3
 # and :yc otherwise.
-function _ordinary_basis(nu::Float64, requested::Symbol)
+function _ordinary_basis(nu::Real, requested::Symbol)
     requested in (:auto, :stable_default) && return abs(sin(nu)) <= 1e-3 ? :ys : :yc
     requested in (:yc, :ys) && return requested
     throw(ArgumentError("available ordinary generated bases are :auto, :yc, and :ys."))
@@ -176,33 +176,46 @@ function _ordinary_module_symbol(s::Integer, basis::Symbol)
 end
 
 # Each generated table is looked up by name (a dynamic call), so a solve
-# compiles only the tables for its spin and basis. Callers convert the arguments
-# to ComplexF64/Float64 before the call, so real and complex frequencies share
-# one compiled method per table.
+# compiles only the tables for its spin and basis. The arguments are converted
+# to the table element type before the call (ComplexF64/Float64 for binary64
+# inputs, so real and complex frequencies share one compiled method per table;
+# the promoted wide type otherwise), and the result is asserted to that type.
 _generated_function(name::Symbol, table::Symbol) =
     getfield(getfield(@__MODULE__, table), name)
+
+# Complex element type of the generated tables for these inputs.
+@inline function _table_eltype(lambda, nu, omega)
+    return promote_type(typeof(complex(float(lambda))), typeof(complex(float(omega))),
+        typeof(complex(float(nu))))
+end
+
+@inline function _table_arguments(lambda, m, nu, omega)
+    CT = _table_eltype(lambda, nu, omega)
+    RT = real(CT)
+    return CT(lambda), RT(m), RT(nu), CT(omega), CT
+end
 
 function _endpoint_values(s::Integer, group::Symbol, lambda, m, nu, omega)
     construct = _generated_function(
         :construct_gsn_endpoint_basis, _endpoint_module_symbol(s, group))
-    return construct(ComplexF64(lambda), Float64(m), Float64(nu),
-        ComplexF64(omega))::Vector{ComplexF64}
+    lambda_t, m_t, nu_t, omega_t, CT = _table_arguments(lambda, m, nu, omega)
+    return construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT}
 end
 
 function _ordinary_coefficients_and_eval(s::Integer, basis::Symbol, lambda, m, nu, omega)
     table = _ordinary_module_symbol(s, basis)
     construct = _generated_function(:construct_gsn_basis, table)
     value_count = _generated_function(:ordinary_value_count, table)
+    lambda_t, m_t, nu_t, omega_t, CT = _table_arguments(lambda, m, nu, omega)
     return (
-        construct(ComplexF64(lambda), Float64(m), Float64(nu),
-            ComplexF64(omega))::Vector{ComplexF64},
+        construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT},
         value_count()::Int,
         _generated_function(:eval_gsn_basis!, table),
         _generated_function(:eval_gsn_basis_variable!, table),
     )
 end
 
-function _ordinary_evaluator(s::Integer, lambda, m, nu::Float64, omega, basis::Symbol, requires_latest_world::Bool)
+function _ordinary_evaluator(s::Integer, lambda, m, nu::Real, omega, basis::Symbol, requires_latest_world::Bool)
     coeffs, count, eval!, eval_variable! =
         _ordinary_coefficients_and_eval(s, basis, lambda, m, nu, omega)
     return OrdinaryCoefficientEvaluator(
@@ -221,7 +234,7 @@ function _control_ordinary_basis(controls)
 end
 
 function _construct_coefficients(params, s::Integer, lambda, m, nu, omega; controls=nothing)
-    ordinary_basis = _ordinary_basis(Float64(nu), _control_ordinary_basis(controls))
+    ordinary_basis = _ordinary_basis(float(nu), _control_ordinary_basis(controls))
     _ensure_generated_loaded!(s, ordinary_basis)
     return _construct_coefficients_loaded(params, s, lambda, m, nu, omega, controls, ordinary_basis, false)
 end
@@ -238,7 +251,7 @@ function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega
 
     h_values = _endpoint_values(s, :H, lambda, m, nu, omega)
     i_values = _endpoint_values(s, :I, lambda, m, nu, omega)
-    ordinary = _ordinary_evaluator(s, lambda, m, Float64(nu), omega, ordinary_basis, requires_latest_world)
+    ordinary = _ordinary_evaluator(s, lambda, m, float(nu), omega, ordinary_basis, requires_latest_world)
     metadata = (
         source=:generated_default,
         horizon_basis=:hc,
@@ -275,14 +288,15 @@ function generated_coefficients(params::GSNParameters; controls=nothing)
 end
 
 function generated_coefficients(s::Integer, lambda, m, nu, omega; controls=nothing)
+    lambda_t, _, nu_t, omega_t, _ = _table_arguments(lambda, m, nu, omega)
     params = (
         s=Int(s),
-        lambda=ComplexF64(lambda),
+        lambda=lambda_t,
         m=Int(m),
-        nu=Float64(nu),
-        omega=ComplexF64(omega),
+        nu=nu_t,
+        omega=omega_t,
     )
-    return _construct_coefficients(params, s, lambda, m, Float64(nu), omega; controls=controls)
+    return _construct_coefficients(params, s, lambda, m, nu_t, omega; controls=controls)
 end
 
 end

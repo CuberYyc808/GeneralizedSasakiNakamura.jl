@@ -42,17 +42,23 @@ const SWSH_LAPACK = LinearAlgebra.LAPACK.liblapack
 supported_spin_weight(s::Integer) = s in (-2, -1, 0, 1, 2)
 
 # Mode parameters in units M = 1, with a = sin(nu) and kappa = cos(nu) = sqrt(1 - a^2).
-# omega and lambda are Float64 for real frequencies and ComplexF64 otherwise.
-struct GSNParameters{T<:Number}
+# R is the real floating type of the inputs (Float64 for binary64 inputs, BigFloat for
+# arbitrary-precision ones); omega and lambda are R for real frequencies and Complex{R} otherwise.
+struct GSNParameters{R<:Real,T<:Number}
     s::Int
     l::Int
     m::Int
-    a::Float64
+    a::R
     omega::T
     lambda::T
-    nu::Float64
-    kappa::Float64
+    nu::R
+    kappa::R
 end
+
+# Whether the mode parameters are binary64 (the Float64 ISEM routes) or wider.
+is_binary64_parameters(::GSNParameters{Float64}) = true
+is_binary64_parameters(::GSNParameters) = false
+export is_binary64_parameters
 
 # Outcome of the small/large-frequency regime selection, with the features it used.
 struct FrequencySelection
@@ -348,6 +354,11 @@ _swsh_eigenvalue_float(s::Int, l::Int, m::Int, c::Float64) =
 # (complex omega); nu, if given, must satisfy sin(nu) = a.
 function gsn_parameters(s::Integer, l::Integer, m::Integer, a, omega; lambda=nothing, nu=nothing)
     ss, ll, mm = _checked_spin(s, l, m)
+    if !(_binary64_compatible(a) && _binary64_compatible(omega) &&
+            (lambda === nothing || _binary64_compatible(lambda)) &&
+            (nu === nothing || _binary64_compatible(nu)))
+        return _wide_gsn_parameters(ss, ll, mm, a, omega; lambda=lambda, nu=nu)
+    end
     a_float = _real_float("a", a)
     _require_binary64_input("omega", omega)
     omega_complex = ComplexF64(omega)
@@ -391,6 +402,59 @@ function gsn_parameters(s::Integer, l::Integer, m::Integer, a, omega; lambda=not
 
     return GSNParameters(
         ss, ll, mm, a_float, omega_complex, lambda_complex, nu_float, kappa)
+end
+
+# GSNParameters beyond binary64 (the arbitrary-precision ISEM route): a, omega and lambda are
+# promoted to their common floating type R (e.g. BigFloat), kappa and nu are computed in R, and a
+# missing lambda is taken from SpinWeightedSpheroidalHarmonics at that precision. A binary64 value
+# among the inputs is used exactly (0.4 means the binary double, BigFloat("0.4") means 4/10).
+function _wide_gsn_parameters(ss::Int, ll::Int, mm::Int, a, omega; lambda=nothing, nu=nothing)
+    isreal(a) || throw(ArgumentError("a must be real."))
+    R = promote_type(
+        typeof(float(real(a))),
+        typeof(float(real(omega))), typeof(float(imag(omega))),
+        lambda === nothing ? Float64 :
+            promote_type(typeof(float(real(lambda))), typeof(float(imag(lambda)))))
+    a_r = R(real(a))
+    isfinite(a_r) && abs(a_r) < 1 || throw(ArgumentError("ISEM GSN requires abs(a) < 1."))
+    kappa = sqrt((one(R) - a_r) * (one(R) + a_r))
+    kappa > 0 || throw(ArgumentError("ISEM GSN requires a non-extremal positive kappa."))
+    nu_r = if nu === nothing
+        atan(a_r, kappa)
+    else
+        isreal(nu) || throw(ArgumentError("nu must be real."))
+        value = R(real(nu))
+        isapprox(sin(value), a_r; atol=100eps(R), rtol=100eps(R)) ||
+            throw(ArgumentError("provided nu is inconsistent with a = sin(nu)."))
+        value
+    end
+    omega_c = Complex{R}(omega)
+    isfinite(real(omega_c)) && isfinite(imag(omega_c)) ||
+        throw(ArgumentError("omega must be finite."))
+
+    if iszero(imag(omega_c))
+        omega_r = real(omega_c)
+        lambda_r = if lambda === nothing
+            R(real(SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(
+                ss, ll, mm, a_r * omega_r)))
+        else
+            iszero(imag(lambda)) ||
+                throw(ArgumentError("lambda must be real for a real frequency."))
+            R(real(lambda))
+        end
+        isfinite(lambda_r) || throw(ArgumentError("lambda must be finite."))
+        return GSNParameters(ss, ll, mm, a_r, omega_r, lambda_r, nu_r, kappa)
+    end
+
+    lambda_c = if lambda === nothing
+        Complex{R}(SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(
+            ss, ll, mm, a_r * omega_c))
+    else
+        Complex{R}(lambda)
+    end
+    isfinite(real(lambda_c)) && isfinite(imag(lambda_c)) ||
+        throw(ArgumentError("lambda must be finite."))
+    return GSNParameters(ss, ll, mm, a_r, omega_c, lambda_c, nu_r, kappa)
 end
 
 # Real-frequency large-phase test used by large_frequency_expansion = :auto.
