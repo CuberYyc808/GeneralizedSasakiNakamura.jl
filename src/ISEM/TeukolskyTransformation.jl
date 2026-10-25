@@ -118,7 +118,7 @@ function _P_to_GSN_coeffs_sminus2(a, omega, m, lambda, r)
     return A0, A1, B0, B1
 end
 
-function P_to_GSN_coefficients_from_matrix(teukolsky_from_gsn_matrix, s, m, a, omega, lambda; coefficient_precision = nothing)
+function P_to_GSN_coefficients_from_matrix(teukolsky_from_gsn_matrix, s, m, a, omega, lambda)
     if !_is_complex_frequency(omega)
         kappa = sqrt(1 - a^2)
         epsilon = 2 * omega
@@ -130,32 +130,6 @@ function P_to_GSN_coefficients_from_matrix(teukolsky_from_gsn_matrix, s, m, a, o
             Tval = Tfun(x_of_r(r))
             A0, A1, B0, B1 = _P_to_GSN_coefficients_kerr(s, m, a, omega, lambda, r)
             return Tval * A0, Tval * A1, Tval * B0, Tval * B1
-        end
-    end
-
-    if coefficient_precision !== nothing
-        return r -> setprecision(coefficient_precision) do
-            rb = big(r)
-            ab = big(a)
-            omegab = big(omega)
-            lambdab = big(lambda)
-            kappa = sqrt(1 - ab^2)
-            epsilon = 2 * omegab
-            tau = (epsilon - m * ab) / kappa
-            Tfun, _, TpTfun = Tx(s, epsilon, kappa, tau)
-            x = r_to_x(rb, kappa)
-            Tval = Tfun(x)
-            Xi = TpTfun(x)
-            M = teukolsky_from_gsn_matrix(rb)
-            M11, M12, M21, M22 = M[1, 1], M[1, 2], M[2, 1], M[2, 2]
-            detM = M11 * M22 - M12 * M21
-            half_kappa_inv = inv(2 * kappa)
-
-            A0 = Tval * (M22 + M12 * Xi * half_kappa_inv) / detM
-            A1 = Tval * M12 * half_kappa_inv / detM
-            B0 = Tval * (-M21 - M11 * Xi * half_kappa_inv) / detM
-            B1 = -Tval * M11 * half_kappa_inv / detM
-            return ComplexF64(A0), ComplexF64(A1), ComplexF64(B0), ComplexF64(B1)
         end
     end
 
@@ -203,19 +177,19 @@ function _GSN_to_Y_coeffs_minus2_in(m, a, omega, lambda)
     end
 end
 
-function GSN_to_Y_coeffs_minus2_in(_teukolsky_from_gsn_matrix, m, a, omega, lambda, _Btrans; coefficient_precision = nothing)
+function GSN_to_Y_coeffs_minus2_in(_teukolsky_from_gsn_matrix, m, a, omega, lambda, _Btrans)
     return _GSN_to_Y_coeffs_minus2_in(m, a, omega, lambda)
 end
 
-function GSN_to_Y_coeffs_plus2_up(_teukolsky_from_gsn_matrix, m, a, omega, lambda, _Ctrans; coefficient_precision = nothing)
+function GSN_to_Y_coeffs_plus2_up(_teukolsky_from_gsn_matrix, m, a, omega, lambda, _Ctrans)
     return _GSN_to_Y_coeffs_plus2_up(m, a, omega, lambda)
 end
 
-function GSN_to_Y_solution_from_matrix(rstar_from_r, teukolsky_from_gsn_matrix, gsn_solution, s, m, a, omega, lambda, branch_transmission_amplitude; coefficient_precision = nothing)
+function GSN_to_Y_solution_from_matrix(rstar_from_r, teukolsky_from_gsn_matrix, gsn_solution, s, m, a, omega, lambda, branch_transmission_amplitude)
     if s == -2
-        coeffs = GSN_to_Y_coeffs_minus2_in(teukolsky_from_gsn_matrix, m, a, omega, lambda, branch_transmission_amplitude; coefficient_precision = coefficient_precision)
+        coeffs = GSN_to_Y_coeffs_minus2_in(teukolsky_from_gsn_matrix, m, a, omega, lambda, branch_transmission_amplitude)
     elseif s == 2
-        coeffs = GSN_to_Y_coeffs_plus2_up(teukolsky_from_gsn_matrix, m, a, omega, lambda, branch_transmission_amplitude; coefficient_precision = coefficient_precision)
+        coeffs = GSN_to_Y_coeffs_plus2_up(teukolsky_from_gsn_matrix, m, a, omega, lambda, branch_transmission_amplitude)
     else
         error("GSN_to_Y_solution_from_matrix supports only s = -2 and s = +2.")
     end
