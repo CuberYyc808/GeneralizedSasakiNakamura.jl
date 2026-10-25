@@ -3131,15 +3131,6 @@ function _dd_gamma(n::Int, p::ManoSuzukiTakasugiParams, offset::DDComplex)
     return dc_div(numerator, denominator)
 end
 
-@inline _negative_imaginary_axis_alpha_dd(n::Int, p::ManoSuzukiTakasugiParams) =
-    _dd_alpha(n, p, DDComplex(p.nu_offset))
-
-@inline _negative_imaginary_axis_beta_dd(n::Int, p::ManoSuzukiTakasugiParams) =
-    _dd_beta(n, p, DDComplex(p.nu_offset))
-
-@inline _negative_imaginary_axis_gamma_dd(n::Int, p::ManoSuzukiTakasugiParams) =
-    _dd_gamma(n, p, DDComplex(p.nu_offset))
-
 # Sum over |n| <= nmax of a_n (-1)^n (nu+1+s-i epsilon)_n / (nu+1-s+i epsilon)_n.
 function _negative_imaginary_axis_aminus_sum(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
     p = data.params
@@ -3151,8 +3142,9 @@ function _negative_imaginary_axis_aminus_sum(data::ManoSuzukiTakasugiSeriesData,
     end
 end
 
-# ManoSuzukiTakasugiSeriesData with a_n for |n| <= MANO_SUZUKI_TAKASUGI_N_MAX from double-double backward recurrences
-# started at +-cutoff.
+# ManoSuzukiTakasugiSeriesData with a_n for |n| <= MANO_SUZUKI_TAKASUGI_N_MAX from binary64 backward recurrences
+# started at +-cutoff (beta_n where its terms cancel from _beta_cancellation_free); on the negative side the rows
+# -l <= n < 0, where nu + n = 0, -1 cancel in pairs, are taken from ln_cf, which eliminates them together.
 function _negative_imaginary_axis_series_data(params::ManoSuzukiTakasugiParams, cutoff::Int)
     cutoff >= MANO_SUZUKI_TAKASUGI_N_MAX ||
         throw(ArgumentError(
@@ -3160,42 +3152,33 @@ function _negative_imaginary_axis_series_data(params::ManoSuzukiTakasugiParams, 
     positive = Vector{ComplexF64}(undef, MANO_SUZUKI_TAKASUGI_N_MAX)
     negative = Vector{ComplexF64}(undef, MANO_SUZUKI_TAKASUGI_N_MAX)
 
-    ratio = DDComplex(0)
+    ratio = zero(ComplexF64)
     for n in cutoff:-1:1
-        denominator = dc_add(
-            _negative_imaginary_axis_beta_dd(n, params),
-            dc_mul(_negative_imaginary_axis_alpha_dd(n, params), ratio),
-        )
-        denominator_value = dc_value(denominator)
-        _finite_complex(denominator_value) && !iszero(denominator_value) ||
+        denominator = beta_mano_suzuki_takasugi(n, params) + alpha_mano_suzuki_takasugi(n, params) * ratio
+        _finite_complex(denominator) && !iszero(denominator) ||
             throw(ManoSuzukiTakasugiCertificateError(
                 :nia_positive_tail,
                 "nonfinite MST NIA positive-tail denominator at n=$n.",
             ))
-        ratio = dc_div(
-            dc_neg(_negative_imaginary_axis_gamma_dd(n, params)),
-            denominator,
-        )
-        n <= MANO_SUZUKI_TAKASUGI_N_MAX && (positive[n] = ComplexF64(dc_value(ratio)))
+        ratio = -gamma_mano_suzuki_takasugi(n, params) / denominator
+        n <= MANO_SUZUKI_TAKASUGI_N_MAX && (positive[n] = ratio)
     end
 
-    ratio = DDComplex(0)
+    paired_start = -params.l
+    ratio = zero(ComplexF64)
     for n in (-cutoff):-1
-        denominator = dc_add(
-            _negative_imaginary_axis_beta_dd(n, params),
-            dc_mul(_negative_imaginary_axis_gamma_dd(n, params), ratio),
-        )
-        denominator_value = dc_value(denominator)
-        _finite_complex(denominator_value) && !iszero(denominator_value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :nia_negative_tail,
-                "nonfinite MST NIA negative-tail denominator at n=$n.",
-            ))
-        ratio = dc_div(
-            dc_neg(_negative_imaginary_axis_alpha_dd(n, params)),
-            denominator,
-        )
-        n >= -MANO_SUZUKI_TAKASUGI_N_MAX && (negative[-n] = ComplexF64(dc_value(ratio)))
+        if n >= paired_start
+            ratio = ln_cf(n, params).value
+        else
+            denominator = beta_mano_suzuki_takasugi(n, params) + gamma_mano_suzuki_takasugi(n, params) * ratio
+            _finite_complex(denominator) && !iszero(denominator) ||
+                throw(ManoSuzukiTakasugiCertificateError(
+                    :nia_negative_tail,
+                    "nonfinite MST NIA negative-tail denominator at n=$n.",
+                ))
+            ratio = -alpha_mano_suzuki_takasugi(n, params) / denominator
+        end
+        n >= -MANO_SUZUKI_TAKASUGI_N_MAX && (negative[-n] = ratio)
     end
 
     data = ManoSuzukiTakasugiSeriesData(params)
