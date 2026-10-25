@@ -25,6 +25,17 @@ const QNM_CLOUD_ROOTS = [
     (id = "Q_a09_m2_n0", s = -2, l = 2, m = 2, a = 0.9, n = 0, omega = complex(0.6716142721321627, -0.06486923587579592), digits = 51.3),
     (id = "Q_a09_m2_n5", s = -2, l = 2, m = 2, a = 0.9, n = 5, omega = complex(0.5369167208360969, -0.7487234629285244), digits = 51.9),
 ]
+# NEAR_AS_ROOTS: s=-2, l=2, m=2 roots near the algebraically special frequency at small spin (20 digits kept).
+# n = 8 is 8_0: 50-digit mpmath MST (mech_mst_nearas_reference.py). n = 9 with convention = :complete_spectrum is
+# Cook's 8_1: 40-45 digit mpmath Leaver CF. The two methods agree to ~1e-19 on 8_0.
+const NEAR_AS_ROOTS = [
+    (n = 8, a = 0.005, omega = 0.002836867782360958707 - 1.956898507366191726im),
+    (n = 8, a = 0.01, omega = 0.01143995444869656444 - 1.940488126125013368im),
+    (n = 8, a = 0.0149, omega = 0.01912754365081143762 - 1.929098056888634081im),
+    (n = 9, a = 0.0075, omega = 0.003538248431590035587 - 2.049529018988425436im),
+    (n = 9, a = 0.01, omega = 0.007612072129160592490 - 2.056210038508748211im),
+    (n = 9, a = 0.0149, omega = 0.015438224687413753933 - 2.065979642110753136im),
+]
 # SCHWARZSCHILD_SCAN: independent s=-2, l=2 Leaver roots at dps 25, index = Leaver inversion n.
 # Entries with Re < 0 are the mirror roots of the same overtone; the ordinary root is -conj(omega).
 # Index 8 is the near-AS 'unconventional' root.

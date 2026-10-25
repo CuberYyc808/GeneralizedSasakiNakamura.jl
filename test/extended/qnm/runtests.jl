@@ -66,6 +66,17 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Near-AS roots at small spin (binary64 split K sums in the MST amplitudes) against 50-digit references.
+# ---------------------------------------------------------------------------------------------------
+@testset "near-AS roots at small spin" begin
+    for q in NEAR_AS_ROOTS
+        result = qnm_frequency(QNMMode(-2, 2, 2, q.n), q.a; convention=:complete_spectrum)
+        @test result.status == :accepted
+        @test abs(result.omega - q.omega) <= 1e-13 * abs(q.omega)
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Published tables: Forteza & Mourier (10 digits; atol 2e-10) and Cook's Zenodo catalogue (atol 5e-9).
 # Labels follow Python qnm and Cook: Forteza's ordinary (2,2) n = 9 is Cook's 8_1, taken as n = 9 with convention = :complete_spectrum;
 # Cook's ordinary (2,2) label 19 is the package's overtone 19. A is Leaver's angular separation constant

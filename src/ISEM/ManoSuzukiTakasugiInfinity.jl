@@ -44,82 +44,6 @@ Base.showerror(io::IO, err::ManoSuzukiTakasugiCertificateError) = print(io, err.
 export alpha_mano_suzuki_takasugi, beta_mano_suzuki_takasugi, gamma_mano_suzuki_takasugi
 export rn_cf, ln_cf, mano_suzuki_takasugi_guess, mano_suzuki_takasugi_nu, mano_suzuki_takasugi_nu_complex
 
-# Double-double complex arithmetic for _refined_amplitudes and its helpers (explicit backend = :mst only);
-# binary64 replacement pending: QNM near-AS n = 8, |a| < 0.015.
-struct DDComplex
-    high::ComplexF64
-    low::ComplexF64
-end
-
-DDComplex(value::Number) = DDComplex(ComplexF64(value), 0.0 + 0.0im)
-
-# Error-free sum (Knuth TwoSum): value + error == left + right exactly.
-@inline function two_sum(left::Float64, right::Float64)
-    value = left + right
-    right_virtual = value - left
-    error = (left - (value - right_virtual)) + (right - right_virtual)
-    return value, error
-end
-
-@inline function dc_normalize(high::ComplexF64, low::ComplexF64)
-    real_high, real_low = two_sum(real(high), real(low))
-    imag_high, imag_low = two_sum(imag(high), imag(low))
-    return DDComplex(
-        ComplexF64(real_high, imag_high),
-        ComplexF64(real_low, imag_low),
-    )
-end
-
-@inline function dc_add(left::DDComplex, right::DDComplex)
-    real_high, real_error = two_sum(real(left.high), real(right.high))
-    imag_high, imag_error = two_sum(imag(left.high), imag(right.high))
-    low = left.low + right.low + ComplexF64(real_error, imag_error)
-    return dc_normalize(ComplexF64(real_high, imag_high), low)
-end
-
-@inline dc_neg(value::DDComplex) = DDComplex(-value.high, -value.low)
-@inline dc_sub(left::DDComplex, right::DDComplex) =
-    dc_add(left, dc_neg(right))
-@inline dc_imul(value::DDComplex) = DDComplex(
-    ComplexF64(-imag(value.high), real(value.high)),
-    ComplexF64(-imag(value.low), real(value.low)),
-)
-
-# Complex product with its rounding error, using fma for the partial products.
-@inline function complex_product(left::ComplexF64, right::ComplexF64)
-    rr = real(left) * real(right)
-    ii = imag(left) * imag(right)
-    ri = real(left) * imag(right)
-    ir = imag(left) * real(right)
-    real_high, real_sum_error = two_sum(rr, -ii)
-    imag_high, imag_sum_error = two_sum(ri, ir)
-    real_error = fma(real(left), real(right), -rr) -
-        fma(imag(left), imag(right), -ii) + real_sum_error
-    imag_error = fma(real(left), imag(right), -ri) +
-        fma(imag(left), real(right), -ir) + imag_sum_error
-    return ComplexF64(real_high, imag_high),
-        ComplexF64(real_error, imag_error)
-end
-
-@inline function dc_mul(left::DDComplex, right::DDComplex)
-    high, error = complex_product(left.high, right.high)
-    low = error + left.high * right.low + left.low * right.high
-    return dc_normalize(high, low)
-end
-
-# Double-double division: binary64 quotient refined by two residual corrections.
-@inline function dc_div(numerator::DDComplex, denominator::DDComplex)
-    quotient = DDComplex(numerator.high / denominator.high)
-    for _ in 1:2
-        residual = dc_sub(numerator, dc_mul(denominator, quotient))
-        quotient = dc_add(quotient,
-            DDComplex(residual.high / denominator.high))
-    end
-    return quotient
-end
-
-@inline dc_value(value::DDComplex) = value.high + value.low
-
 const I = 1im
 const CF_MAX = 200
 const CF_SMALL = 1.0e-50
@@ -3102,102 +3026,6 @@ function _negative_imaginary_axis_full_logsum(logtermfun, nmax::Int)
     )
 end
 
-# Double-double l + n + shift + offset and 2(l + n) + shift + 2 offset.
-@inline _dd_factor(
-    p::ManoSuzukiTakasugiParams,
-    offset::DDComplex,
-    n::Int,
-    shift::Int=0,
-) =
-    dc_add(
-        DDComplex(Float64(p.l + n + shift)),
-        offset,
-    )
-
-@inline _dd_twice(
-    p::ManoSuzukiTakasugiParams,
-    offset::DDComplex,
-    n::Int,
-    shift::Int=0,
-) =
-    dc_add(
-        DDComplex(Float64(2 * (p.l + n) + shift)),
-        dc_add(offset, offset),
-    )
-
-# Double-double alpha_n, beta_n and gamma_n of the MST recurrence at nu = l + offset.
-function _dd_alpha(n::Int, p::ManoSuzukiTakasugiParams, offset::DDComplex)
-    epsc = DDComplex(p.epsilon)
-    kappa = DDComplex(p.kappa)
-    tau = DDComplex(p.tau)
-    npnu1 = _dd_factor(p, offset, n, 1)
-    spin_factor = _dd_factor(p, offset, n, 1 + p.s)
-    ieps = dc_imul(epsc)
-    numerator = dc_mul(
-        dc_mul(
-            dc_mul(dc_imul(dc_mul(epsc, kappa)),
-                dc_add(spin_factor, ieps)),
-            dc_sub(spin_factor, ieps),
-        ),
-        dc_add(npnu1, dc_imul(tau)),
-    )
-    denominator = dc_mul(
-        npnu1,
-        _dd_twice(p, offset, n, 3),
-    )
-    return dc_div(numerator, denominator)
-end
-
-function _dd_beta(n::Int, p::ManoSuzukiTakasugiParams, offset::DDComplex)
-    epsc = DDComplex(p.epsilon)
-    tau = DDComplex(p.tau)
-    product = dc_mul(
-        _dd_factor(p, offset, n),
-        _dd_factor(p, offset, n, 1),
-    )
-    eps2 = dc_mul(epsc, epsc)
-    eps_kappa_tau = dc_mul(
-        dc_mul(epsc, DDComplex(p.kappa)),
-        tau,
-    )
-    degree = p.l + n
-    angular = dc_add(
-        dc_sub(DDComplex(degree*(degree+1)-p.s*(p.s+1)), DDComplex(p.lambda)),
-        dc_mul(offset, dc_add(DDComplex(2degree+1), offset)),
-    )
-    base = dc_add(angular, dc_add(eps2, eps_kappa_tau))
-    correction = dc_div(
-        dc_mul(
-            eps_kappa_tau,
-            dc_add(DDComplex(p.s * p.s), eps2),
-        ),
-        product,
-    )
-    return dc_add(base, correction)
-end
-
-function _dd_gamma(n::Int, p::ManoSuzukiTakasugiParams, offset::DDComplex)
-    epsc = DDComplex(p.epsilon)
-    kappa = DDComplex(p.kappa)
-    tau = DDComplex(p.tau)
-    npnu = _dd_factor(p, offset, n)
-    spin_factor = _dd_factor(p, offset, n, -p.s)
-    ieps = dc_imul(epsc)
-    numerator = dc_mul(
-        dc_mul(
-            dc_mul(dc_neg(dc_imul(dc_mul(epsc, kappa))),
-                dc_add(spin_factor, ieps)),
-            dc_sub(spin_factor, ieps),
-        ),
-        dc_sub(npnu, dc_imul(tau)),
-    )
-    denominator = dc_mul(
-        npnu,
-        _dd_twice(p, offset, n, -1),
-    )
-    return dc_div(numerator, denominator)
-end
-
 # Sum over |n| <= nmax of a_n (-1)^n (nu+1+s-i epsilon)_n / (nu+1-s+i epsilon)_n.
 function _negative_imaginary_axis_aminus_sum(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
     p = data.params
@@ -3302,437 +3130,6 @@ const MANO_SUZUKI_TAKASUGI_AMP_SPREAD_MAX = 1.0e-8
 const MANO_SUZUKI_TAKASUGI_AMP_NEAREST_MAX = 1.0e-9
 const MANO_SUZUKI_TAKASUGI_AMP_TRUNCATION_MAX = 1.0e-10
 const MANO_SUZUKI_TAKASUGI_AMP_CONDITION_MAX = 1.0e7
-const MANO_SUZUKI_TAKASUGI_DD_NU_RESIDUAL_MAX = 1.0e-24
-const MANO_SUZUKI_TAKASUGI_DD_CONDITION_MAX = 1.0e12
-
-# Double-double ratios a_n / a_(n-1) (positive) and a_(-n) / a_(-n+1) (negative) for
-# n = 1..nmax, from backward recurrences started at +-cutoff.
-function _dd_ratios(
-    p::ManoSuzukiTakasugiParams,
-    offset::DDComplex;
-    cutoff::Int=MANO_SUZUKI_TAKASUGI_NEGATIVE_IMAGINARY_AXIS_TAIL,
-    nmax::Int=MANO_SUZUKI_TAKASUGI_AMP_NMAX,
-)
-    cutoff >= nmax || throw(ArgumentError(
-        "DD MST recurrence cutoff must be at least its sum order."))
-    positive = Vector{DDComplex}(undef, nmax)
-    negative = Vector{DDComplex}(undef, nmax)
-
-    ratio = DDComplex(0)
-    for n in cutoff:-1:1
-        denominator = dc_add(
-            _dd_beta(n, p, offset),
-            dc_mul(_dd_alpha(n, p, offset), ratio),
-        )
-        value = dc_value(denominator)
-        _finite_complex(value) && !iszero(value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_nu_positive,
-                "nonfinite DD MST positive-tail denominator at n=$n.",
-            ))
-        ratio = dc_div(
-            dc_neg(_dd_gamma(n, p, offset)),
-            denominator,
-        )
-        if n <= nmax
-            value = dc_value(ratio)
-            _finite_complex(value) && !iszero(value) ||
-                throw(ManoSuzukiTakasugiCertificateError(
-                    :dd_nu_positive,
-                    "nonfinite DD MST positive-tail ratio at n=$n.",
-                ))
-            positive[n] = ratio
-        end
-    end
-
-    ratio = DDComplex(0)
-    for n in (-cutoff):-1
-        denominator = dc_add(
-            _dd_beta(n, p, offset),
-            dc_mul(_dd_gamma(n, p, offset), ratio),
-        )
-        value = dc_value(denominator)
-        _finite_complex(value) && !iszero(value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_nu_negative,
-                "nonfinite DD MST negative-tail denominator at n=$n.",
-            ))
-        ratio = dc_div(
-            dc_neg(_dd_alpha(n, p, offset)),
-            denominator,
-        )
-        if n >= -nmax
-            value = dc_value(ratio)
-            _finite_complex(value) && !iszero(value) ||
-                throw(ManoSuzukiTakasugiCertificateError(
-                    :dd_nu_negative,
-                    "nonfinite DD MST negative-tail ratio at n=$n.",
-                ))
-            negative[-n] = ratio
-        end
-    end
-    return positive, negative
-end
-
-# Double-double MST equation beta_0 + alpha_0 R_1 + gamma_0 L_(-1) at nu = l + offset.
-function _dd_equation(
-    p::ManoSuzukiTakasugiParams,
-    offset::DDComplex;
-    cutoff::Int=MANO_SUZUKI_TAKASUGI_NEGATIVE_IMAGINARY_AXIS_TAIL,
-)
-    positive, negative = _dd_ratios(
-        p, offset; cutoff, nmax=1)
-    return dc_add(
-        _dd_beta(0, p, offset),
-        dc_add(
-            dc_mul(_dd_alpha(0, p, offset), positive[1]),
-            dc_mul(_dd_gamma(0, p, offset), negative[1]),
-        ),
-    )
-end
-
-# Newton refinement of nu - l in double-double; throws unless the scaled residual
-# reaches MANO_SUZUKI_TAKASUGI_DD_NU_RESIDUAL_MAX.
-function _dd_refine(
-    p::ManoSuzukiTakasugiParams;
-    cutoff::Int=MANO_SUZUKI_TAKASUGI_NEGATIVE_IMAGINARY_AXIS_TAIL,
-    maxiter::Int=8,
-)
-    current = DDComplex(p.nu_offset)
-    best = current
-    best_value = _dd_equation(p, current; cutoff)
-    equation_scale = max(
-        abs(p.lambda), abs(p.l * (p.l + 1)), 1.0)
-    best_residual = abs(dc_value(best_value)) / equation_scale
-    step_scale = max(1.0, abs(p.nu_offset))
-    h = exp2(-18) * step_scale
-
-    for _ in 1:maxiter
-        value = _dd_equation(p, current; cutoff)
-        plus = _dd_equation(
-            p, dc_add(current, DDComplex(h)); cutoff)
-        minus = _dd_equation(
-            p, dc_sub(current, DDComplex(h)); cutoff)
-        derivative = dc_div(
-            dc_sub(plus, minus),
-            DDComplex(2h),
-        )
-        derivative_value = dc_value(derivative)
-        _finite_complex(derivative_value) &&
-            !iszero(derivative_value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_nu_derivative,
-                "nonfinite DD MST nu derivative.",
-            ))
-
-        step = dc_div(value, derivative)
-        trial = current
-        trial_value = value
-        accepted = false
-        for damping in 0:8
-            candidate = dc_sub(
-                current,
-                dc_mul(step, DDComplex(exp2(-damping))),
-            )
-            candidate_value = _dd_equation(p, candidate; cutoff)
-            if abs(dc_value(candidate_value)) <
-                    abs(dc_value(trial_value))
-                trial = candidate
-                trial_value = candidate_value
-                accepted = true
-                break
-            end
-        end
-        accepted || break
-        current = trial
-        residual = abs(dc_value(trial_value)) / equation_scale
-        if residual < best_residual
-            best = current
-            best_value = trial_value
-            best_residual = residual
-        end
-        abs(dc_value(step)) <= 1.0e-25 * step_scale && break
-    end
-
-    best_residual <= MANO_SUZUKI_TAKASUGI_DD_NU_RESIDUAL_MAX ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_nu_residual,
-            "DD MST nu refinement rejected: residual=$best_residual.",
-        ))
-    return best, Float64(best_residual)
-end
-
-function _dd_sum_result(total::DDComplex, absolute_sum)
-    value = dc_value(total)
-    _finite_complex(value) && !iszero(value) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_amplitude_sum,
-            "nonfinite DD MST amplitude sum.",
-        ))
-    condition = Float64(absolute_sum / abs(value))
-    isfinite(condition) || throw(ManoSuzukiTakasugiCertificateError(
-        :dd_amplitude_sum,
-        "nonfinite DD MST amplitude condition.",
-    ))
-    # Double-double terms: the sum rounds at eps^2 per term (condition
-    # times that) before the final rounding to Float64.
-    return ManoSuzukiTakasugiAmplitudeSum(
-        ComplexF64(log(abs(value)) + I * angle(value)),
-        condition,
-        eps(Float64) * (1 + eps(Float64) * condition),
-    )
-end
-
-# Double-double sums of base times cumulative products of ratios and weights, over
-# |n| <= nmax and |n| <= check_nmax.
-function _dd_sum_pair(
-    base,
-    positive,
-    negative,
-    positive_weight,
-    negative_weight,
-    nmax::Int,
-    check_nmax::Int,
-)
-    0 <= check_nmax <= nmax ||
-        throw(ArgumentError("invalid DD MST amplitude check order."))
-    positive_terms = Vector{DDComplex}(undef, nmax)
-    negative_terms = Vector{DDComplex}(undef, nmax)
-
-    term = DDComplex(base)
-    for n in 0:(nmax - 1)
-        term = dc_mul(
-            term,
-            dc_mul(positive[n + 1], positive_weight(n)),
-        )
-        positive_terms[n + 1] = term
-    end
-    term = DDComplex(base)
-    for k in 1:nmax
-        n = -k
-        term = dc_mul(
-            term,
-            dc_mul(negative[k], negative_weight(n)),
-        )
-        negative_terms[k] = term
-    end
-
-    function sum_at(limit)
-        total = DDComplex(base)
-        absolute_sum = abs(base)
-        for k in 1:limit
-            total = dc_add(total, positive_terms[k])
-            total = dc_add(total, negative_terms[k])
-            absolute_sum += abs(dc_value(positive_terms[k])) +
-                abs(dc_value(negative_terms[k]))
-        end
-        return _dd_sum_result(total, absolute_sum)
-    end
-    return sum_at(nmax), sum_at(check_nmax)
-end
-
-# Double-double amplitude sums (coefficient sum, A_- sum, K_nu sums, D sum) at full and
-# check order.
-function _dd_amp_sums(
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex;
-    nmax::Int=MANO_SUZUKI_TAKASUGI_AMP_NMAX,
-    check_nmax::Int=MANO_SUZUKI_TAKASUGI_AMP_CHECK_NMAX,
-)
-    p = data.params
-    positive, negative = _dd_ratios(
-        p, offset; nmax)
-    unit_weight(_) = DDComplex(1)
-    fsum = _dd_sum_pair(
-        1.0 + 0.0im,
-        positive,
-        negative,
-        unit_weight,
-        unit_weight,
-        nmax,
-        check_nmax,
-    )
-
-    ieps = dc_imul(DDComplex(p.epsilon))
-    aminus_positive(n) = dc_neg(dc_div(
-        dc_sub(_dd_factor(p, offset, n, 1 + p.s), ieps),
-        dc_add(_dd_factor(p, offset, n, 1 - p.s), ieps),
-    ))
-    aminus_negative(n) = dc_neg(dc_div(
-        dc_add(_dd_factor(p, offset, n, 1 - p.s), ieps),
-        dc_sub(_dd_factor(p, offset, n, 1 + p.s), ieps),
-    ))
-    asum = _dd_sum_pair(
-        1.0 + 0.0im,
-        positive,
-        negative,
-        aminus_positive,
-        aminus_negative,
-        nmax,
-        check_nmax,
-    )
-
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-    nu = _nu_shift(p)
-    up_a = 1 + p.s + I * epsc + nu
-    up_b = 1 + 2nu
-    up_c = 1 + nu + I * tau
-    up_d = 1 - p.s - I * epsc + nu
-    up_e = 1 + nu - I * tau
-    up_base = exp(
-        _amp_lgamma(up_a) +
-        _amp_lgamma(up_b) +
-        _amp_lgamma(up_c) -
-        _amp_lgamma(up_d) -
-        _amp_lgamma(up_e)
-    )
-    up_term = DDComplex(up_base)
-    up_total = up_term
-    up_absolute = abs(up_base)
-    up_check = nothing
-    up_check_absolute = NaN
-    for n in 0:(nmax - 1)
-        up_a_dd = dc_add(
-            _dd_factor(p, offset, n, 1 + p.s), ieps)
-        up_b_dd = _dd_twice(p, offset, 0, n + 1)
-        up_c_dd = dc_add(
-            _dd_factor(p, offset, n, 1),
-            dc_imul(DDComplex(p.tau)),
-        )
-        up_d_dd = dc_sub(
-            _dd_factor(p, offset, n, 1 - p.s), ieps)
-        up_e_dd = dc_sub(
-            _dd_factor(p, offset, n, 1),
-            dc_imul(DDComplex(p.tau)),
-        )
-        rational = dc_neg(dc_div(
-            dc_mul(dc_mul(up_a_dd, up_b_dd), up_c_dd),
-            dc_mul(
-                dc_mul(DDComplex(n + 1), up_d_dd),
-                up_e_dd,
-            ),
-        ))
-        up_term = dc_mul(
-            up_term,
-            dc_mul(positive[n + 1], rational),
-        )
-        up_total = dc_add(up_total, up_term)
-        up_absolute += abs(dc_value(up_term))
-        if n + 1 == check_nmax
-            up_check = up_total
-            up_check_absolute = up_absolute
-        end
-    end
-
-    down_term = DDComplex(1)
-    down_total = down_term
-    down_absolute = 1.0
-    down_check = nothing
-    down_check_absolute = NaN
-    for k in 1:nmax
-        n = -k
-        down_a_dd = dc_sub(
-            _dd_factor(p, offset, n, 1 + p.s), ieps)
-        down_d_dd = dc_add(
-            _dd_factor(p, offset, n, 1 - p.s), ieps)
-        down_e_dd = _dd_twice(p, offset, 0, n + 2)
-        rational = dc_neg(dc_div(
-            dc_mul(down_d_dd, down_e_dd),
-            dc_mul(down_a_dd, DDComplex(-n)),
-        ))
-        down_term = dc_mul(
-            down_term,
-            dc_mul(negative[k], rational),
-        )
-        down_total = dc_add(down_total, down_term)
-        down_absolute += abs(dc_value(down_term))
-        if k == check_nmax
-            down_check = down_total
-            down_check_absolute = down_absolute
-        end
-    end
-    up_check === nothing && throw(ManoSuzukiTakasugiCertificateError(
-        :dd_amplitude_sum, "missing DD MST upper check sum."))
-    down_check === nothing && throw(ManoSuzukiTakasugiCertificateError(
-        :dd_amplitude_sum, "missing DD MST lower check sum."))
-    ksum = (
-        (
-            _dd_sum_result(up_total, up_absolute),
-            _dd_sum_result(down_total, down_absolute),
-        ),
-        (
-            _dd_sum_result(up_check, up_check_absolute),
-            _dd_sum_result(down_check, down_check_absolute),
-        ),
-    )
-
-    itau = dc_imul(DDComplex(p.tau))
-    d_positive(n) = dc_div(
-        dc_mul(
-            dc_add(_dd_factor(p, offset, n, 1 + p.s), ieps),
-            dc_add(_dd_factor(p, offset, n, 1), itau),
-        ),
-        dc_mul(
-            dc_sub(_dd_factor(p, offset, n, 1 - p.s), ieps),
-            dc_sub(_dd_factor(p, offset, n, 1), itau),
-        ),
-    )
-    d_negative(n) = dc_div(
-        dc_mul(
-            dc_sub(_dd_factor(p, offset, n, 1 - p.s), ieps),
-            dc_sub(_dd_factor(p, offset, n, 1), itau),
-        ),
-        dc_mul(
-            dc_add(_dd_factor(p, offset, n, 1 + p.s), ieps),
-            dc_add(_dd_factor(p, offset, n, 1), itau),
-        ),
-    )
-    d_base = exp(
-        _amp_lgamma(1 + nu + p.s + I * epsc) +
-        _amp_lgamma(1 + nu + I * tau) -
-        _amp_lgamma(1 + nu - p.s - I * epsc) -
-        _amp_lgamma(1 + nu - I * tau)
-    )
-    dsum = _dd_sum_pair(
-        d_base,
-        positive,
-        negative,
-        d_positive,
-        d_negative,
-        nmax,
-        check_nmax,
-    )
-    return fsum, asum, ksum, dsum
-end
-
-# Double-double version of _amp_pair at nu = l + offset.
-function _dd_amp_pair(
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex;
-    nmax::Int=MANO_SUZUKI_TAKASUGI_AMP_NMAX,
-    check_nmax::Int=MANO_SUZUKI_TAKASUGI_AMP_CHECK_NMAX,
-)
-    p = data.params
-    offset2 = dc_sub(
-        DDComplex(Float64(-2 * p.l - 1)),
-        offset,
-    )
-    nu2 = ComplexF64(p.l) + dc_value(offset2)
-    data2 = ManoSuzukiTakasugiSeriesData(ManoSuzukiTakasugiParams(
-        p.s, p.l, p.m, p.a, p.omega, p.lambda, nu2))
-    fsum, asum, ksum1, dsum1 = _dd_amp_sums(
-        data, offset; nmax, check_nmax)
-    _, _, ksum2, dsum2 = _dd_amp_sums(
-        data2, offset2; nmax, check_nmax)
-    full = _amp_build(
-        data, data2, fsum[1], asum[1],
-        ksum1[1], ksum2[1], dsum1[1], dsum2[1])
-    check = _amp_build(
-        data, data2, fsum[2], asum[2],
-        ksum1[2], ksum2[2], dsum1[2], dsum2[2])
-    return full, check
-end
 
 function _amp_logsum_values(logs)
     all(z -> isfinite(real(z)) && isfinite(imag(z)), logs) ||
@@ -4057,6 +3454,105 @@ function _amp_knu_pair(
     )
 end
 
+# As _amp_rec_pair with the weight anchored at n = `anchor` (exp(base_extra) there) instead of n = 0.
+function _amp_rec_pair_at(
+    ratio_log,
+    data::ManoSuzukiTakasugiSeriesData,
+    nmin::Int,
+    nmax::Int,
+    check_min::Int,
+    check_max::Int,
+    base_extra,
+    anchor::Int,
+)
+    nmin <= check_min <= anchor <= check_max <= nmax ||
+        throw(ArgumentError(
+            "MST amplitude recurrence ranges must contain the anchor."))
+    logs = Vector{ComplexF64}(undef, nmax - nmin + 1)
+    at(n) = n - nmin + 1
+    extra = ComplexF64(base_extra)
+    logs[at(anchor)] = log_series_coefficient!(data, anchor) + extra
+    for n in anchor:(nmax - 1)
+        extra += ComplexF64(ratio_log(n))
+        logs[at(n + 1)] = log_series_coefficient!(data, n + 1) + extra
+    end
+    extra = ComplexF64(base_extra)
+    for n in (anchor - 1):-1:nmin
+        extra -= ComplexF64(ratio_log(n))
+        logs[at(n)] = log_series_coefficient!(data, n) + extra
+    end
+    return _amp_pair_sum(logs, nmin, check_min, check_max)
+end
+
+# Upper and lower sums of K_nu with the Sasaki-Tagoshi split index r (K_nu does not depend on r; Living Rev.
+# Relativ. 6, 6 (2003), eq. 165): the upper sum of (-1)^n Gamma(n + r + 2nu + 1) / (n - r)! times the Gamma ratios
+# of _amp_knu_sums over n >= r, the lower sum of (-1)^n / ((r - n)! (r + 2nu + 2)_n) times the Pochhammer ratios
+# over n <= r, both weighted from n = r. r = 0 is _amp_knu_pair; each part carries r for _amp_klog.
+function _amp_knu_split_pair(
+    data::ManoSuzukiTakasugiSeriesData,
+    nmax::Int,
+    check_nmax::Int,
+    r::Int,
+)
+    p = data.params
+    nu = _nu_shift(p)
+    epsc = ComplexF64(p.epsilon)
+    tau = ComplexF64(p.tau)
+
+    up_a = 1 + p.s + I * epsc + nu
+    up_c = 1 + nu + I * tau
+    up_d = 1 - p.s - I * epsc + nu
+    up_e = 1 + nu - I * tau
+    up_base =
+        I * pi * r +
+        _amp_lgamma(2r + 2nu + 1) +
+        _amp_lgamma(up_a + r) +
+        _amp_lgamma(up_c + r) -
+        _amp_lgamma(up_d + r) -
+        _amp_lgamma(up_e + r)
+    up = _amp_rec_pair_at(data, r, nmax, r, check_nmax, up_base, r) do n
+        I * pi +
+            log(ComplexF64(n + r + 2nu + 1)) +
+            log(ComplexF64(up_a + n)) +
+            log(ComplexF64(up_c + n)) -
+            log(ComplexF64(n - r + 1)) -
+            log(ComplexF64(up_d + n)) -
+            log(ComplexF64(up_e + n))
+    end
+
+    down_a = 1 + p.s - I * epsc + nu
+    down_d = 1 - p.s + I * epsc + nu
+    down_base =
+        I * pi * r -
+        (_amp_lgamma(2r + 2nu + 2) - _amp_lgamma(r + 2nu + 2)) +
+        (_amp_lgamma(down_a + r) - _amp_lgamma(down_a)) -
+        (_amp_lgamma(down_d + r) - _amp_lgamma(down_d))
+    down = _amp_rec_pair_at(data, -nmax, r, -check_nmax, r, down_base, r) do n
+        I * pi +
+            log(ComplexF64(r - n)) +
+            log(ComplexF64(down_a + n)) -
+            log(ComplexF64(down_d + n)) -
+            log(ComplexF64(r + 2nu + 2 + n))
+    end
+    return (
+        (up[1], down[1], r),
+        (up[2], down[2], r),
+    )
+end
+
+# Split index of one K: r = 0 where its sums are conditioned (<= 64); otherwise two below the left edge of the bulk
+# of a_n (the first n >= -check_nmax with |a_n| >= 1e-3 max |a_n|), three further where the condition is still > 8.
+function _amp_split_index(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax::Int)
+    condition(r) = (sums = first(_amp_knu_split_pair(data, nmax, check_nmax, r));
+        max(sums[1].condition, sums[2].condition))
+    condition(0) <= 64 && return 0
+    magnitudes = [real(log_series_coefficient!(data, n)) for n in -check_nmax:check_nmax]
+    edge = -check_nmax - 1 + findfirst(>=(maximum(magnitudes) + log(1.0e-3)), magnitudes)
+    r = clamp(edge - 2, -check_nmax, check_nmax)
+    condition(r) > 8 && (r = max(r - 3, -check_nmax))
+    return r
+end
+
 # Sum of a_n Gamma(1+nu+n+s+i epsilon) Gamma(1+nu+n+i tau) /
 # (Gamma(1+nu+n-s-i epsilon) Gamma(1+nu+n-i tau)), used in up_inc.
 function _amp_dsum(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
@@ -4123,7 +3619,33 @@ function _amp_d_pair(
     end
 end
 
-# log K_nu from its upper and lower sums, with its absolute error.
+# log K_nu from its upper and lower sums, with its absolute error; with a split index r (sums from
+# _amp_knu_split_pair) the prefactor (2 epsilon kappa)^(s - nu - r) 2^(-s) i^r Gamma(r + 2nu + 2) /
+# (Gamma(r + nu + 1 - s + i epsilon) Gamma(r + nu + 1 + i tau) Gamma(r + nu + 1 + s + i epsilon)).
+function _amp_klog(data::ManoSuzukiTakasugiSeriesData, sums::Tuple{Any,Any,Int})
+    p = data.params
+    nu = _nu_shift(p)
+    epsc = ComplexF64(p.epsilon)
+    tau = ComplexF64(p.tau)
+    epsp = (tau + epsc) / 2
+    up, down, r = sums
+    pieces = (
+        -(nu + r) * log(2.0),
+        I * epsc * p.kappa,
+        (p.s - nu - r) * log(epsc * p.kappa),
+        I * pi * r / 2,
+        _amp_lgamma(1 - p.s - 2I * epsp),
+        _amp_lgamma(r + 2 + 2nu),
+        -_amp_lgamma(r + 1 - p.s + I * epsc + nu),
+        -_amp_lgamma(r + 1 + p.s + I * epsc + nu),
+        -_amp_lgamma(r + 1 + nu + I * tau),
+        up.logvalue,
+        -down.logvalue,
+    )
+    error = up.error + down.error + eps(Float64) * 2 * sum(abs, pieces)
+    return ComplexF64(sum(pieces)), Float64(error)
+end
+
 function _amp_klog(data::ManoSuzukiTakasugiSeriesData, sums)
     p = data.params
     nu = _nu_shift(p)
@@ -4175,6 +3697,7 @@ _amp_reflect(p::ManoSuzukiTakasugiParams) = ManoSuzukiTakasugiParams(p.s, p.l, -
 _amp_conj(x::ManoSuzukiTakasugiAmplitudeSum) =
     ManoSuzukiTakasugiAmplitudeSum(conj(x.logvalue), x.condition, x.error)
 _amp_conj(x::Tuple) = map(_amp_conj, x)
+_amp_conj(x::Integer) = x
 _amp_conj(x::NamedTuple) = map(v -> v isa Complex ? conj(v) : v, x)
 
 # Logs of the six asymptotic amplitudes (in/up incidence, transmission, reflection)
@@ -4403,17 +3926,16 @@ end
     nmax::Int;
     fast::Bool=true,
     data2::ManoSuzukiTakasugiSeriesData=_amp_mirror_data(data),
+    splits=nothing,
 )
     fsum = _amp_coeff_sum(data, nmax)
     asum = fast ?
         _amp_aminus_sum_fast(data, nmax) :
         _amp_aminus_sum(data, nmax)
-    ksum1 = fast ?
-        _amp_knu_sums_fast(data, nmax) :
-        _amp_knu_sums(data, nmax)
-    ksum2 = fast ?
-        _amp_knu_sums_fast(data2, nmax) :
-        _amp_knu_sums(data2, nmax)
+    ksum1 = splits !== nothing ? first(_amp_knu_split_pair(data, nmax, nmax, splits[1])) :
+        fast ? _amp_knu_sums_fast(data, nmax) : _amp_knu_sums(data, nmax)
+    ksum2 = splits !== nothing ? first(_amp_knu_split_pair(data2, nmax, nmax, splits[2])) :
+        fast ? _amp_knu_sums_fast(data2, nmax) : _amp_knu_sums(data2, nmax)
     dsum1 = fast ?
         _amp_dsum_fast(data, nmax) :
         _amp_dsum(data, nmax)
@@ -4428,7 +3950,8 @@ end
 @noinline function _amp_pair(
     data::ManoSuzukiTakasugiSeriesData,
     nmax::Int,
-    check_nmax::Int,
+    check_nmax::Int;
+    splits=nothing,
 )
     0 <= check_nmax <= nmax ||
         throw(ArgumentError("invalid MST amplitude check order."))
@@ -4438,8 +3961,10 @@ end
         p.s, p.l, p.m, p.a, p.omega, p.lambda, nu2))
     fsum = _amp_coeff_pair(data, nmax, check_nmax)
     asum = _amp_aminus_pair(data, nmax, check_nmax)
-    ksum1 = _amp_knu_pair(data, nmax, check_nmax)
-    ksum2 = _amp_knu_pair(data2, nmax, check_nmax)
+    ksum1 = splits === nothing ? _amp_knu_pair(data, nmax, check_nmax) :
+        _amp_knu_split_pair(data, nmax, check_nmax, splits[1])
+    ksum2 = splits === nothing ? _amp_knu_pair(data2, nmax, check_nmax) :
+        _amp_knu_split_pair(data2, nmax, check_nmax, splits[2])
     dsum1 = _amp_d_pair(data, nmax, check_nmax)
     dsum2 = _amp_d_pair(data2, nmax, check_nmax)
     full = _amp_build(
@@ -4847,64 +4372,60 @@ end
     )
 end
 
-# Amplitudes as in _principal_amplitudes, with nu refined and the sums evaluated in
-# double-double. Reached only from _physical_amplitude_plan (explicit backend = :mst); binary64 replacement
-# pending: QNM near-AS n = 8, |a| < 0.015, where the principal sums cancel by ~1e7.
-@noinline function _refined_amplitudes(
+# Amplitudes as in _principal_amplitudes with each K (K_nu, K_{-nu-1}) summed at its own split index
+# (_amp_split_index), for the frequencies where the principal sums cancel (the QNM near-AS n = 8 roots at
+# |a| < 0.015: condition 1.5e7 - 2.4e7 at r = 0). The same indices serve the check order and the moved nu;
+# K at r - 1 (an identity in exact arithmetic) is the further certificate.
+@noinline function _split_amplitudes(
     data::ManoSuzukiTakasugiSeriesData,
     branch::Symbol,
 )
+    p = data.params
+    refinement = _amp_refine_nu(p)
+    with_nu(nu) = ManoSuzukiTakasugiSeriesData(
+        ManoSuzukiTakasugiParams(p.s, p.l, p.m, p.a, p.omega, p.lambda, nu))
+    data = with_nu(refinement.nu)
     base = data.params
-    offset, nu_residual = _dd_refine(base)
-    nu = ComplexF64(base.l) + dc_value(offset)
-    refined = ManoSuzukiTakasugiSeriesData(ManoSuzukiTakasugiParams(
-        base.s,
-        base.l,
-        base.m,
-        base.a,
-        base.omega,
-        base.lambda,
-        nu,
-        dc_value(offset),
-    ))
-    logs, check_logs = _dd_amp_pair(refined, offset)
+    nmax, check_nmax = MANO_SUZUKI_TAKASUGI_AMP_NMAX, MANO_SUZUKI_TAKASUGI_AMP_CHECK_NMAX
+    splits = (_amp_split_index(data, nmax, check_nmax),
+        _amp_split_index(_amp_mirror_data(data), nmax, check_nmax))
+    logs, check_logs = _amp_pair(data, nmax, check_nmax; splits)
     teuk = _amp_teuk_pair(logs, branch)
-    gsn = _amp_gsn_pair(refined.params, branch, teuk)
+    gsn = _amp_gsn_pair(base, branch, teuk)
     check_teuk = _amp_teuk_pair(check_logs, branch)
-    check_gsn = _amp_gsn_pair(refined.params, branch, check_teuk)
+    check_gsn = _amp_gsn_pair(base, branch, check_teuk)
     truncation = Float64(_amp_distance(gsn, check_gsn))
-    component_agreement = _amp_component_distance(gsn, check_gsn)
-    condition = Float64(max(
-        logs.max_condition,
-        check_logs.max_condition,
-    ))
-    all(_finite_complex, (
-        teuk...,
-        gsn...,
-        check_teuk...,
-        check_gsn...,
-    )) || throw(ManoSuzukiTakasugiCertificateError(
-        :dd_amplitude_nonfinite,
-        "nonfinite DD-refined MST amplitude.",
-    ))
-    truncation <= MANO_SUZUKI_TAKASUGI_AMP_TRUNCATION_MAX ||
+    lower = max.(splits .- 1, -check_nmax)
+    lower_gsn = _amp_gsn_pair(base, branch, _amp_teuk_pair(_amp_logs(data, nmax; splits=lower), branch))
+    split_agreement = Float64(_amp_distance(gsn, lower_gsn))
+    moved = with_nu(refinement.nu - refinement.step)
+    moved_gsn = _amp_gsn_pair(moved.params, branch, _amp_teuk_pair(
+        _amp_logs(moved, nmax; splits), branch))
+    component_agreement = _amp_component_distance(gsn, check_gsn) .+
+        _amp_component_distance(gsn, moved_gsn) .+ _amp_component_distance(gsn, lower_gsn)
+    condition = Float64(max(logs.max_condition, check_logs.max_condition))
+    # residual of the MST nu equation at the refined nu, scaled as in the nu solve
+    nu_residual = abs(_mano_suzuki_takasugi_eq_value(base.nu - p.l, p.s, p.l, p.m, p.a, p.omega, p.lambda)) /
+        max(abs(ComplexF64(p.lambda)), abs(p.l * (p.l + 1)), 1.0)
+    all(_finite_complex, (teuk..., gsn..., check_teuk..., check_gsn...)) ||
         throw(ManoSuzukiTakasugiCertificateError(
-            :dd_amplitude_truncation,
-            "DD-refined MST amplitude truncation rejected: " *
-            "agreement=$truncation.",
+            :nia_amplitude_nonfinite,
+            "nonfinite split-index analytic MST amplitude.",
         ))
-    condition <= MANO_SUZUKI_TAKASUGI_DD_CONDITION_MAX ||
+    max(truncation, split_agreement) <= MANO_SUZUKI_TAKASUGI_AMP_TRUNCATION_MAX ||
         throw(ManoSuzukiTakasugiCertificateError(
-            :dd_amplitude_condition,
-            "DD-refined MST amplitude condition rejected: " *
-            "condition=$condition.",
+            :nia_amplitude_certificate,
+            "split-index analytic MST truncation rejected: " *
+            "agreement=$(truncation), split agreement=$(split_agreement), splits=$(splits).",
+        ))
+    condition <= MANO_SUZUKI_TAKASUGI_AMP_CONDITION_MAX ||
+        throw(ManoSuzukiTakasugiCertificateError(
+            :nia_amplitude_certificate,
+            "split-index analytic MST condition rejected: " *
+            "condition=$(condition), splits=$(splits).",
         ))
     return (
-        shift=round(Int, real(nu)),
-        nu,
-        nu_offset_dd=offset,
-        nu_offset_low=offset.low,
-        nu_residual,
+        shift=round(Int, real(base.nu)),
         teuk,
         gsn,
         transmission_log=branch == :IN ?
@@ -4915,13 +4436,17 @@ end
         medoid_score=0.0,
         representation_spread=0.0,
         nearest_agreement=truncation,
-        truncation_agreement=truncation,
+        truncation_agreement=max(truncation, split_agreement),
         component_agreement,
         max_condition=condition,
         gsn_error=_amp_ratio_errors(logs, branch),
-        nmax=MANO_SUZUKI_TAKASUGI_AMP_NMAX,
-        check_nmax=MANO_SUZUKI_TAKASUGI_AMP_CHECK_NMAX,
-        certificate_kind=:principal_dd_refined,
+        nmax,
+        check_nmax,
+        nu=base.nu,
+        nu_residual,
+        split_indices=splits,
+        split_agreement,
+        certificate_kind=:principal_split_index,
         certificate_accepted=true,
     )
 end
@@ -5416,754 +4941,6 @@ end
 
 @inline _type1_error(data::ManoSuzukiTakasugiSeriesData, n::Integer) =
     min(Inf, _coefficient_error(data, n) + 8eps(Float64))
-
-const MANO_SUZUKI_TAKASUGI_DD_STATE_CHECK_NMAX = 160
-const MANO_SUZUKI_TAKASUGI_DD_REG_NMAX = 64
-const MANO_SUZUKI_TAKASUGI_DD_REG_CHECK_NMAX = 62
-const MANO_SUZUKI_TAKASUGI_DD_REG_SERIES_MAX = 4096
-const MANO_SUZUKI_TAKASUGI_DD_REG_TOL = 8eps(Float64)
-const MANO_SUZUKI_TAKASUGI_DD_REG_POLE_RADIUS = 0.125
-
-# Double-double n-th Type-1 term: coefficient times
-# 2F1(n+nu+1-i tau, -n-nu-i tau; 1-s-i(epsilon+tau); x) and its first two derivatives.
-function _dd_type1_term(
-    p::ManoSuzukiTakasugiParams,
-    n::Int,
-    x,
-    coefficient::DDComplex,
-)
-    npnu = _npnu(p, n)
-    a = npnu + 1 - I * p.tau
-    b = -npnu - I * p.tau
-    c = 1 - p.s - I * (p.epsilon + p.tau)
-    xc = ComplexF64(x)
-    value = ComplexF64(HGF_2F1(a, b, c, xc))
-    deriv = ComplexF64(
-        a * b / c * HGF_2F1(a + 1, b + 1, c + 1, xc))
-    second = ComplexF64(
-        a * (a + 1) * b * (b + 1) / (c * (c + 1)) *
-        HGF_2F1(a + 2, b + 2, c + 2, xc),
-    )
-    all(_finite_complex, (value, deriv, second)) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_term,
-            "nonfinite DD physical-in basis term at n=$n.",
-        ))
-    return (
-        dc_mul(coefficient, DDComplex(value)),
-        dc_mul(coefficient, DDComplex(deriv)),
-        dc_mul(coefficient, DDComplex(second)),
-    )
-end
-
-# Double-double physical-in sums normalized by sum a_n, at order nmax and check_nmax.
-function _dd_type1_pair(
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex,
-    x;
-    nmax::Int=MANO_SUZUKI_TAKASUGI_RESIDUAL_NMAX,
-    check_nmax::Int=MANO_SUZUKI_TAKASUGI_DD_STATE_CHECK_NMAX,
-)
-    0 <= check_nmax <= nmax ||
-        throw(ArgumentError("invalid DD physical-in check order."))
-    p = data.params
-    positive_ratios, negative_ratios = _dd_ratios(
-        p, offset; nmax)
-    positive_coefficients = Vector{DDComplex}(undef, nmax)
-    negative_coefficients = Vector{DDComplex}(undef, nmax)
-    coefficient = DDComplex(1)
-    for n in 1:nmax
-        coefficient = dc_mul(coefficient, positive_ratios[n])
-        positive_coefficients[n] = coefficient
-    end
-    coefficient = DDComplex(1)
-    for n in 1:nmax
-        coefficient = dc_mul(coefficient, negative_ratios[n])
-        negative_coefficients[n] = coefficient
-    end
-
-    zero_term = _dd_type1_term(p, 0, x, DDComplex(1))
-    positive_terms = Vector{NTuple{3,DDComplex}}(undef, nmax)
-    negative_terms = Vector{NTuple{3,DDComplex}}(undef, nmax)
-    for n in 1:nmax
-        positive_terms[n] = _dd_type1_term(
-            p, n, x, positive_coefficients[n])
-        negative_terms[n] = _dd_type1_term(
-            p, -n, x, negative_coefficients[n])
-    end
-
-    function sum_at(limit)
-        norm = DDComplex(1)
-        sums = [zero_term[1], zero_term[2], zero_term[3]]
-        absolute = [
-            abs(dc_value(zero_term[1])),
-            abs(dc_value(zero_term[2])),
-            abs(dc_value(zero_term[3])),
-        ]
-        norm_absolute = 1.0
-        for n in 1:limit
-            norm = dc_add(norm, positive_coefficients[n])
-            norm = dc_add(norm, negative_coefficients[n])
-            norm_absolute +=
-                abs(dc_value(positive_coefficients[n])) +
-                abs(dc_value(negative_coefficients[n]))
-            for component in 1:3
-                sums[component] = dc_add(
-                    sums[component], positive_terms[n][component])
-                sums[component] = dc_add(
-                    sums[component], negative_terms[n][component])
-                absolute[component] +=
-                    abs(dc_value(positive_terms[n][component])) +
-                    abs(dc_value(negative_terms[n][component]))
-            end
-        end
-        norm_value = dc_value(norm)
-        _finite_complex(norm_value) && !iszero(norm_value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_physical_in_norm,
-                "nonfinite DD physical-in normalization.",
-            ))
-        values = ntuple(component -> begin
-            value = dc_value(sums[component])
-            _finite_complex(value) && !iszero(value) ||
-                throw(ManoSuzukiTakasugiCertificateError(
-                    :dd_physical_in_sum,
-                    "nonfinite DD physical-in state sum.",
-                ))
-            ComplexF64(dc_value(dc_div(sums[component], norm)))
-        end, 3)
-        condition = maximum((
-            norm_absolute / abs(norm_value),
-            ntuple(component ->
-                absolute[component] /
-                abs(dc_value(sums[component])), 3)...,
-        ))
-        return (
-            state=ManoSuzukiTakasugiTriplet(values...),
-            condition=Float64(condition),
-        )
-    end
-    return sum_at(nmax), sum_at(check_nmax)
-end
-
-@inline _dd_shift(value::DDComplex, shift) =
-    dc_add(value, DDComplex(shift))
-
-# Hypergeometric parameter c = 1 - s - i(epsilon + tau) of the Type-1 series.
-@inline function _dd_hyper_c(p::ManoSuzukiTakasugiParams)
-    return dc_sub(
-        DDComplex(1 - p.s),
-        dc_imul(dc_add(DDComplex(p.epsilon), DDComplex(p.tau))),
-    )
-end
-
-# True when c is within MANO_SUZUKI_TAKASUGI_DD_REG_POLE_RADIUS of a nonpositive integer, where the
-# regularized Type-1 series is used.
-@inline function _dd_regime(p::ManoSuzukiTakasugiParams)
-    c = dc_value(_dd_hyper_c(p))
-    nearest = round(Int, -real(c))
-    return nearest >= 0 &&
-        real(c) <= 0.5 &&
-        abs(c + nearest) <= MANO_SUZUKI_TAKASUGI_DD_REG_POLE_RADIUS
-end
-
-# Double-double power series of the regularized 2F1(a, b; c; z) / Gamma(c). Near a
-# nonpositive integer c the series starts past the pole and recurs backward to k = 0.
-function _dd_reg_series(
-    a::DDComplex,
-    b::DDComplex,
-    c::DDComplex,
-    z::DDComplex,
-)
-    c_value = dc_value(c)
-    nearest = max(0, round(Int, -real(c_value)))
-    near_pole = real(c_value) <= 0.5 &&
-        abs(c_value + nearest) <= 0.5
-    start = near_pole ? nearest + 1 : 0
-
-    term = DDComplex(exp(-loggamma(ComplexF64(c_value + start))))
-    for k in 0:(start - 1)
-        numerator = dc_mul(
-            dc_mul(_dd_shift(a, k), _dd_shift(b, k)),
-            z,
-        )
-        term = dc_mul(
-            term,
-            dc_div(numerator, DDComplex(k + 1)),
-        )
-    end
-    _finite_complex(dc_value(term)) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_regularized_type1,
-            "nonfinite regularized Type-1 start term.",
-        ))
-
-    lower = Vector{DDComplex}(undef, start + 1)
-    lower[start + 1] = term
-    for k in (start - 1):-1:0
-        denominator = dc_mul(
-            dc_mul(_dd_shift(a, k), _dd_shift(b, k)),
-            z,
-        )
-        iszero(dc_value(denominator)) &&
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_regularized_type1,
-                "singular regularized Type-1 backward recurrence.",
-            ))
-        numerator = dc_mul(
-            term,
-            dc_mul(_dd_shift(c, k), DDComplex(k + 1)),
-        )
-        term = dc_div(numerator, denominator)
-        _finite_complex(dc_value(term)) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_regularized_type1,
-                "nonfinite regularized Type-1 backward term.",
-            ))
-        lower[k + 1] = term
-    end
-
-    total = DDComplex(0)
-    absolute_sum = 0.0
-    for value in lower
-        total = dc_add(total, value)
-        absolute_sum += abs(dc_value(value))
-    end
-
-    term = lower[end]
-    converged = false
-    tail_bound = Inf
-    iterations = start
-    for k in start:(MANO_SUZUKI_TAKASUGI_DD_REG_SERIES_MAX - 1)
-        numerator = dc_mul(
-            dc_mul(_dd_shift(a, k), _dd_shift(b, k)),
-            z,
-        )
-        denominator = dc_mul(
-            _dd_shift(c, k),
-            DDComplex(k + 1),
-        )
-        iszero(dc_value(denominator)) &&
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_regularized_type1,
-                "singular regularized Type-1 forward recurrence.",
-            ))
-        ratio = dc_div(numerator, denominator)
-        term = dc_mul(term, ratio)
-        term_value = dc_value(term)
-        _finite_complex(term_value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_regularized_type1,
-                "nonfinite regularized Type-1 forward term.",
-            ))
-        total = dc_add(total, term)
-        absolute_sum += abs(term_value)
-        iterations = k + 1
-        ratio_abs = abs(dc_value(ratio))
-        total_abs = max(abs(dc_value(total)), floatmin(Float64))
-        if iterations >= start + 24 && ratio_abs < 0.9
-            tail_bound = abs(term_value) /
-                max(1 - ratio_abs, eps(Float64))
-            if tail_bound <= MANO_SUZUKI_TAKASUGI_DD_REG_TOL * total_abs
-                converged = true
-                break
-            end
-        end
-    end
-    converged || throw(ManoSuzukiTakasugiCertificateError(
-        :dd_regularized_type1,
-        "regularized Type-1 series did not converge.",
-    ))
-    total_value = dc_value(total)
-    scale = max(abs(total_value), floatmin(Float64))
-    return (
-        value=total,
-        condition=Float64(absolute_sum / scale),
-        relative_tail=Float64(tail_bound / scale),
-        iterations,
-    )
-end
-
-# Regularized 2F1(a, b; c; z) / Gamma(c) through the Pfaff transformation
-# (1 - z)^(-a) 2F1(a, c - b; c; z / (z - 1)), for |z / (z - 1)| <= 1/2.
-function _dd_reg_2f1(
-    a::DDComplex,
-    b::DDComplex,
-    c::DDComplex,
-    z::DDComplex,
-)
-    z_value = dc_value(z)
-    transformed_value = ComplexF64(z_value / (z_value - 1))
-    abs(transformed_value) <= 0.5 + 8eps(Float64) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_regularized_type1,
-            "regularized Type-1 Pfaff argument is outside its domain.",
-        ))
-    series = _dd_reg_series(
-        a,
-        dc_sub(c, b),
-        c,
-        DDComplex(transformed_value),
-    )
-    logarithm = ComplexF64(log1p(-z_value))
-    exponent_high = -a.high * logarithm
-    exponent_low = -a.low * logarithm
-    prefactor_high = ComplexF64(exp(exponent_high))
-    prefactor = DDComplex(
-        prefactor_high,
-        prefactor_high * exponent_low,
-    )
-    value = dc_mul(prefactor, series.value)
-    _finite_complex(dc_value(value)) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_regularized_type1,
-            "nonfinite regularized Type-1 value.",
-        ))
-    return merge(series, (; value))
-end
-
-# Regularized 2F1 of the n-th Type-1 term and its first two x-derivatives.
-function _dd_reg_triplet(
-    p::ManoSuzukiTakasugiParams,
-    offset::DDComplex,
-    n::Int,
-    x,
-)
-    npnu = _dd_shift(
-        dc_add(DDComplex(p.l), offset),
-        n,
-    )
-    tau = DDComplex(p.tau)
-    a = dc_sub(_dd_shift(npnu, 1), dc_imul(tau))
-    b = dc_sub(dc_neg(npnu), dc_imul(tau))
-    c = _dd_hyper_c(p)
-    z = DDComplex(x)
-    value = _dd_reg_2f1(a, b, c, z)
-    derivative = _dd_reg_2f1(
-        _dd_shift(a, 1),
-        _dd_shift(b, 1),
-        _dd_shift(c, 1),
-        z,
-    )
-    second = _dd_reg_2f1(
-        _dd_shift(a, 2),
-        _dd_shift(b, 2),
-        _dd_shift(c, 2),
-        z,
-    )
-    derivative_factor = dc_mul(a, b)
-    second_factor = dc_mul(
-        dc_mul(a, _dd_shift(a, 1)),
-        dc_mul(b, _dd_shift(b, 1)),
-    )
-    return (
-        values=(
-            value.value,
-            dc_mul(derivative_factor, derivative.value),
-            dc_mul(second_factor, second.value),
-        ),
-        condition=max(
-            value.condition,
-            derivative.condition,
-            second.condition,
-        ),
-        relative_tail=max(
-            value.relative_tail,
-            derivative.relative_tail,
-            second.relative_tail,
-        ),
-        iterations=max(
-            value.iterations,
-            derivative.iterations,
-            second.iterations,
-        ),
-    )
-end
-
-# Regularized Type-1 physical-in sums times Gamma(c), at order nmax and check_nmax.
-function _dd_reg_pair(
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex,
-    x;
-    nmax::Int=MANO_SUZUKI_TAKASUGI_DD_REG_NMAX,
-    check_nmax::Int=MANO_SUZUKI_TAKASUGI_DD_REG_CHECK_NMAX,
-)
-    0 <= check_nmax <= nmax ||
-        throw(ArgumentError("invalid regularized Type-1 check order."))
-    p = data.params
-    positive_ratios, negative_ratios = _dd_ratios(
-        p, offset; nmax)
-    positive_coefficients = Vector{DDComplex}(undef, nmax)
-    negative_coefficients = Vector{DDComplex}(undef, nmax)
-    coefficient = DDComplex(1)
-    for n in 1:nmax
-        coefficient = dc_mul(coefficient, positive_ratios[n])
-        positive_coefficients[n] = coefficient
-    end
-    coefficient = DDComplex(1)
-    for n in 1:nmax
-        coefficient = dc_mul(coefficient, negative_ratios[n])
-        negative_coefficients[n] = coefficient
-    end
-
-    zero_basis = _dd_reg_triplet(p, offset, 0, x)
-    zero_term = zero_basis.values
-    positive_terms = Vector{NTuple{3,DDComplex}}(undef, nmax)
-    negative_terms = Vector{NTuple{3,DDComplex}}(undef, nmax)
-    basis_condition = zero_basis.condition
-    relative_tail = zero_basis.relative_tail
-    for n in 1:nmax
-        positive_basis = _dd_reg_triplet(p, offset, n, x)
-        negative_basis = _dd_reg_triplet(p, offset, -n, x)
-        positive_terms[n] = ntuple(component ->
-            dc_mul(
-                positive_coefficients[n],
-                positive_basis.values[component],
-            ), 3)
-        negative_terms[n] = ntuple(component ->
-            dc_mul(
-                negative_coefficients[n],
-                negative_basis.values[component],
-            ), 3)
-        basis_condition = max(
-            basis_condition,
-            positive_basis.condition,
-            negative_basis.condition,
-        )
-        relative_tail = max(
-            relative_tail,
-            positive_basis.relative_tail,
-            negative_basis.relative_tail,
-        )
-    end
-    gamma_c = DDComplex(gamma(dc_value(_dd_hyper_c(p))))
-
-    function sum_at(limit)
-        norm = DDComplex(1)
-        sums = [zero_term[1], zero_term[2], zero_term[3]]
-        absolute = [
-            abs(dc_value(zero_term[1])),
-            abs(dc_value(zero_term[2])),
-            abs(dc_value(zero_term[3])),
-        ]
-        norm_absolute = 1.0
-        for n in 1:limit
-            norm = dc_add(norm, positive_coefficients[n])
-            norm = dc_add(norm, negative_coefficients[n])
-            norm_absolute +=
-                abs(dc_value(positive_coefficients[n])) +
-                abs(dc_value(negative_coefficients[n]))
-            for component in 1:3
-                sums[component] = dc_add(
-                    sums[component],
-                    positive_terms[n][component],
-                )
-                sums[component] = dc_add(
-                    sums[component],
-                    negative_terms[n][component],
-                )
-                absolute[component] +=
-                    abs(dc_value(positive_terms[n][component])) +
-                    abs(dc_value(negative_terms[n][component]))
-            end
-        end
-        norm_value = dc_value(norm)
-        _finite_complex(norm_value) && !iszero(norm_value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_regularized_type1,
-                "nonfinite regularized Type-1 normalization.",
-            ))
-        dd_state = ntuple(component ->
-            dc_mul(
-                gamma_c,
-                dc_div(sums[component], norm),
-            ), 3)
-        values = ntuple(component -> begin
-            value = dc_value(dd_state[component])
-            _finite_complex(value) ||
-                throw(ManoSuzukiTakasugiCertificateError(
-                    :dd_regularized_type1,
-                    "nonfinite regularized Type-1 state sum.",
-                ))
-            ComplexF64(value)
-        end, 3)
-        condition = maximum((
-            basis_condition,
-            norm_absolute / abs(norm_value),
-            ntuple(component ->
-                absolute[component] /
-                max(abs(dc_value(sums[component])),
-                    floatmin(Float64)), 3)...,
-        ))
-        return (
-            state=ManoSuzukiTakasugiTriplet(values...),
-            dd_state=(
-                value=dd_state[1],
-                deriv=dd_state[2],
-                second=dd_state[3],
-            ),
-            condition=Float64(condition),
-            relative_tail=Float64(relative_tail),
-        )
-    end
-    return sum_at(nmax), sum_at(check_nmax)
-end
-
-# Double-double converter coefficients (A0, A1, B0, B1), as in _p_converter.
-function _dd_transform(params, r)
-    kappa = params.kappa
-    epsilon = 2 * params.omega
-    tau = (epsilon - params.m * params.a) / kappa
-    transformation = _teukolsky_transformation_module()
-    Tfun, _, TpTfun = getfield(transformation, :Tx)(
-        params.s, epsilon, kappa, tau)
-    transformed_x = getfield(transformation, :r_to_x)(r, kappa)
-    Tval = DDComplex(Tfun(transformed_x))
-    Xi = DDComplex(TpTfun(transformed_x))
-    half_kappa_inv = DDComplex(inv(2 * kappa))
-    matrix = _teukolsky_from_gsn_matrix(params)(r)
-    M11, M12 = DDComplex(matrix[1, 1]), DDComplex(matrix[1, 2])
-    M21, M22 = DDComplex(matrix[2, 1]), DDComplex(matrix[2, 2])
-    detM = dc_sub(
-        dc_mul(M11, M22),
-        dc_mul(M12, M21),
-    )
-    M12_half = dc_mul(M12, half_kappa_inv)
-    M11_half = dc_mul(M11, half_kappa_inv)
-    A0 = dc_div(
-        dc_mul(Tval, dc_add(
-            M22,
-            dc_mul(M12_half, Xi),
-        )),
-        detM,
-    )
-    A1 = dc_div(dc_mul(Tval, M12_half), detM)
-    B0 = dc_div(
-        dc_mul(Tval, dc_sub(
-            dc_neg(M21),
-            dc_mul(M11_half, Xi),
-        )),
-        detM,
-    )
-    B1 = dc_neg(dc_div(
-        dc_mul(Tval, M11_half),
-        detM,
-    ))
-    return A0, A1, B0, B1
-end
-
-# GSN (X, dX/dx) times `scale` from a double-double P state, with the condition of the
-# linear combination.
-function _dd_convert(
-    params,
-    state,
-    direct_x,
-    r,
-    scale,
-)
-    A0, A1, B0, B1 = _dd_transform(params, r)
-    x_term_0 = dc_mul(A0, state.value)
-    x_term_1 = dc_mul(A1, state.deriv)
-    d_term_0 = dc_mul(B0, state.value)
-    d_term_1 = dc_mul(B1, state.deriv)
-    X = dc_add(x_term_0, x_term_1)
-    dXdrstar = dc_add(d_term_0, d_term_1)
-    dxdrstar = _dx_drstar(params, direct_x)
-    iszero(dxdrstar) && error(
-        "ISEM GSN MST cannot convert dX/drstar at dx/drstar = 0.")
-    applied_scale = DDComplex(scale)
-    X = dc_mul(applied_scale, X)
-    dXdx = dc_mul(
-        applied_scale,
-        dc_div(dXdrstar, DDComplex(dxdrstar)),
-    )
-    X_value = dc_value(X)
-    dXdx_value = dc_value(dXdx)
-    all(_finite_complex, (X_value, dXdx_value)) ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_regularized_type1,
-            "nonfinite regularized Type-1 GSN state.",
-        ))
-    combination_condition = max(
-        (
-            abs(dc_value(x_term_0)) +
-            abs(dc_value(x_term_1))
-        ) / max(abs(dc_value(X)), floatmin(Float64)),
-        (
-            abs(dc_value(d_term_0)) +
-            abs(dc_value(d_term_1))
-        ) / max(abs(dc_value(dXdrstar)), floatmin(Float64)),
-    )
-    return (
-        X=ComplexF64(X_value),
-        dXdx=ComplexF64(dXdx_value),
-        condition=Float64(combination_condition),
-    )
-end
-
-# Regularized Type-1 version of _dd_pin_state.
-function _dd_reg_pin(
-    coefficients::CoefficientSet,
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex,
-    x,
-    r,
-    mst_coordinate;
-    scale,
-)
-    full, check = _dd_reg_pair(data, offset, mst_coordinate)
-    residual = _p_residual(
-        data.params, mst_coordinate, full.state)
-    check_residual = _p_residual(
-        data.params, mst_coordinate, check.state)
-    max(residual, check_residual) <= MANO_SUZUKI_TAKASUGI_RESIDUAL_TOL ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_residual,
-            "regularized DD physical-in residual rejected: " *
-            "full=$residual, check=$check_residual.",
-        ))
-    full_gsn = _dd_convert(
-        coefficients.params,
-        full.dd_state,
-        x,
-        r,
-        scale,
-    )
-    check_gsn = _dd_convert(
-        coefficients.params,
-        check.dd_state,
-        x,
-        r,
-        scale,
-    )
-    truncation = Float64(_amp_distance(
-        (full_gsn.X, full_gsn.dXdx),
-        (check_gsn.X, check_gsn.dXdx),
-    ))
-    truncation <= MANO_SUZUKI_TAKASUGI_AMP_TRUNCATION_MAX ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_truncation,
-            "regularized DD physical-in truncation rejected: " *
-            "agreement=$truncation.",
-        ))
-    condition = max(
-        full.condition,
-        check.condition,
-        full_gsn.condition,
-        check_gsn.condition,
-    )
-    condition <= MANO_SUZUKI_TAKASUGI_DD_CONDITION_MAX ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_condition,
-            "regularized DD physical-in condition rejected: " *
-            "condition=$condition.",
-        ))
-    roundoff = (2MANO_SUZUKI_TAKASUGI_DD_REG_NMAX + 1) *
-        eps(Float64)^2 * condition
-    return (
-        X=full_gsn.X,
-        dXdx=full_gsn.dXdx,
-        estimated_relerr=Float64(max(
-            residual,
-            check_residual,
-            truncation,
-            full.relative_tail,
-            check.relative_tail,
-            roundoff,
-        )),
-        residual=Float64(residual),
-        truncation,
-        condition=Float64(condition),
-        representation=:regularized_type1,
-    )
-end
-
-# Double-double physical-in GSN state at direct_x from the Type-1 series (regularized
-# near a pole of Gamma(c)), with residual, truncation and condition checks.
-function _dd_pin_state(
-    coefficients::CoefficientSet,
-    data::ManoSuzukiTakasugiSeriesData,
-    offset::DDComplex,
-    direct_x::Real;
-    scale,
-)
-    x = Float64(direct_x)
-    0.0 < x < 1.0 || throw(DomainError(x,
-        "DD physical-in evaluation requires x in (0, 1)."))
-    r = _x_to_r(coefficients.params, x)
-    mst_coordinate = mano_suzuki_takasugi_x(data.params, r)
-    _dd_regime(data.params) && return _dd_reg_pin(
-        coefficients,
-        data,
-        offset,
-        x,
-        r,
-        mst_coordinate;
-        scale,
-    )
-    full, check = _dd_type1_pair(
-        data, offset, mst_coordinate)
-    residual = _p_residual(
-        data.params, mst_coordinate, full.state)
-    check_residual = _p_residual(
-        data.params, mst_coordinate, check.state)
-    max(residual, check_residual) <= MANO_SUZUKI_TAKASUGI_RESIDUAL_TOL ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_residual,
-            "DD physical-in residual rejected: " *
-            "full=$residual, check=$check_residual.",
-        ))
-    transform = _p_converter(coefficients.params)(r)
-    X, dXdx = _p_to_gsn_dx(
-        coefficients,
-        full.state.value,
-        full.state.deriv,
-        x,
-        transform,
-    )
-    check_X, check_dXdx = _p_to_gsn_dx(
-        coefficients,
-        check.state.value,
-        check.state.deriv,
-        x,
-        transform,
-    )
-    applied_scale = ComplexF64(scale)
-    X *= applied_scale
-    dXdx *= applied_scale
-    check_X *= applied_scale
-    check_dXdx *= applied_scale
-    truncation = Float64(_amp_distance(
-        (X, dXdx), (check_X, check_dXdx)))
-    condition = max(full.condition, check.condition)
-    truncation <= MANO_SUZUKI_TAKASUGI_AMP_TRUNCATION_MAX ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_truncation,
-            "DD physical-in truncation rejected: " *
-            "agreement=$truncation.",
-        ))
-    condition <= MANO_SUZUKI_TAKASUGI_DD_CONDITION_MAX ||
-        throw(ManoSuzukiTakasugiCertificateError(
-            :dd_physical_in_condition,
-            "DD physical-in condition rejected: condition=$condition.",
-        ))
-    roundoff = (2MANO_SUZUKI_TAKASUGI_RESIDUAL_NMAX + 1) *
-        eps(Float64)^2 * condition
-    return (
-        X=ComplexF64(X),
-        dXdx=ComplexF64(dXdx),
-        estimated_relerr=Float64(max(
-            residual,
-            check_residual,
-            truncation,
-            roundoff,
-        )),
-        residual=Float64(residual),
-        truncation,
-        condition=Float64(condition),
-        representation=:native_type1,
-    )
-end
 
 # Physical-in P and dP/dx at r from the budgeted Type-1 series normalized by `norm`,
 # with a radial-equation residual check.
@@ -6896,10 +5673,10 @@ end
     ManoSuzukiTakasugiPhysicalPlan
 
 Plan returned by `mano_suzuki_takasugi_physical_plan`: coefficient set, MST series data, branch
-(`:IN` or `:UP`), certified amplitudes, P-to-GSN converter, normalization factors, the
-double-double nu offset (or `nothing`) and the amplitude representation.
+(`:IN` or `:UP`), certified amplitudes, P-to-GSN converter, normalization factors and the
+amplitude representation.
 """
-struct ManoSuzukiTakasugiPhysicalPlan{C,D,A,F,P,S,O,R}
+struct ManoSuzukiTakasugiPhysicalPlan{C,D,A,F,P,S,O}
     coefficients::C
     data::D
     branch::Symbol
@@ -6908,7 +5685,6 @@ struct ManoSuzukiTakasugiPhysicalPlan{C,D,A,F,P,S,O,R}
     pin_norm::P
     pin_scale::S
     out_factor::O
-    nu_offset_dd::R
     representation::Symbol
 end
 
@@ -6917,76 +5693,25 @@ end
     return normalized == :in ? :IN : :UP
 end
 
-# ManoSuzukiTakasugiSeriesData with a_n for |n| <= MANO_SUZUKI_TAKASUGI_N_MAX from the double-double ratios at `offset`.
-function _dd_state_data(params::ManoSuzukiTakasugiParams, offset::DDComplex)
-    positive, negative = _dd_ratios(
-        params,
-        offset;
-        cutoff=MANO_SUZUKI_TAKASUGI_NEGATIVE_IMAGINARY_AXIS_TAIL,
-        nmax=MANO_SUZUKI_TAKASUGI_N_MAX,
-    )
-    data = ManoSuzukiTakasugiSeriesData(params)
-    for n in 1:MANO_SUZUKI_TAKASUGI_N_MAX
-        value = dc_value(positive[n])
-        _finite_complex(value) && !iszero(value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_physical_state,
-                "nonfinite positive DD MST state ratio at n=$n.",
-            ))
-        data.log_coeffs[n] = data.log_coeffs[n - 1] + log(value)
-        data.cf_relerrs[n] = eps(Float64)
-        data.cf_ok[n] = true
-        data.coeff_errors[n] = data.coeff_errors[n - 1] + 2eps(Float64)
-    end
-    for n in 1:MANO_SUZUKI_TAKASUGI_N_MAX
-        value = dc_value(negative[n])
-        _finite_complex(value) && !iszero(value) ||
-            throw(ManoSuzukiTakasugiCertificateError(
-                :dd_physical_state,
-                "nonfinite negative DD MST state ratio at n=$(-n).",
-            ))
-        data.log_coeffs[-n] = data.log_coeffs[-n + 1] + log(value)
-        data.cf_relerrs[-n] = eps(Float64)
-        data.cf_ok[-n] = true
-        data.coeff_errors[-n] = data.coeff_errors[-n + 1] + 2eps(Float64)
-    end
-    return data
-end
-
 # Certified amplitudes of `branch` from the first representation that passes: principal
-# nu, double-double refined nu, then shifted representations (mano_suzuki_takasugi_negative_imaginary_axis_amplitudes).
-# Returns (series data, amplitudes, DD offset or nothing, representation).
+# nu, principal nu with split K sums (_split_amplitudes), then shifted representations
+# (mano_suzuki_takasugi_negative_imaginary_axis_amplitudes). Returns (series data, amplitudes, representation).
 function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Symbol)
     errors = String[]
     try
         result = _principal_amplitudes(data, branch)
-        return data, result, nothing, :principal
+        return data, result, :principal
     catch error
         error isa InterruptException && rethrow()
         push!(errors, "principal=$(sprint(showerror, error))")
     end
 
-    # binary64 replacement pending: QNM near-AS n = 8, |a| < 0.015 (see _refined_amplitudes)
     try
-        result = _refined_amplitudes(data, branch)
-        base = data.params
-        offset = result.nu_offset_dd
-        params = ManoSuzukiTakasugiParams(
-            base.s,
-            base.l,
-            base.m,
-            base.a,
-            base.omega,
-            base.lambda,
-            result.nu,
-            dc_value(offset),
-        )
-        selected = branch == :UP ?
-            _dd_state_data(params, offset) : ManoSuzukiTakasugiSeriesData(params)
-        return selected, result, offset, :dd_refined
+        result = _split_amplitudes(data, branch)
+        return data, result, :split_index
     catch error
         error isa InterruptException && rethrow()
-        push!(errors, "dd_refined=$(sprint(showerror, error))")
+        push!(errors, "split_index=$(sprint(showerror, error))")
     end
 
     try
@@ -7003,7 +5728,7 @@ function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Sy
         )
         centered = result.nu - round(Int, real(result.nu))
         selected = _amp_data(base, centered, result.shift)
-        return selected, result, nothing, :coherent_shift
+        return selected, result, :coherent_shift
     catch error
         error isa InterruptException && rethrow()
         push!(errors, "coherent_shift=$(sprint(showerror, error))")
@@ -7047,9 +5772,9 @@ function mano_suzuki_takasugi_physical_plan(
 )
     physical = _physical_branch(branch)
     source = _mano_suzuki_takasugi_data(coefficients)
-    data, amplitudes, offset, representation =
+    data, amplitudes, representation =
         _physical_amplitude_plan(source, physical)
-    pin_norm = physical == :IN && offset === nothing ?
+    pin_norm = physical == :IN ?
         (hasproperty(amplitudes, :coefficient_norm) ?
             amplitudes.coefficient_norm : _incoming_raw_factor(data)) : nothing
     pin_scale = physical == :IN ?
@@ -7066,7 +5791,6 @@ function mano_suzuki_takasugi_physical_plan(
         pin_norm,
         pin_scale,
         out_factor,
-        offset,
         representation,
     )
 end
@@ -7075,7 +5799,7 @@ end
     mano_suzuki_takasugi_physical_state(plan, direct_x)
 
 GSN state `(X, dXdx)` of the plan's physical solution at `direct_x` in (0, 1): IN from
-the hypergeometric (Type-1) series, in double-double when the plan holds a refined nu;
+the hypergeometric (Type-1) series;
 UP from the U-function series. Also returns the estimated error, residual, truncation,
 condition and series range.
 """
@@ -7091,24 +5815,6 @@ function mano_suzuki_takasugi_physical_state(
     r = _x_to_r(params, x)
 
     if plan.branch == :IN
-        if plan.nu_offset_dd !== nothing
-            state = _dd_pin_state(
-                coefficients,
-                plan.data,
-                plan.nu_offset_dd,
-                x;
-                scale=plan.pin_scale,
-            )
-            order = state.representation == :regularized_type1 ?
-                MANO_SUZUKI_TAKASUGI_DD_REG_NMAX : MANO_SUZUKI_TAKASUGI_RESIDUAL_NMAX
-            return merge(state, (
-                tail=Float64(state.truncation),
-                nmin=-order,
-                nmax=order,
-                budget_status=:OK,
-                amplitude_representation=plan.representation,
-            ))
-        end
         result = _mano_suzuki_takasugi_pin_result(plan.data, r, plan.pin_norm)
         X, dXdx = _p_to_gsn_dx(
             coefficients,
