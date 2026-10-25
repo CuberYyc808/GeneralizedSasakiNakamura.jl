@@ -1472,6 +1472,22 @@ end
 # is tried first; when it is not kept, the default solve is returned if it agrees with the
 # seed, and otherwise the seeded solve is repeated with the automatic BigFloat fallback,
 # so that the seed fixes the label while the default path keeps its cost where it agrees.
+# A Float64 rung estimated by the second-layer certificate (delta <= 1e-8) is usable as a ladder source.
+_float64_certified_estimate(result) = result.stop_reason == :float64_position_estimate
+
+function _rung_position_error(result)
+    certificate = get(result.provenance, :float64_certificate, nothing)
+    certificate isa NamedTuple && !ismissing(certificate.delta) && return Float64(certificate.delta)
+    return Float64(result.root_residual)
+end
+
+# Sum of |Lagrange weight at 0| times the node errors.
+function _extrapolated_error(nodes, errors)
+    x = Float64.(nodes)
+    return sum(abs(prod(-x[j] / (x[i] - x[j]) for j in eachindex(x) if j != i)) * errors[i]
+        for i in eachindex(x))
+end
+
 function _two_end_anchored_frequency(mode::QNMMode, a, spin_seed; kwargs...)
     # The BigFloat repeat only where wide arithmetic is allowed (see _qnm_frequency_labeled).
     requested = get(kwargs, :automatic_precision_fallback, nothing)
@@ -1479,7 +1495,7 @@ function _two_end_anchored_frequency(mode::QNMMode, a, spin_seed; kwargs...)
         (_working_type(a, get(kwargs, :guess, nothing)) !== Float64 || haskey(kwargs, :fallback_precision_bits)) :
         requested
     quick = _qnm_frequency_labeled(mode, a; kwargs..., spin_seed,
-        automatic_precision_fallback=false, float64_rescue=false)
+        automatic_precision_fallback=false)
     # A failed solve records no guess source; the seed was then used.
     get(quick.provenance, :guess_source, spin_seed.source) == spin_seed.source ||
         return quick.status == :accepted || !fallback ? quick :
@@ -1750,11 +1766,8 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         )
         initial_failure = result.status == :accepted ? nothing : result
         source_precision_fallback = false
-        # A Float64 source the continued-fraction gates did not accept but that stayed in Float64 (no wide
-        # fallback) is good to ~1e-11 at these spins (128-bit roots of the same sources agree to that), enough
-        # for the extrapolation to kappa = 0.
-        source_usable = result.status in (:accepted, :float64_unconverged) ||
-            (mode.n >= 5 && result.status == :estimated)
+        source_usable = result.status == :accepted ||
+            (result.status == :estimated && (mode.n >= 5 || _float64_certified_estimate(result)))
         # A source sequence that ended on the negative imaginary axis is not revived by
         # higher precision (as for finite spins, segment 0 is not restarted).
         if !source_usable && T === Float64 && automatic_precision_fallback &&
@@ -1842,8 +1855,8 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                 )
             end)
         end
-        if !(result.status in (:accepted, :float64_unconverged) ||
-                (mode.n >= 5 && result.status == :estimated)) &&
+        if !(result.status == :accepted ||
+                (result.status == :estimated && (mode.n >= 5 || _float64_certified_estimate(result)))) &&
                 _extremal_zdm_endpoint_scope(mode, a)
             endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
                 sheet_id, convention,
@@ -1863,8 +1876,8 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                     source_rows=rows,
                 )))
         end
-        (result.status in (:accepted, :float64_unconverged) ||
-            (mode.n >= 5 && result.status == :estimated)) ||
+        (result.status == :accepted ||
+            (result.status == :estimated && (mode.n >= 5 || _float64_certified_estimate(result)))) ||
             return _failed_result(
             mode, a, isempty(roots) ? complex(T(NaN), T(NaN)) : roots[end],
             :extremal_limit_source_failure,
@@ -1897,6 +1910,8 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
             status=result.status,
             stop_reason=result.stop_reason,
             source_precision_fallback,
+            # Position uncertainty of the rung: the Float64 certificate's delta where there is one.
+            position_error=_rung_position_error(result),
         ))
         previous = omega
         if selected_inversion === :auto &&
@@ -1914,7 +1929,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
     contract = _schwarzschild_label_contract(mode, convention)
     selected_output_inversion = selected_inversion === :auto ? mode.n :
         Int(selected_inversion)
-    all_sources_accepted = all(row.status in (:accepted, :float64_unconverged) for row in rows)
+    all_sources_accepted = all(row.status == :accepted for row in rows)
     family = _extremal_ladder_family(mode, a, roots)
     ladder = (
         source_rows=rows,
@@ -1924,6 +1939,9 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         quadratic_limit=quadratic,
         cubic_limit=cubic,
         limit_drift=drift,
+        # The cubic extrapolation to kappa = 0 amplifies the rung errors by its Lagrange weights (10-30x).
+        limit_propagated_error=_extrapolated_error(spin_defects[2:end],
+            [row.position_error for row in rows[2:end]]),
         all_sources_accepted,
         family_classification=family.family,
         family_ratios=family.ratios,
@@ -1959,7 +1977,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         :high_precision_refined)
     exact_ok = exact.status == :accepted && angular_usable
     accepted = exact_ok && continuity && family.family == :DM &&
-        all(row.status in (:accepted, :estimated, :float64_unconverged) for row in rows)
+        all(row.status in (:accepted, :estimated) for row in rows)
     estimated = !accepted && angular_usable && isfinite(exact.omega)
     nan_complex = complex(T(NaN), T(NaN))
     omega = angular_usable ? exact.omega : quadratic
@@ -2494,39 +2512,6 @@ function _near_axis_position_precision_recovery(mode::QNMMode, a, omega;
     end
 end
 
-# Float64 rescue of a failed Float64 root (see _qnm_frequency_labeled): one more solve with the rescue options,
-# kept only when accepted.
-function _float64_retry(mode::QNMMode, a, options::NamedTuple)
-    # Behind an inference barrier: the retry is rare, and inferring the solver once more for its keyword types
-    # cost every first call ~8 s of compilation.
-    retried = try
-        Base.inferencebarrier(_qnm_frequency_labeled)(mode, a; options..., automatic_precision_fallback=false,
-            float64_rescue=false)
-    catch err
-        err isa InterruptException && rethrow()
-        nothing
-    end
-    return retried !== nothing && retried.status == :accepted ?
-        _with_provenance(retried, (float64_rescue=:accepted,)) : nothing
-end
-
-# The rescued root, or the failed one with status :float64_unconverged; the latter keeps the last evaluation of
-# the failed polish (angular eigenvalue, continued fraction, residuals) when there is one.
-function _float64_rescue_result(mode::QNMMode, a, options::NamedTuple, failed, polish, convention,
-        overtone_index, inversion_index)
-    retried = _float64_retry(mode, a, options)
-    retried === nothing || return retried
-    evaluation = polish === nothing ? nothing : polish.evaluation
-    evaluation === nothing &&
-        return _with_provenance(failed, (float64_rescue=:unconverged,); status=:float64_unconverged)
-    T = typeof(failed.a)
-    return LeaverResult(mode, convention, overtone_index, inversion_index, failed.a, polish.omega,
-        evaluation.angular.angular_A, evaluation.angular.lambda, evaluation.angular.mixing, evaluation.value,
-        T(evaluation.error), evaluation.iterations, T(_root_residual(evaluation)),
-        T(evaluation.angular.residual), _precision_bits(T), :float64_unconverged, failed.stop_reason,
-        merge(failed.provenance, (float64_rescue=:unconverged,)))
-end
-
 # Segment-0 (or seeded segment-1) solver behind `qnm_frequency`: seed, spin
 # continuation, final polish with an independent higher-order guard, and gates.
 function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
@@ -2549,15 +2534,14 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         fallback_precision_bits::Union{Int,Nothing}=nothing,
         segment::Int=0,
         segment_seed=nothing,
-        spin_seed=nothing,
-        float64_rescue::Bool=true)
+        spin_seed=nothing)
     _require_qnm_angular_backend()
     selected_convention = _qnm_convention(convention)
     T = _working_type(a, guess)
     aT = T(a)
     # A Float64 solve stays in Float64 unless wider arithmetic is asked for (automatic_precision_fallback=true
-    # or an explicit fallback_precision_bits): a failed root is solved again in Float64 with halved spin steps
-    # and four times the continued-fraction depth, and is otherwise returned with status :float64_unconverged.
+    # or an explicit fallback_precision_bits): where it would fail, the second layer (_float64_floor_certificate)
+    # certifies the root at the binary64 rounding floor, and only when that fails too is BigFloat used, if asked.
     fallback_on::Bool = automatic_precision_fallback === nothing ?
         (T !== Float64 || fallback_precision_bits !== nothing) : automatic_precision_fallback
     fallback_bits::Int = something(fallback_precision_bits, 128)
@@ -2645,16 +2629,6 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         "minimum_spin_step must be positive."))
     minimum_step <= maximum_step || throw(ArgumentError(
         "minimum_spin_step must not exceed maximum_spin_step."))
-    float64_rescue_applies = T === Float64 && !fallback_on && float64_rescue
-    rescue_options = (; guess, convention, inversion_index, continuation_coordinate, angular_order,
-        sheet_id=Symbol(sheet_id, :_float64_rescue), cf_tolerance, cf_minimum_iterations,
-        cf_maximum_iterations=4 * maximum_cf_iterations, root_tolerance, stability_tolerance,
-        maximum_root_iterations, initial_spin_step=initial_spin_step / 2,
-        maximum_spin_step=maximum_spin_step / 2, minimum_spin_step=minimum_spin_step / 2, trust_radius,
-        segment, segment_seed, spin_seed)
-    float64_rescue_result(failed; polish=nothing) = float64_rescue_applies ?
-        _float64_rescue_result(mode, a, rescue_options, failed, polish, selected_convention, overtone_index,
-            selected_inversion) : failed
 
     if abs(aT) == one(T) && segment != 0
         return _failed_result(mode, aT, complex(T(NaN), T(NaN)),
@@ -2887,6 +2861,23 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                     terminal_extrapolation=true))
                     for row in polished.history])
                 last_polish = polished
+                # Float64: instead of the one jump from the anchor, continue in nu = asin(a) from the accepted
+                # path to the target in steps of 0.005 before the root is certified or given up.
+                if !polished.converged && T === Float64
+                    nu_state = (; accepted_spins=copy(accepted_spins),
+                        accepted_coordinates=asin.(accepted_spins), accepted_roots=copy(accepted_roots),
+                        accepted_angular_A=copy(accepted_angular_A), continuation_rows,
+                        rejected_continuation_rows, last_polish=Ref{Any}(polished),
+                        nia_restart_rows=NamedTuple[])
+                    nu_outcome = _continue_in_spin!(nu_state, mode, asin(aT); selected_coordinate=:nu,
+                        initial_step=T(0.005), minimum_step, maximum_step=T(0.005),
+                        continuation_root_tolerance, polish_options)
+                    if nu_outcome.completed && nu_state.last_polish[].converged
+                        polished = nu_state.last_polish[]
+                        predictor = polished.omega
+                        last_polish = polished
+                    end
+                end
                 if !polished.converged
                     terminal_provenance = (
                         input_type=string(typeof(a)),
@@ -2903,14 +2894,24 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                             continuation_state.nia_restart_rows),
                         nia_restart_rows=continuation_state.nia_restart_rows,
                     )
+                    if T === Float64 && _root_equation(polished.evaluation) == :leaver_continued_fraction
+                        certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
+                            polished.omega, sheet_id, angular_order, selected_inversion, cf_minimum_iterations,
+                            maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
+                        certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
+                            mode, certificate, Float64(aT), selected_convention, overtone_index,
+                            selected_inversion, merge(label_provenance, terminal_provenance))::LeaverResult
+                        terminal_provenance = merge(terminal_provenance,
+                            (float64_certificate=_certificate_provenance(certificate),))
+                    end
                     if T === Float64 && fallback_on
                         return _automatic_precision_fallback(
                             mode, aT, polished.omega;
                             fallback_options...,
                             float64_provenance=terminal_provenance)
                     end
-                    return float64_rescue_result(failed_result(polished.omega,
-                        polished.stop_reason, terminal_provenance); polish=polished)
+                    return failed_result(polished.omega,
+                        polished.stop_reason, terminal_provenance)
                 end
                 branch_guard = _continuation_branch_guard(
                     accepted_coordinates, accepted_roots, aT, predictor,
@@ -3086,15 +3087,25 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                         seed_spin=seed_result.seed_spin, provenance=float64_provenance),
                     failed_primary=final_primary, failed_guard=guard)
             end
+            guard_certificate = nothing
+            if T === Float64 && guard_root_equation == :leaver_continued_fraction
+                guard_certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
+                    guard.omega, Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion,
+                    cf_minimum_iterations, maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
+                guard_certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
+                    mode, guard_certificate, Float64(aT), selected_convention, overtone_index, selected_inversion,
+                    merge(label_provenance, float64_provenance, (float64_stop_reason=guard.stop_reason,)))::LeaverResult
+            end
             if T === Float64 && fallback_on &&
                     guard_root_equation == :leaver_continued_fraction
                 return _automatic_precision_fallback(
                     mode, aT, guard.omega;
                     fallback_options...,
                     float64_provenance=merge(float64_provenance, (
-                        float64_stop_reason=guard.stop_reason,)))
+                        float64_stop_reason=guard.stop_reason,
+                        float64_certificate=_certificate_provenance(guard_certificate))))
             end
-            guard_failure = failed_result(
+            return failed_result(
                 guard.omega, guard.stop_reason, (
                 input_type=string(typeof(a)), spin_path=accepted_spins,
                 coordinate_path=accepted_coordinates,
@@ -3102,9 +3113,9 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                 continuation_rows=continuation_rows,
                 rejected_continuation_rows=rejected_continuation_rows,
                 guard_rows=guard.history,
+                float64_certificate=guard_certificate === nothing ? nothing :
+                    _certificate_provenance(guard_certificate),
             ))
-            return guard_root_equation == :leaver_continued_fraction ?
-                float64_rescue_result(guard_failure; polish=guard) : guard_failure
         end
         root_drift = T(abs(guard.omega - current) /
             max(one(T), abs(guard.omega), abs(current)))
@@ -3139,12 +3150,18 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
               hasproperty(final_primary, :conditioned) &&
               final_primary.conditioned))
         terminal_label_uncertain = false
-        float64_unconverged = false
-        if !accepted && !conditioned_root && float64_rescue_applies &&
+        # Float64 root that failed the gates (an :estimated one keeps its status): second-layer certificate.
+        certificate = nothing
+        if !accepted && !conditioned_root && T === Float64 &&
                 root_equation == :leaver_continued_fraction
-            retried = _float64_retry(mode, a, rescue_options)
-            retried === nothing || return retried
-            float64_unconverged = true
+            certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT, guard.omega,
+                Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion, cf_minimum_iterations,
+                maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
+            certificate.status == :failed || return Base.inferencebarrier(_gate_certificate_result)(
+                mode, certificate, aT, selected_convention, overtone_index, selected_inversion,
+                terminal_extrapolation_rows, accepted_roots,
+                merge(label_provenance, float64_provenance, (float64_root_drift=root_drift,
+                    float64_root_residual=final_root_residual, float64_cf_error=final.error)))::LeaverResult
         end
         if !accepted && !conditioned_root && T === Float64 &&
                 fallback_on &&
@@ -3156,6 +3173,8 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                     float64_root_drift=root_drift,
                     float64_root_residual=final_root_residual,
                     float64_cf_error=final.error,
+                    float64_certificate=certificate === nothing ? nothing :
+                        _certificate_provenance(certificate),
                 )))
         end
         # A cubic jump from the sequence anchor cannot resolve the overtone
@@ -3190,7 +3209,7 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                 wide=fallback_on)
             if !near_axis_check.verified
                 accepted = false
-                conditioned_root = false
+                conditioned_root = get(near_axis_check, :estimated, false)
             end
         end
         stop_reason = near_axis_check !== nothing &&
@@ -3214,8 +3233,7 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
             final.angular.mixing, final.value, T(final.error),
             final.iterations, final_root_residual,
             T(final.angular.residual), _precision_bits(T),
-            accepted ? :accepted : conditioned_root ? :estimated :
-                float64_unconverged ? :float64_unconverged : :failed,
+            accepted ? :accepted : conditioned_root ? :estimated : :failed,
             stop_reason,
             (
                 input_type=string(typeof(a)),

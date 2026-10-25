@@ -89,7 +89,7 @@ end
 
 # Coefficients of the large-n expansion of the continued-fraction tail in
 # powers of 1/sqrt(n+1), used to close the truncated fraction.
-function _leaver_tail_coefficients(D, order::Int=12)
+function _leaver_tail_coefficients(D, order::Int=12; leading=nothing)
     C = typeof(D[1])
     T = typeof(real(D[1]))
     coefficients = zeros(C, order + 3)
@@ -97,7 +97,7 @@ function _leaver_tail_coefficients(D, order::Int=12)
     coefficients[1] = -1
     # Principal sqrt: its cut lies on the negative imaginary frequency axis.
     # _polish_leaver_root clamps its difference stencil to the physical side.
-    coefficients[2] = sqrt(-(D[1] + D[2] + D[3]))
+    coefficients[2] = leading === nothing ? sqrt(-(D[1] + D[2] + D[3])) : leading
     iszero(coefficients[2]) && throw(DomainError(coefficients[2],
         "The half-integer asymptotic tail requires nonzero frequency."))
     coefficient(k) = k < 0 ? zero(C) : coefficients[k + 1]

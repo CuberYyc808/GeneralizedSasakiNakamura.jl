@@ -78,9 +78,10 @@ end
         root = r.branch == ordinary ? qnm_frequency(QNMMode(-2, r.l, r.m, r.n), r.a; convention=get(r, :convention, :overtone)) :
             mirror_root(r.a, -2, r.l, r.m, r.n; convention=get(r, :convention, :overtone))
         @testset "$(r.source) a=$(r.a) ($(r.l),$(r.m),$(r.n)) $(r.branch)" begin
-            # Float64 roots stay in Float64: a root that misses the continued-fraction gates there is
-            # :float64_unconverged and is still compared with the reference.
-            @test root.status in (:accepted, :float64_unconverged)
+            # n = 20: the Float64 certificate bounds the position to ~5e-9 (estimated); the value checks stay.
+            @test root.status == :accepted || (r.n >= 20 && root.status == :estimated)
+            # Float64 input stays in Float64 (ordinary and mirror roots).
+            @test root.omega isa ComplexF64 && root.precision_bits == 53
             if startswith(r.source, "Cook") && r.n == 20 &&
                     (((r.l, r.m) == (2, 2) && r.branch != ordinary) || ((r.l, r.m) == (3, 1) && r.branch == ordinary))
                 # Catalogue precision is informational; independent CF references below
@@ -98,13 +99,14 @@ end
     for r in N20_CF_ROOTS
         root = r.branch == ordinary ? qnm_frequency(QNMMode(-2,r.l,r.m,20),r.a) :
             mirror_root(r.a,-2,r.l,r.m,20)
-        @test root.status in (:accepted, :float64_unconverged)
+        @test root.status in (:accepted, :estimated)
+        @test root.omega isa ComplexF64 && root.precision_bits == 53
         @test isapprox(root.omega,r.omega;atol=1e-10,rtol=0)
         fine=qnm_frequency(root.mode,r.a;guess=root.omega,
             angular_order=48,inversion_index=root.inversion_index,
             cf_minimum_iterations=600,cf_maximum_iterations=24000,
             cf_tolerance=1e-13,automatic_precision_fallback=false)
-        @test fine.status in (:accepted, :float64_unconverged)
+        @test fine.status in (:accepted, :estimated)
         @test isapprox(fine.omega,r.omega;atol=1e-10,rtol=0)
     end
 end
@@ -527,7 +529,8 @@ end
         # Each restart across a detected axis crossing is counted; there is at least the a ~ 0.9367 tangency.
         @test nine95.provenance.continuation_axis_touches >= 1
         fifteen95 = qnm_frequency(QNMMode(-2, 2, 0, 15), 0.95; segment=1)
-        @test fifteen95.status in (:accepted, :float64_unconverged)
+        # Float64: a root born in a collision on the axis is certified only as an estimate (delta ~ 1e-11).
+        @test fifteen95.status in (:accepted, :estimated)
         @test fifteen95.omega ≈ 0.0007778523831778085 - 3.708747044425906im atol=2e-8 rtol=0
         # 13_0 ends on the pole -3.25i (Re w ~ a_end - a) only 0.0046 before 13_1 starts; segment 0 must stop
         # there instead of stepping across the gap (Cook & Zalutskiy Table II: 0.489617 and 0.494193).
@@ -540,7 +543,7 @@ end
         # 19_1 leaves the pole -4.75i at a = 0.5549 and is still within 1e-5 of it at a = 0.56
         # (Cook Zenodo 14024959 v3 row).
         nineteen = qnm_frequency(QNMMode(-2, 2, 0, 19), 0.56; segment=1)
-        @test nineteen.status in (:accepted, :float64_unconverged)
+        @test nineteen.status in (:accepted, :estimated)
         @test nineteen.omega ≈ 6.435702118014181e-6 - 4.749402227644355im atol=2e-8 rtol=0
         # Close to a = 1 the axis touches of 19_1 accumulate; the continuation reports that instead of an end.
         nineteen99 = qnm_frequency(QNMMode(-2, 2, 0, 19), 0.99; segment=1)
@@ -562,6 +565,13 @@ end
         moved = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56 + 1e-6im, options;
             precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10)
         @test !moved.verified
+        # Without wide arithmetic the same check is the Float64 second-layer certificate.
+        check64 = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56, options;
+            precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10, wide=false)
+        @test check64.verified && check64.precision_bits == 53
+        moved64 = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56 + 1e-6im, options;
+            precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10, wide=false)
+        @test !moved64.verified
         # The BigFloat position certificate accepts the same root (three consistent derivative stencils and a
         # Newton correction below the stability gate).
         certified = setprecision(BigFloat, 128) do
@@ -609,6 +619,7 @@ end
             overtone_index=0, inversion_index=0, segment=1)
         @test fallback.provenance.sequence_segment == 1
         sequence = qnm_sequence(QNMMode(-2, 2, 0, 10), 0:0.05:0.5)
+        @test all(r -> r.omega isa ComplexF64 && r.precision_bits == 53, sequence)
         @test last(sequence).a == 0.4
         @test last(sequence).stop_reason == :negative_imaginary_axis_endpoint
         @test all(r -> r.status == :accepted, sequence[1:(end - 1)])

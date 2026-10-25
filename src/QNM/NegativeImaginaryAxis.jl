@@ -622,22 +622,27 @@ function _near_axis_precision_check(mode::QNMMode, a::Float64,
     end
 end
 
+# Float64 verification next to the NIA (instead of the BigFloat re-polish): the second-layer certificate
+# (_float64_floor_certificate) at the smallest converged depth; :accepted verifies the root, :estimated keeps it
+# as an estimate.
 function _near_axis_float64_check(mode::QNMMode, a::Float64, omega::ComplexF64, polish_options;
         root_tolerance, stability_tolerance)
-    options = merge(polish_options, (
-        sheet_id=Symbol(polish_options.sheet_id, :_near_axis_check),
-        cf_minimum_iterations=max(polish_options.cf_minimum_iterations, 600),
-        cf_maximum_iterations=max(polish_options.cf_maximum_iterations, 24000),
-        root_tolerance=Float64(root_tolerance),
-    ))
-    polished = try
-        _polish_frequency_root(mode, a, omega; options...)
-    catch
+    certificate = try
+        _float64_floor_certificate(mode, a, omega; angular_order=polish_options.angular_order,
+            sheet_id=polish_options.sheet_id, inversion_index=polish_options.inversion_index,
+            cf_minimum_iterations=polish_options.cf_minimum_iterations,
+            cf_maximum_iterations=polish_options.cf_maximum_iterations,
+            root_tolerance=Float64(root_tolerance), stability_tolerance=Float64(stability_tolerance),
+            near_axis=true)
+    catch err
+        err isa InterruptException && rethrow()
         nothing
     end
-    polished === nothing && return (verified=false, precision_bits=53, converged=false,
+    certificate === nothing && return (verified=false, estimated=false, precision_bits=53, converged=false,
         stop_reason=:evaluation_error, bigfloat_omega=missing, drift=Inf)
-    drift = Float64(abs(polished.omega - omega) / max(1.0, abs(polished.omega)))
-    return (verified=polished.converged && drift <= stability_tolerance, precision_bits=53,
-        converged=polished.converged, stop_reason=polished.stop_reason, bigfloat_omega=missing, drift)
+    drift = get(certificate, :drift, Inf)
+    return (verified=certificate.status == :accepted && drift <= stability_tolerance,
+        estimated=certificate.status == :estimated, precision_bits=53, converged=certificate.status != :failed,
+        stop_reason=certificate.stop_reason, bigfloat_omega=missing, drift,
+        float64_certificate=_certificate_provenance(certificate))
 end

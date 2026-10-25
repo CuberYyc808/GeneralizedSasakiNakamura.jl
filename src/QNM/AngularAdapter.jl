@@ -22,10 +22,11 @@ const _QNM_REQUIRED_ANGULAR_APIS = (
 _has_big_spectral_matrix() = isdefined(SpinWeightedSpheroidalHarmonics, :_big_spectral_matrix) ||
     isdefined(SpinWeightedSpheroidalHarmonics, :construct_spectral_matrix)
 
+# The precision-generic one first: it keeps a ComplexF64 c in ComplexF64.
 _big_angular_spectral_matrix(c, s::Int, m::Int, size::Int) =
-    isdefined(SpinWeightedSpheroidalHarmonics, :_big_spectral_matrix) ?
-        SpinWeightedSpheroidalHarmonics._big_spectral_matrix(c, s, m, size) :
-        SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, size)
+    isdefined(SpinWeightedSpheroidalHarmonics, :construct_spectral_matrix) ?
+        SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, size) :
+        SpinWeightedSpheroidalHarmonics._big_spectral_matrix(c, s, m, size)
 
 function _require_qnm_angular_backend()
     missing_apis = Any[filter(
