@@ -9,11 +9,13 @@ using ..Coordinates
 using ..InitialConditions
 using ..Potentials
 using ..Solutions
+using ..Transformation
 
 export is_exact_extremal_spin, extremal_horizon_detuning
 export extremal_teukolsky_horizon_coefficients
 export extremal_teukolsky_horizon_state
 export extremal_gsn_horizon_state, extremal_horizon_normalization
+export extremal_horizon_closed_normalization, extremal_gsn_horizon_coefficients
 export solve_extremal_gsn, extremal_complex_path_amplitudes
 
 const _NORMALIZATION_PRECISION_BITS = 384
@@ -160,17 +162,53 @@ function _normalization_sample(s, m, a, omega, lambda, h, branch, order)
 end
 
 """
-    extremal_horizon_normalization(s, m, a, omega, lambda, branch; precision_bits, order)
+    extremal_horizon_closed_normalization(s, m, a, omega, lambda, branch)
 
-Leading amplitude of the raw GSN horizon branch, extrapolated to `h = r - 1 -> 0` by Richardson
-extrapolation of samples at `h`, `h/2`, `h/4` in BigFloat arithmetic. Returns
-`(value, drift, base_h, precision_bits, order)`, with `drift` an estimate of the extrapolation error.
+Leading amplitude of the raw GSN horizon branch at exact extremality in closed form, with
+`delta = 2omega - sign(a) m` formed once: `N_in = sqrt(2)` (s = 0), `-4 sqrt(2) i delta` (s = -1),
+`(2 sign(a) m + 2i(2 + lambda)) / (sqrt(2) delta)` (s = +1), `-4 sqrt(2) delta^2` (s = -2),
+`-eta(1) / (2 sqrt(2) delta^2)` (s = +2), and `N_out = 2 eta(1) / N_in` (from the Wronskian of the two
+branches), `eta` the GSN transformation function at r = 1. The general conversion factors cancel as
+eps (m^2 + 4|omega|^2) / |delta|^2 there; these agree with the 384-bit extrapolation to 4e-14 at
+|delta| = 0.3. Generic in the number type.
+"""
+function extremal_horizon_closed_normalization(s::Int, m::Int, a, omega, lambda, branch::Symbol)
+    sigma = _checked_extremal_sign(a)
+    detuning = _require_nonsynchronous(a, m, omega)
+    eta1 = Transformation.eta(s, m, a, omega, lambda, one(real(float(detuning))))
+    iszero(eta1) && throw(DomainError(eta1, "eta(r = 1) = 0: the GSN transformation is singular"))
+    root2 = sqrt(2 * one(real(float(detuning))))
+    incoming = s == 0 ? complex(root2) :
+        s == -1 ? -4root2 * im * detuning :
+        s == 1 ? (2sigma * m + 2im * (2 + lambda)) / (root2 * detuning) :
+        s == -2 ? -4root2 * detuning^2 :
+        s == 2 ? -eta1 / (2root2 * detuning^2) :
+        throw(DomainError(s, "Currently only spin weight s of 0, +/-1, +/-2 are supported"))
+    branch === :ingoing && return incoming
+    branch === :outgoing && return 2eta1 / incoming
+    throw(ArgumentError("extremal horizon branch must be :ingoing or :outgoing"))
+end
+
+"""
+    extremal_horizon_normalization(s, m, a, omega, lambda, branch; precision_bits=nothing, order)
+
+Leading amplitude of the raw GSN horizon branch. By default the closed form
+(`extremal_horizon_closed_normalization`, in the working precision); with an explicit `precision_bits`,
+the Richardson extrapolation to `h = r - 1 -> 0` of samples at `h`, `h/2`, `h/4` in BigFloat arithmetic.
+Returns `(value, drift, base_h, precision_bits, order)`, with `drift` an estimate of the extrapolation error
+(zero for the closed form, whose `base_h` is `nothing`).
 """
 function extremal_horizon_normalization(
         s::Int, m::Int, a, omega, lambda, branch::Symbol;
-        precision_bits::Int=_NORMALIZATION_PRECISION_BITS,
+        precision_bits::Union{Int,Nothing}=nothing,
         order::Int=_NORMALIZATION_SERIES_ORDER)
     _require_nonsynchronous(a, m, omega)
+    if precision_bits === nothing
+        value = extremal_horizon_closed_normalization(s, m, a, omega, lambda, branch)
+        R = real(typeof(value))
+        return (value=value, drift=zero(R), base_h=nothing,
+            precision_bits=R <: BigFloat ? precision(R) : 53, order=order)
+    end
     return setprecision(precision_bits) do
         abig = _bigreal(real(a))
         omegabig = _bigcomplex(omega)
@@ -197,21 +235,80 @@ function extremal_horizon_normalization(
 end
 
 """
+    extremal_gsn_horizon_coefficients(s, m, a, omega, lambda, branch; order)
+
+GSN horizon expansion at exact extremality, `X = exp(alpha/h) h^gamma S(h)`, `h = r - 1`,
+`S = sum_n x_n h^n` with `x_0 = 1` (the normalized branch), from the GSN equation itself: with
+`rho = r^2 + 1`, `K = rho omega - sign(a) m = delta + 2 omega h + omega h^2` (exact), `U = -(K/rho)^2 + h^2 W`
+(`W = sW / rho^2`, Potentials) and `F = h^2 V` (`V = sF_delta` with Delta = 1), the equation
+`X'' + (2/h - G) X' - (rho^2 U / h^4) X = 0` (`G = rho'/rho + rho V`) gives
+`2 alpha (n+1) x_{n+1} = [n(n-1) + (2 gamma + 2) n + P_0] x_n + sum_{k>=1} P_k x_{n-k} - sum_{k>=0} G_k (n-1-k) x_{n-1-k}`
+with `P = [alpha^2 - 2 alpha gamma h + (gamma^2 + gamma) h^2 + G (alpha h^2 - gamma h^3) + K^2 - rho^2 W h^2] / h^2`
+(its h^0 and h^1 numerator terms vanish identically). Ingoing: `alpha = i delta`, `gamma = -2i omega`;
+outgoing: `alpha = -i delta`, `gamma = 2i omega`. Returns `(alpha, gamma, coefficients)`.
+"""
+function extremal_gsn_horizon_coefficients(
+        s::Int, m::Int, a, omega, lambda, branch::Symbol;
+        order::Int=_NORMALIZATION_SERIES_ORDER)
+    order >= 0 || throw(ArgumentError("series order must be nonnegative"))
+    _checked_extremal_sign(a)
+    detuning = _require_nonsynchronous(a, m, omega)
+    alpha, gamma = branch === :ingoing ? (im * detuning, -2im * omega) :
+        branch === :outgoing ? (-im * detuning, 2im * omega) :
+        throw(ArgumentError("extremal horizon branch must be :ingoing or :outgoing"))
+    C = promote_type(typeof(alpha), typeof(complex(lambda)))
+    h = Taylor1(C, order + 2)
+    r = 1 + h
+    rho = r^2 + a * a
+    K = detuning + h * (2omega + omega * h)
+    W = Potentials.sW(s, m, a, omega, lambda, r) / rho^2
+    V = Potentials.sF_delta(s, m, a, omega, lambda, r, one(C))
+    G = 2r / rho + rho * V
+    numerator = alpha^2 - 2alpha * gamma * h + (gamma^2 + gamma) * h^2 +
+        G * (alpha * h^2 - gamma * h^3) + K^2 - rho^2 * W * h^2
+    P(k) = getcoeff(numerator, k + 2)
+    Gk(k) = getcoeff(G, k)
+    coefficients = zeros(C, order + 1)
+    coefficients[1] = one(C)
+    for n in 0:(order - 1)
+        acc = (n * (n - 1) + (2gamma + 2) * n + P(0)) * coefficients[n + 1]
+        for k in 1:n
+            acc += P(k) * coefficients[n - k + 1]
+        end
+        for k in 0:(n - 1)
+            acc -= Gk(k) * (n - 1 - k) * coefficients[n - k]
+        end
+        coefficients[n + 2] = acc / (2alpha * (n + 1))
+    end
+    return (alpha=alpha, gamma=gamma, coefficients=coefficients)
+end
+
+"""
     extremal_gsn_horizon_state(s, m, a, omega, lambda, r, branch; order, normalization=nothing)
 
-Normalized GSN horizon state `(X, dX/dr*)` of `branch` at radius `r`; pass `normalization` to reuse
-a result of `extremal_horizon_normalization`.
+Normalized GSN horizon state `(X, dX/dr*)` of `branch` at radius `r` (leading amplitude 1), from
+`extremal_gsn_horizon_coefficients`; a `normalization` other than the closed form (an explicit-precision
+result of `extremal_horizon_normalization`) rescales it by `N_closed / N`. Off the real axis the state is the
+analytic continuation from real `h = r - 1 > 0` (principal `h^gamma`).
 """
 function extremal_gsn_horizon_state(
         s::Int, m::Int, a, omega, lambda, r, branch::Symbol;
         order::Int=_NORMALIZATION_SERIES_ORDER, normalization=nothing)
-    normalization === nothing &&
-        (normalization = extremal_horizon_normalization(
-            s, m, a, omega, lambda, branch; order))
-    raw = _raw_extremal_gsn_horizon_state(
-        s, m, a, omega, lambda, r, branch; order)
-    scale = convert(eltype(raw), normalization.value)
-    return raw / scale
+    h = r - one(r)
+    iszero(h) && throw(DomainError(r, "the radial state is singular at r = r_+"))
+    series = extremal_gsn_horizon_coefficients(s, m, a, omega, lambda, branch; order)
+    value, derivative = _poly_pair(series.coefficients, h)
+    prefactor = exp(series.alpha / h) * h^series.gamma
+    rho = r^2 + a * a
+    X = prefactor * value
+    dX = (h^2 / rho) * prefactor * (derivative + (series.gamma / h - series.alpha / h^2) * value)
+    normalization === nothing && return SVector(X, dX)
+    # The branch with leading amplitude 1; a normalization other than the closed form (an explicit
+    # Richardson value) rescales it by N_closed / N.
+    closed = extremal_horizon_closed_normalization(s, m, a, omega, lambda, branch)
+    closed == normalization.value && return SVector(X, dX)
+    factor = closed / convert(typeof(closed), normalization.value)
+    return SVector(X * factor, dX * factor)
 end
 
 # Decomposes a GSN state at r into the normalized ingoing and outgoing horizon branches.

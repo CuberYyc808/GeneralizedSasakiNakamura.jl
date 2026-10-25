@@ -58,9 +58,9 @@ function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial,
         abs(imag(wf))/kappa>.5
     # :toggle tries the other horizon path, for the selection retry below.
     horizon_tortoise === :toggle && (complex_horizon = !extreme && !complex_horizon)
-    # Spin-field endpoint conversion is ill-conditioned at extremality.
-    # Only the small boundary calculation uses higher precision, not the IVP.
-    bits = extreme && root.mode.s != 0 ? 128 : 53
+    # The extremal horizon endpoint is the GSN horizon recurrence with the closed-form normalization
+    # (ExtremalRadial), in binary64 like the IVP.
+    bits = 53
     setup_start=time_ns()
     series=if extreme && abs(root.mode.s)==2 && abs(2wf-root.mode.m*af)<0.1
         lambda,dlambda=_qnm_lambda_tangent(root.mode,af,wf)
@@ -68,7 +68,8 @@ function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial,
     else
         nothing
     end
-    coarse_series=series===nothing ? nothing : map(c->c[1:17],series)
+    # W and V start two orders below U and F: 15 terms give the potentials to h^16 as before.
+    coarse_series=series===nothing ? nothing : map(c->c[1:15],series)
     potential_setup_s=(time_ns()-setup_start)/1e9
     # The outer radius is kept short: past it the two infinity branches are balanced
     # but the tangent propagation accumulates error with path length, which limited

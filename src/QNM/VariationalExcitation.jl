@@ -64,11 +64,10 @@ end
 function _qnm_horizon_jet(s,m,a,w,lambda,r,order)
     q=(r*r-2r+a*a)/(r*r+a*a)
     if abs(a)==1
-        # Same irregular-horizon normalization as ExtremalRadial, whose
-        # leading conversion coefficient is available analytically.
-        raw=ExtremalRadial._raw_extremal_gsn_horizon_state(s,m,a,w,lambda,r,:ingoing;order)
-        scale=inv(ConversionFactors.Btrans(s,m,a,w,lambda))
-        X,V=raw[1]/scale,raw[2]/(q*scale)
+        # The normalized ExtremalRadial horizon branch: GSN horizon recurrence and closed-form leading
+        # amplitude (no Teukolsky conversion, whose factors cancel at small detuning).
+        state=ExtremalRadial.extremal_gsn_horizon_state(s,m,a,w,lambda,r,:ingoing;order)
+        X,V=state[1],state[2]/q
     else
         coeff=_qnm_endpoint_coefficients(AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor,
             s,m,a,w,lambda,order)
@@ -82,24 +81,26 @@ function _qnm_horizon_jet(s,m,a,w,lambda,r,order)
     return SVector(_primal(X),_primal(V),_tangent(X),_tangent(V))
 end
 
-# Expanded potentials lose digits near the degenerate horizon when the wave
-# detuning is small. Construct a local polynomial once, not BigFloat ODE states.
+# Expanded potentials lose digits near the degenerate horizon when the wave detuning is small. Near r = 1
+# at a = +-1 the potentials are U = -(K/rho)^2 + h^2 W(h) and F = h^2 V(h) (rho = r^2 + 1, h = r - 1,
+# K = delta + 2 omega h + omega h^2 exact), with W = sW/rho^2 and V = sF_delta(Delta = 1) free of the
+# cancellation: their Taylor polynomials (value and frequency tangent) are built once in binary64.
 function _qnm_horizon_potential_series(s,m,a,w,lambda,dlambda,order)
     abs(a)==1 && abs(s)==2 && abs(2w-m*a)<0.1 || return nothing
-    return setprecision(BigFloat,128) do
-        wd=_frequency_dual(Complex{BigFloat}(w))
-        ld=_frequency_dual(Complex{BigFloat}(lambda),Complex{BigFloat}(dlambda))
-        T=ExtremalRadial.TaylorSeries
-        r=T.Taylor1([one(wd),one(wd)],order)
-        f=Potentials.sF(s,m,BigFloat(a),wd,ld,r)
-        u=Potentials.sU(s,m,BigFloat(a),wd,ld,r)
-        coefficients=(f=ntuple(k->ComplexF64(_primal(T.getcoeff(f,k-1))),order+1),
-            df=ntuple(k->ComplexF64(_tangent(T.getcoeff(f,k-1))),order+1),
-            u=ntuple(k->ComplexF64(_primal(T.getcoeff(u,k-1))),order+1),
-            du=ntuple(k->ComplexF64(_tangent(T.getcoeff(u,k-1))),order+1))
-        all(c->all(isfinite,c),coefficients) || error("nonfinite horizon potential series")
-        coefficients
-    end
+    wd=_frequency_dual(ComplexF64(w))
+    ld=_frequency_dual(ComplexF64(lambda),ComplexF64(dlambda))
+    T=ExtremalRadial.TaylorSeries
+    h=T.Taylor1(typeof(wd),order)
+    r=1+h
+    rho=r^2+1
+    v=Potentials.sF_delta(s,m,Float64(a),wd,ld,r,one(wd))
+    u=Potentials.sW(s,m,Float64(a),wd,ld,r)/rho^2
+    coefficients=(v=ntuple(k->ComplexF64(_primal(T.getcoeff(v,k-1))),order+1),
+        dv=ntuple(k->ComplexF64(_tangent(T.getcoeff(v,k-1))),order+1),
+        w=ntuple(k->ComplexF64(_primal(T.getcoeff(u,k-1))),order+1),
+        dw=ntuple(k->ComplexF64(_tangent(T.getcoeff(u,k-1))),order+1))
+    all(c->all(isfinite,c),coefficients) || error("nonfinite horizon potential series")
+    return coefficients
 end
 
 @inline function _qnm_tangent_potentials(s,m,a,w,lambda,r,series)
@@ -111,8 +112,12 @@ end
             tail=sum(abs(c[end-j])*abs(h)^(length(c)-1-j) for j in 0:3)
             tail<=1e-13*max(abs(value),floatmin(Float64))
         end
-        good && return (_frequency_dual(values.f,values.df),
-                        _frequency_dual(values.u,values.du))
+        if good
+            K=(2w-m*a)+h*(2w+w*h)
+            rho=2+h*(2+h)
+            return (h^2*_frequency_dual(values.v,values.dv),
+                    -(K/rho)^2+h^2*_frequency_dual(values.w,values.dw))
+        end
     end
     return Potentials.sF(s,m,a,w,lambda,r),Potentials.sU(s,m,a,w,lambda,r)
 end

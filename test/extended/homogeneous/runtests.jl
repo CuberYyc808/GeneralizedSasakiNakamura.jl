@@ -424,6 +424,78 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# 10b. Exact-extremal horizon in binary64: closed-form leading amplitudes N_in, N_out (against the Richardson limit
+#      of the Teukolsky-converted branch, at 384 bits for |delta| = 0.3 and 512 bits at h = 1e-14 |delta| for small
+#      detuning), the GSN horizon recurrence against itself at 256 bits (same rounded r), W[X_in, X_out]/eta = alpha/eta(1),
+#      Taylor1 over Complex{Dual}, and no BigFloat in the default a = +-1 solves (results unchanged at 8-bit BigFloat).
+# ---------------------------------------------------------------------------------------------------
+@testset "exact extremal horizon in binary64" begin
+    ER = GSN.ExtremalRadial
+    for sigma in (1.0, -1.0), s in -2:2
+        (sigma < 0 && abs(s) == 2) && continue
+        m = 2; w = (sigma * m + 0.3) / 2
+        lam = GSN.SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(s, 2, m, sigma * w)
+        for branch in (:ingoing, :outgoing)
+            closed = ER.extremal_horizon_closed_normalization(s, m, sigma, w, lam, branch)
+            reference = ER.extremal_horizon_normalization(s, m, sigma, w, lam, branch; precision_bits=384).value
+            @test abs(closed - reference) <= 1e-13 * abs(reference)
+        end
+        default = ER.extremal_horizon_normalization(s, m, sigma, w, lam, :ingoing)
+        @test default.precision_bits == 53 && default.drift == 0 &&
+            default.value == ER.extremal_horizon_closed_normalization(s, m, sigma, w, lam, :ingoing)
+    end
+    for s in (-2, 2), d in (0.01, 0.001), branch in (:ingoing, :outgoing)
+        w = (2 + d) / 2
+        lam = GSN.SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(s, 2, 2, w)
+        closed = ER.extremal_horizon_closed_normalization(s, 2, 1.0, w, lam, branch)
+        reference = setprecision(BigFloat, 512) do
+            h = BigFloat(d) * big"1e-14"
+            q(h) = ER._normalization_sample(s, 2, big(1.0), Complex{BigFloat}(w), Complex{BigFloat}(lam), h, branch, 48)
+            q1, q2, q4 = q(h), q(h / 2), q(h / 4)
+            ComplexF64((4(2q4 - q2) - (2q2 - q1)) / 3)
+        end
+        @test abs(closed - reference) <= 1e-14 * abs(reference)
+    end
+    for s in (-2, 2), branch in (:ingoing, :outgoing), d in (0.5, 0.05, 0.01, 0.002), lam in (2.0, 50.0, 120.0, 250.0)
+        w = (2 + d) / 2
+        r = 1 + d / 32
+        state = ER.extremal_gsn_horizon_state(s, 2, 1.0, w, lam, r, branch)
+        reference = setprecision(BigFloat, 256) do
+            ER.extremal_gsn_horizon_state(s, 2, big(1.0), big(w), big(lam), big(r), branch; order=80)
+        end
+        @test all(abs.(state .- reference) .<= 1e-13 .* abs.(reference))
+    end
+    for (s, l, m, w) in ((-2, 2, 2, 1.25), (-1, 2, 1, 0.3), (2, 3, 3, 1.0))
+        lam = GSN.SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(s, l, m, w)
+        alpha = im * (2w - m)
+        eta1 = GSN.Transformation.eta(s, m, 1.0, w, lam, 1.0)
+        for h in (abs(alpha) / 32, abs(alpha) / 64)
+            xin = ER.extremal_gsn_horizon_state(s, m, 1.0, w, lam, 1 + h, :ingoing)
+            xout = ER.extremal_gsn_horizon_state(s, m, 1.0, w, lam, 1 + h, :outgoing)
+            wronskian = (xin[1] * xout[2] - xout[1] * xin[2]) / GSN.Transformation.eta(s, m, 1.0, w, lam, 1 + h)
+            @test wronskian ≈ alpha / eta1 rtol=1e-13
+        end
+    end
+    T = GSN.ExtremalRadial.TaylorSeries
+    D = GSN.Transformation.ForwardDiff.Dual{Nothing}
+    z = complex(D(0.3, 1.0), D(-0.2, 0.5))
+    t = T.Taylor1(typeof(z), 6) + z
+    q = (t * t) / (1 + t)
+    @test GSN.Transformation.ForwardDiff.value(real(T.getcoeff(q, 0))) ≈ real((0.3 - 0.2im)^2 / (1.3 - 0.2im)) rtol=1e-15
+    @test GSN.Transformation.ForwardDiff.partials(real(T.getcoeff(q, 0)))[1] ≈ real((1.0 + 0.5im) * (0.3 - 0.2im) * (2.3 - 0.2im) / (1.3 - 0.2im)^2) rtol=1e-14
+    root = sqrt(1 + t)
+    @test all(abs(GSN.Transformation.ForwardDiff.value(real(c))) + abs(GSN.Transformation.ForwardDiff.value(imag(c))) <= 1e-15 for c in (root * root - (1 + t)).coeffs)
+    calls = (() -> GSN_radial(-2, 2, 2, 1.0, 0.3, IN).incidence_amplitude,
+        () -> GSN_radial(2, 3, 3, 1.0, 1.0, UP).incidence_amplitude,
+        () -> ER.extremal_complex_path_amplitudes(-2, 2, 1.0, 0.9 - 0.3im,
+            GSN.SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 0.9 - 0.3im)).incidence)
+    for f in calls
+        value = f()
+        @test isfinite(value) && value === setprecision(() -> f(), BigFloat, 8)
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # 11. Coordinates: r_from_rstar inverts rstar_from_r; r* is increasing in r.
 # ---------------------------------------------------------------------------------------------------
 @testset "tortoise coordinate" begin
