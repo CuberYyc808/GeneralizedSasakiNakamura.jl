@@ -1,11 +1,11 @@
 module Iteration
 
 using ..CoefficientTables: CoefficientSet
-using ..OrdinaryPointExpansion: direct_ab_value
+using ..OrdinaryPointExpansion: direct_ab_value, horizon_closed_form_ab_series!, HORIZON_SHIFT_MAX_X
 using ..ApparentSingularities: apparent_points, apparent_basis, apparent_jump, next_apparent, APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
 using ..LargeFrequencyExpansion: LargeFrequencyExpansionPlan, large_frequency_expansion_plan, large_frequency_expansion_ab!
-using ..NearExtreme: near_extreme_selected
+using ..NearExtreme: near_extreme_selected, near_extreme_march
 using ..Eikonal:
     EikonalPatch,
     EIKONAL_TERMS,
@@ -398,8 +398,8 @@ InfinitySelection(
 # values, `avec`/`bvec` for the local A/B series, `local_coeffs`/`local_coeffs2`
 # for the Taylor coefficients of up to two solutions, `radius_buffer`/
 # `radius_buffer2` for the radius estimate, `denom_inv[n+1] = 1/((n+2)(n+1))`,
-# and the optional eikonal scratch, large-frequency plan and near-extreme
-# double-double plan (`ordinary_dd`).
+# the optional eikonal scratch and large-frequency plan, and whether the near-extremal march takes the
+# closed-form A, B below x = 0.1 (`closed_form_march`).
 struct IterationScratch
     pq::Vector{ComplexF64}
     avec::Vector{ComplexF64}
@@ -411,7 +411,7 @@ struct IterationScratch
     denom_inv::Vector{Float64}
     eikonal::Union{Nothing,EikonalScratch}
     large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}
-    ordinary_dd::Union{Nothing,LargeFrequencyExpansionPlan}
+    closed_form_march::Bool
 end
 
 function IterationScratch(
@@ -421,7 +421,7 @@ function IterationScratch(
     large_frequency_expansion::Bool=false,
     small_frequency_expansion::Bool=false,
     route_branch::Union{Nothing,Symbol}=nothing,
-    ordinary_dd::Bool=near_extreme_selected(coefficients),
+    closed_form_march::Bool=near_extreme_march(coefficients),
 )
     order_int = Int(order)
     order_int >= 0 || throw(ArgumentError("ordinary order must be non-negative."))
@@ -443,8 +443,7 @@ function IterationScratch(
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
         large_frequency_expansion ? large_frequency_expansion_plan(coefficients.params,
             coefficients.ordinary.basis, buffer_order) : nothing,
-        ordinary_dd ? large_frequency_expansion_plan(coefficients.params,
-            coefficients.ordinary.basis, buffer_order) : nothing,
+        closed_form_march,
     )
 end
 
@@ -465,8 +464,10 @@ _scratch(coefficients, order, controls) = IterationScratch(
 function _local_ab!(work, coefficients, x, order)
     work.large_frequency_expansion === nothing || return large_frequency_expansion_ab!(
         work.avec, work.bvec, work.large_frequency_expansion, x, order)
-    work.ordinary_dd === nothing || return large_frequency_expansion_ab!(
-        work.avec, work.bvec, work.ordinary_dd, x, order)
+    # Near extremality the march below x = 0.1 takes the closed form in the horizon coordinate (the shift of
+    # the horizon rational functions is rejected there for small kappa); above it, the tables (1e-15 per step).
+    work.closed_form_march && x isa Real && 0 < x < HORIZON_SHIFT_MAX_X &&
+        return horizon_closed_form_ab_series!(work.avec, work.bvec, coefficients.params, x, order)
     return ordinary_ab_series!(
         work.avec, work.bvec, work.pq, coefficients, x, order)
 end
@@ -2362,7 +2363,7 @@ function iterate_scaled_y(
         Float64(target_y)
     final_y == start_y && return nothing
     direction = final_y > start_y ? 1.0 : -1.0
-    work = IterationScratch(coefficients, order; ordinary_dd=false)
+    work = IterationScratch(coefficients, order; closed_form_march=false)
     current_y = start_y
     current_value = ComplexF64(seed_X)
     current_derivative_y = ComplexF64(-omega_scale * seed_dXdx)

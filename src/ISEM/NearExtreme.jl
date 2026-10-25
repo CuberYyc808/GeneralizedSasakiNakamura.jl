@@ -6,23 +6,19 @@ using ..CoefficientTables:
     RationalCoefficients
 using ..LargeFrequencyExpansion:
     DDComplex,
-    DDReal,
     dc_add,
     dc_div,
     dc_mul,
     dc_scale,
-    dc_sub,
-    dc_value,
-    dc_weight,
-    dd_mul,
-    real_powers
+    dc_sub
 using ..OrdinaryPointExpansion:
     ab_term_counts,
-    endpoint_ab_series!
-using ..Parameters: select_spin_regime
+    endpoint_ab_series!,
+    horizon_closed_form_ab_series!
+using ..Parameters: select_spin_regime, is_binary64_parameters
 
 export factor_values_complex_dd
-export near_extreme_prepare, near_extreme_selected
+export near_extreme_prepare, near_extreme_selected, near_extreme_march
 
 # Near-extremal horizon coefficients. Per-spin binary tables store the horizon
 # A and B rational functions with common powers of kappa = cos(nu) factored out of
@@ -30,11 +26,10 @@ export near_extreme_prepare, near_extreme_selected
 # ISEM_NEAR_EXTREME_COMPENSATED (default "1", read at load time) enables this.
 const TABLE_DIR = joinpath(@__DIR__, "Generated")
 const TABLE_MAGIC = UInt8[0x44, 0x47, 0x4e, 0x46, 0x43, 0x54, 0x31, 0x00]
-const CERTIFICATE_ORDER = 24
-const CERTIFICATE_LIMITS = (0.001, 0.001, 3e-5, 0.001, 0.001)
-const FULL_COMPENSATION_LIMITS = (0.01, 0.5, 3e-5, 0.5, 0.012)
 const ORDINARY_COMPRESSION_MIN = 128.0
-const SMALL_FREQUENCY_EXPANSION_CERTIFICATE_LIMIT = 0.0032
+# Order of the closed-form horizon Laurent series built once per near-extremal coefficient set (the largest
+# horizon order the routes ask for); a longer request is computed again.
+const LAURENT_ORDER = 80
 const ORDINARY_VALIDATED_SPINS = (-2, -1, 0, 1, 2)
 const SMALL_FREQUENCY_EXPANSION_VALIDATED_SPINS = (2,)
 const COMPENSATED_ENABLED = get(
@@ -152,41 +147,6 @@ function factor_values(params)
             imag_value = muladd(monomial, imag(weight), imag_value)
         end
         values[slot] = ComplexF64(real_value, imag_value)
-    end
-    scale_factor!(values, cosine, table.powers, params.s)
-    return values
-end
-
-# As factor_values, with the monomial sums in double-double.
-function factor_values_dd(params)
-    table = factor_table(params.s)
-    sine = sin(params.nu)
-    cosine = sqrt((1.0 - sine) * (1.0 + sine))
-    bases = (params.lambda, Float64(params.m), params.omega, sine, cosine)
-    powers = ntuple(variable ->
-        real_powers(bases[variable], table.maxima[variable]), 5)
-    monomials = Vector{DDReal}(undef, length(table.exponents))
-    @inbounds for index in eachindex(monomials)
-        value = DDReal(1.0)
-        exponents = table.exponents[index]
-        for variable in 1:5
-            exponent = Int(exponents[variable])
-            iszero(exponent) ||
-                (value = dd_mul(value, powers[variable][exponent + 1]))
-        end
-        monomials[index] = value
-    end
-
-    values = Vector{ComplexF64}(undef, table.outputs)
-    @inbounds for slot in eachindex(values)
-        value = DDComplex(0)
-        first_term = Int(table.offsets[slot])
-        last_term = Int(table.offsets[slot + 1]) - 1
-        for term in first_term:last_term
-            value = dc_add(value, dc_weight(
-                monomials[Int(table.indices[term])], table.weights[term]))
-        end
-        values[slot] = dc_value(value)
     end
     scale_factor!(values, cosine, table.powers, params.s)
     return values
@@ -314,26 +274,20 @@ end
 @inline finite_complex(value) =
     isfinite(real(value)) && isfinite(imag(value))
 
-function scaled_delta(left, right)
-    scale = max(maximum(abs, left), maximum(abs, right),
-        floatmin(Float64))
-    return maximum(abs.(left .- right)) / scale
+# Closed-form horizon Laurent coefficients of A and B (horizon_closed_form_ab_series! at x = 0) to `order`.
+struct HorizonClosedFormLaurent{P}
+    params::P
+    order::Int
+    a::Vector{ComplexF64}
+    b::Vector{ComplexF64}
 end
 
-# Relative difference of two horizon coefficient sets, compared through their
-# A and B series to order CERTIFICATE_ORDER.
-function endpoint_delta(left, right)
-    a_terms, b_terms = ab_term_counts(:H, CERTIFICATE_ORDER)
-    left_a = Vector{ComplexF64}(undef, a_terms)
-    left_b = Vector{ComplexF64}(undef, b_terms)
-    right_a = similar(left_a)
-    right_b = similar(left_b)
-    endpoint_ab_series!(left_a, left_b, left,
-        :H, CERTIFICATE_ORDER)
-    endpoint_ab_series!(right_a, right_b, right,
-        :H, CERTIFICATE_ORDER)
-    return max(scaled_delta(left_a, right_a),
-        scaled_delta(left_b, right_b))
+function HorizonClosedFormLaurent(params, order::Integer)
+    a_terms, b_terms = ab_term_counts(:H, order)
+    a = Vector{ComplexF64}(undef, a_terms)
+    b = Vector{ComplexF64}(undef, b_terms)
+    horizon_closed_form_ab_series!(a, b, params, 0.0, order)
+    return HorizonClosedFormLaurent(params, Int(order), a, b)
 end
 
 # Whether near_extreme_prepare substituted the fully compensated horizon
@@ -344,12 +298,19 @@ function near_extreme_selected(coefficients::CoefficientSet)
         getproperty(metadata, :near_extreme_compensated)
 end
 
-# For validated spins near extremality, compare the generic horizon coefficients
-# with the factored ones; if they differ by more than the certificate limit (the
-# generic table has lost accuracy), substitute the factored double-double set.
-# `near_extreme_compensated` in the metadata marks full compensation.
+# Whether the near-extremal marches take the closed-form A, B below x = 0.1 (Iteration._local_ab!): the same
+# sets as near_extreme_selected.
+near_extreme_march(coefficients::CoefficientSet) = near_extreme_selected(coefficients)
+
+# For validated spins near extremality (the ordinary gate: angular or phase compression or tau_abs >= 128,
+# at any kappa; the small-frequency gate: s = +2 near extremal), substitute the horizon set: the factored
+# binary64 rational functions (factor_values; for the consumers that shift them) with the closed-form Laurent
+# coefficients (HorizonClosedFormLaurent; for the horizon series), both free of the cancellation of the
+# generic tables as kappa -> 0. The generic set is no longer compared against (the closed form is the
+# reference). `near_extreme_compensated` marks full compensation (route :near_extremal).
 function near_extreme_prepare(coefficients::CoefficientSet, controls)
     COMPENSATED_ENABLED || return coefficients
+    is_binary64_parameters(coefficients.params) || return coefficients
     getproperty(controls, :large_frequency_expansion) && return coefficients
     params = coefficients.params
     use_small_frequency_expansion = getproperty(controls, :small_frequency_expansion)
@@ -364,24 +325,16 @@ function near_extreme_prepare(coefficients::CoefficientSet, controls)
             ORDINARY_COMPRESSION_MIN || return coefficients
     end
 
-    factorized = factor_horizon(factor_values(params), params.s)
-    certificate = endpoint_delta(coefficients.horizon, factorized)
-    certificate_limit = use_small_frequency_expansion ? SMALL_FREQUENCY_EXPANSION_CERTIFICATE_LIMIT :
-        CERTIFICATE_LIMITS[params.s + 3]
-    isfinite(certificate) && certificate >= certificate_limit ||
-        return coefficients
-
-    values = factor_values_dd(params)
+    values = factor_values(params)
     all(finite_complex, values) || return coefficients
-    horizon = factor_horizon(values, params.s)
-    full_compensation = use_small_frequency_expansion || (
-        spin.regime == :near_extremal &&
-        certificate >= FULL_COMPENSATION_LIMITS[params.s + 3]
-    )
+    laurent = HorizonClosedFormLaurent(params, LAURENT_ORDER)
+    all(finite_complex, laurent.a) && all(finite_complex, laurent.b) || return coefficients
+    factored = factor_horizon(values, params.s)
+    horizon = EndpointCoefficientSet(factored.A, factored.B, factored.basis, laurent)
+    full_compensation = use_small_frequency_expansion || spin.regime == :near_extremal
     metadata = merge(coefficients.metadata, (
         near_extreme_compensated=full_compensation,
         near_extreme_horizon_compensated=true,
-        near_extreme_certificate=certificate,
     ))
     return CoefficientSet(params, horizon, coefficients.infinity,
         coefficients.ordinary, metadata)

@@ -460,6 +460,17 @@ function endpoint_ab_series!(
     a_terms, b_terms = ab_term_counts(group, order)
     length(a_out) >= a_terms || throw(ArgumentError("A-series output buffer is too short."))
     length(b_out) >= b_terms || throw(ArgumentError("B-series output buffer is too short."))
+    if group == :H && endpoint.laurent !== nothing
+        laurent = endpoint.laurent
+        if order <= laurent.order
+            copyto!(a_out, 1, laurent.a, 1, a_terms)
+            copyto!(b_out, 1, laurent.b, 1, b_terms)
+        else
+            # A longer request is computed again, never padded.
+            horizon_closed_form_ab_series!(a_out, b_out, laurent.params, 0.0, order)
+        end
+        return a_terms, b_terms
+    end
     rational_series_from_coefficients!(a_out, a_terms, endpoint.A.numerator, endpoint.A.denominator)
     rational_series_from_coefficients!(b_out, b_terms, endpoint.B.numerator, endpoint.B.denominator)
     return a_terms, b_terms

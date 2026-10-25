@@ -17,11 +17,17 @@ struct RationalCoefficients{N<:AbstractVector{<:Complex},D<:AbstractVector{<:Com
 end
 
 # Rational A(x) and B(x) of X'' + A X' + B X = 0 in one endpoint basis (:hc or :ic).
-struct EndpointCoefficientSet{A<:RationalCoefficients,B<:RationalCoefficients}
+# `laurent`: optional closed-form Laurent coefficients of A and B at the endpoint (near-extremal horizon, see
+# NearExtreme), used by endpoint_ab_series! instead of the division of the rational functions; the rational
+# functions stay for the consumers that shift them.
+struct EndpointCoefficientSet{A<:RationalCoefficients,B<:RationalCoefficients,L}
     A::A
     B::B
     basis::Symbol
+    laurent::L
 end
+
+EndpointCoefficientSet(A, B, basis::Symbol) = EndpointCoefficientSet(A, B, basis, nothing)
 
 # Generated evaluator that returns the packed P/Q Taylor coefficients of A and B
 # about an ordinary point; `eval!` takes x0 and `eval_variable!` takes the

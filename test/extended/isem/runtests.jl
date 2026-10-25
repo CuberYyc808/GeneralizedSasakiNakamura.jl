@@ -416,6 +416,53 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Near-extremal horizon (NearExtreme.near_extreme_prepare): binary64 factored rational functions plus the
+# closed-form Laurent coefficients of A and B, no double-double. Laurent coefficients from the prepared set
+# against the same series from the original sF, sU in 256-bit arithmetic (weighted by 0.05^k); the routes at
+# a = 1 - 1e-8 and 1 - 1e-10 take this horizon; amplitudes at (-2,2,2,0.9999,0.5) against the 128-bit route.
+# ---------------------------------------------------------------------------------------------------
+@testset "near-extremal horizon in binary64" begin
+    OPE = D.OrdinaryPointExpansion
+    order = 40
+    function reference(p)
+        B = BigFloat
+        C = Complex{B}
+        a = B(p.a)
+        kappa = sqrt((1 - a) * (1 + a))
+        x = OPE.Taylor1(C, order + 4)
+        r = (1 + kappa) + 2kappa * x / (1 - x)
+        S = r^2 + a^2
+        F = GSN.Potentials.sF(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        U = GSN.Potentials.sU(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        return 1 - x * OPE.derivative(S) / S - F * S / (2kappa), -U * S^2 / (4kappa^2)
+    end
+    weighted(c, ref, n) = Float64(sum(abs(c[k] - OPE.getcoeff(ref, k - 1)) * 0.05^(k - 1) for k in 1:n) /
+        sum(abs(OPE.getcoeff(ref, k - 1)) * 0.05^(k - 1) for k in 1:n))
+    setprecision(BigFloat, 256) do
+        for (s, l, m, a, omega) in ((-2, 2, 2, 0.9999, 0.5), (-2, 2, 2, 1 - 1e-8, 0.4), (-2, 2, 2, 1 - 1e-10, 0.4),
+                (-2, 8, 0, 0.99, 10.0), (2, 3, 3, 0.99999, 0.3))
+            p = D.gsn_parameters(s, l, m, a, omega)
+            route = D.Matching.match_route(D.gsn_coefficients(p), :IN)
+            @test route.coefficients.horizon.laurent !== nothing
+            A, B = OPE.endpoint_ab_series(route.coefficients, :H, order)
+            RA, RB = reference(p)
+            @test A[1] === 1.0 + 0.0im
+            @test weighted(A, RA, length(A)) <= 1e-14
+            @test weighted(B, RB, length(B)) <= 1e-13
+            # a longer request is computed again, not padded
+            A2, _ = OPE.endpoint_ab_series(route.coefficients, :H, 100)
+            @test A2[1:length(A)] == A && !iszero(A2[end])
+        end
+    end
+    R = Teukolsky_radial(-2, 2, 2, 0.9999, 0.5, IN)
+    Rref = setprecision(BigFloat, 128) do
+        Teukolsky_radial(-2, 2, 2, big"0.9999", big"0.5", IN)
+    end
+    @test abs(R.incidence_amplitude - ComplexF64(Rref.incidence_amplitude)) <= 1e-10 * abs(Rref.incidence_amplitude)
+    @test abs(R.reflection_amplitude - ComplexF64(Rref.reflection_amplitude)) <= 1e-10 * abs(Rref.reflection_amplitude)
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------
