@@ -132,8 +132,10 @@ end
 function _extremal_qnm_horizon_start(m, a, omega; series_terms=32, p0=0,
         minimum_h=1.0e-6, maximum_h=0.05)
     detuning = abs(2omega - m * sign(a))
-    # |alpha| / max(32, |P_0|) as ExtremalRadial.extremal_horizon_start.
-    h = clamp(detuning / max(series_terms, abs(p0)), minimum_h, maximum_h)
+    # |alpha| / |P_0| (as ExtremalRadial.extremal_horizon_start) only where |P_0| > 32; otherwise the former
+    # |alpha| / 20: the outward error of the a = -1 DM roots (|P_0| = 4 - 18) grows as exp(2 Re alpha / h), and
+    # |alpha| / 32 lost 2 - 4 digits of the incidence there ((-2,2,-1,0): 5e-6 -> 5e-2).
+    h = clamp(detuning / (abs(p0) > series_terms ? abs(p0) : 20), minimum_h, maximum_h)
     return rstar_from_r(a, one(h) + h)
 end
 

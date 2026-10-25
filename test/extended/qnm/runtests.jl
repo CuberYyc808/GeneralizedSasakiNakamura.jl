@@ -407,6 +407,11 @@ end
     plus = qnm_frequency(QNMMode(-2, 2, 0, 0), 1.0)
     minus = qnm_frequency(QNMMode(-2, 2, 0, 0), -1.0)
     @test minus.omega == plus.omega
+    # Non-variational a = -1 DM root: the horizon start |alpha| / 20 for |P_0| <= 32 (|P_0| = 4.2 here); the start
+    # |alpha| / 32 gave |incidence / transmission| = 5e-2 at the root.
+    dm = qnm_frequency(QNMMode(-2, 2, -1, 0), -1.0)
+    X = Q._extremal_qnm_radial_solver(-2, 2, -1, -1.0, dm.omega, IN)
+    @test abs(X.incidence_amplitude / X.transmission_amplitude) <= 1e-5
 end
 
 # ---------------------------------------------------------------------------------------------------
