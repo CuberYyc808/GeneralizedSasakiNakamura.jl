@@ -1440,7 +1440,14 @@ end
 # large r (incidence * infinity_in + reflection * infinity_out) carries the corrected reflection as well. On 474
 # BigFloat(256) references (s = -2..2, a = 0..0.9999, omega = 1.5..20) the complex path was the more accurate of the
 # two in every case below this ratio. Superradiant modes (k <= 0) and a failed path keep the route's value.
+# The matching itself only loses the reflection where it cancels, that is where the GSN ratio |reflection /
+# incidence| of the route is small; at high l and low omega the Teukolsky ratio falls below COMPLEX_PATH_RATIO
+# through the conversion factors alone while the GSN ratio is ~1 (2% of the radial solves of the generic flux
+# (0.9, 6, 0.7, 0.5) to l = 7, median omega 0.11). There the matched reflection is good to 1.3e-12 (12 BigFloat
+# checks, against 1e-14 from the path) and the flux is bitwise the same, so the path is taken only where the GSN
+# ratio is also below COMPLEX_PATH_GSN_RATIO; the 60 references above it are good to 3.8e-11 from the matching.
 const COMPLEX_PATH_RATIO = 1e-6
+const COMPLEX_PATH_GSN_RATIO = 1e-3
 
 # Whether the route's reflection is taken from the complex path (see _complex_path_reflection).
 function _complex_path_switch(route::Route)
@@ -1455,7 +1462,8 @@ function _complex_path_switch(route::Route)
         (ConversionFactors.Cinc(s, m, a, w, lambda), ConversionFactors.Cref(s, m, a, w, lambda))
     incidence = incidence_factor * route.incidence
     reflection = reflection_factor * route.reflection
-    return isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence)
+    return isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence) &&
+        abs(route.reflection) < COMPLEX_PATH_GSN_RATIO * abs(route.incidence)
 end
 
 function _with_reflection(route::Route, reflection)
