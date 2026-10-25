@@ -446,6 +446,18 @@ supported, and `omega` must be nonzero. `method = "auto"` or `"ISEM"` builds Y w
 `"linear"` build it from a numerically integrated GSN solution. Negative `a` and frequencies with negative
 real part are obtained from the mirror modes. `xm`, `N`, `tol` and the expansion switches are passed to ISEM
 as in `GSN_radial`.
+
+`"auto"` and `"ISEM"` take the same route. Omitted `sfe` and `lfe` select the small- and large-frequency
+expansions automatically (`:auto`); pass `sfe=false, lfe=false` to turn them off (the lower-level
+`ISEM.gsn_controls` defaults to `false`). `N` sets the order of the horizon, ordinary and infinity series, while
+the patch positions follow from the convergence radii and the step cap, so orders above about 160 no longer change
+the result. Explicit high orders are not smooth in `omega`: at N = 320 Y moves by 1e-10 to 1e-8 between
+neighbouring frequencies (most near the horizon), and some frequencies fail with "no certified seed"; the default
+order is the one to use in production.
+
+`Y.Y_solution(r)` returns `(Y, dY/dr, X, err)` with `err` always `0`, which is not an accuracy estimate. The field
+is an abstract `Function`; in hot loops annotate the result, e.g.
+`Y.Y_solution(r)::Tuple{ComplexF64, ComplexF64, ComplexF64, Float64}` for binary64 input.
 """
 function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
     GeneralizedSasakiNakamura._check_radial_options(method, xm)

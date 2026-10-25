@@ -156,7 +156,7 @@ Meaning of the keywords:
 | `tol` | `nothing` | tolerance of ISEM (chosen automatically when `nothing`; `1e-14` at real frequency), or `abstol = reltol` of the ODE methods (`1e-12` when `nothing`) |
 | `tolerance` | `nothing` | the same setting as `tol`; `tol` takes precedence when both are given |
 | `xm` | `nothing` | ISEM matching point in $x = (r - r_+)/(r - r_-)$, which is `0` at the horizon and `1` at infinity; `"auto"` and `"ISEM"` require `0 < xm < 1` |
-| `N` | `nothing` | ISEM expansion order; chosen automatically when omitted. In Float64 the defaults (24 to 40) are already at round-off; larger `N` gives longer series steps at the same accuracy (within 1e-8 relative in `Y` up to r = 12 for N = 24 to 320), not a more accurate result |
+| `N` | `nothing` | ISEM expansion order (horizon, ordinary and infinity series); chosen automatically when omitted. In Float64 the defaults (24 to 40) are already at round-off. The patch positions follow from the convergence radii and the step cap, not from `N`, so orders above about 160 no longer change the result; a larger `N` is not more accurate (see `Y_radial` for high orders) |
 | `sfe`, `lfe` | `nothing` | switches for the small-frequency expansion (MST, the Mano–Suzuki–Takasugi series) and the large-frequency (eikonal) expansion of ISEM; `nothing` selects them automatically |
 | `data_type` | `ComplexF64` | number type of the ODE methods, e.g. `Complex{BigFloat}` |
 | `ODE_algorithm` | `AutoVern9(Rosenbrock23(autodiff=false))` | solver of the ODE methods; to pass another, add and load DifferentialEquations.jl in your own environment |
@@ -266,13 +266,24 @@ exist, `omega` must be nonzero, and there is no tuple form. The keywords are
 without falling back; `"linear"` and `"Riccati"` build it from a numerically
 integrated GSN function and accept complex `omega` only at $|a| = 1$.
 
+`"auto"` and `"ISEM"` take the same route, and omitted `sfe` and `lfe` select
+the expansions automatically (`:auto`); pass `sfe = false, lfe = false` to turn
+them off (the lower-level `ISEM.gsn_controls` defaults to `false`). An explicit
+high `N` is not smooth in `omega`: at `N = 320`, $Y$ moves by 1e-10 to 1e-8
+between neighbouring frequencies (most near the horizon), and some frequencies
+fail with "no certified seed". Use the default order in production.
+
 The returned `YRadialFunction` is callable at the Boyer–Lindquist $r$:
 
 | call | returns |
 | :--- | :--- |
 | `Y(r)` | $Y(r)$ |
-| `Y.Y_solution(r)` | `(Y, dY/dr, X, err)`, where `X` is the GSN function at $r_*(r)$ and `err` is always `0` |
+| `Y.Y_solution(r)` | `(Y, dY/dr, X, err)`, where `X` is the GSN function at $r_*(r)$ and `err` is always `0` (not an accuracy estimate) |
 | `Y.X_solution(r)` | the GSN function at $r_*(r)$ |
+
+The `Y_solution` field is an abstract `Function`; in hot loops, annotate the
+result, e.g. `Y.Y_solution(r)::Tuple{ComplexF64, ComplexF64, ComplexF64, Float64}`
+for binary64 input.
 
 Its amplitudes are the Teukolsky amplitudes of the solution obtained from the
 GSN function: `transmission_amplitude` is the GSN-to-Teukolsky conversion
