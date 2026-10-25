@@ -159,7 +159,7 @@ Meaning of the keywords:
 | `N` | `nothing` | ISEM expansion order (horizon, ordinary and infinity series); chosen automatically when omitted. In Float64 the defaults (24 to 40) are already at round-off. The patch positions follow from the convergence radii and the step cap, not from `N`, so orders above about 160 no longer change the result; a larger `N` is not more accurate (see `Y_radial` for high orders) |
 | `sfe`, `lfe` | `nothing` | switches for the small-frequency expansion (MST, the Mano–Suzuki–Takasugi series) and the large-frequency (eikonal) expansion of ISEM; `nothing` selects them automatically |
 | `data_type` | `ComplexF64` | number type of the ODE methods, e.g. `Complex{BigFloat}` |
-| `ODE_algorithm` | `AutoVern9(Rosenbrock23(autodiff=false))` | solver of the ODE methods; to pass another, add and load DifferentialEquations.jl in your own environment |
+| `ODE_algorithm` | `AutoVern9(Rosenbrock23(autodiff=false))` | solver of the ODE methods, an OrdinaryDiffEq.jl algorithm; to pass another, load OrdinaryDiffEq.jl (or the solver's subpackage) in your own environment |
 
 At $|a| < 1$, a keyword described for ISEM only, or for the ODE methods only,
 is ignored by the other methods. In the tuple form, `data_type` and

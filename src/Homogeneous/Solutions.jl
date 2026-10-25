@@ -1,6 +1,6 @@
 module Solutions
 
-using DifferentialEquations
+using OrdinaryDiffEq
 using ForwardDiff
 using HypergeometricFunctions
 using StaticArrays
@@ -52,7 +52,7 @@ function GSN_linear_eqn(u, p, rs)
     _sU = sU(p.s, p.m, p.a, p.omega, p.lambda, r)
 
     #=
-    Using the convention for DifferentialEquations
+    Using the convention for OrdinaryDiffEq
     u[1] = X(rs)
     u[2] = dX/drs = X'
     therefore

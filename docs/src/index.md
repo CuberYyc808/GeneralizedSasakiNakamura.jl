@@ -61,7 +61,7 @@ and their `incidence_amplitude` and `reflection_amplitude` fields hold $B^{\rm i
 ### Easy to use
 The following code snippet lets you solve the (source-free) Teukolsky function (in frequency domain) for the mode $s=-2, \ell=2, m=2, a/M=0.7, M\omega=0.5$ that satisfies the purely-ingoing boundary condition at the horizon, $R^{\textrm{in}}$, and the purely-outgoing boundary condition at spatial infinity, $R^{\textrm{up}}$, respectively:
 ```julia
-using GeneralizedSasakiNakamura # This is going to take some time to pre-compile, mostly due to DifferentialEquations.jl
+using GeneralizedSasakiNakamura # This is going to take some time to pre-compile
 
 # Specify which mode to solve
 s=-2; l=2; m=2; a=0.7; omega=0.5;

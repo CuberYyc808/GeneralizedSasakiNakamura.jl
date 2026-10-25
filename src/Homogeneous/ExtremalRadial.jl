@@ -1,6 +1,6 @@
 module ExtremalRadial
 
-using DifferentialEquations
+using OrdinaryDiffEq
 using StaticArrays
 using TaylorSeries
 

@@ -1,6 +1,6 @@
 module SolutionsY
 
-using DifferentialEquations
+using OrdinaryDiffEq
 using StaticArrays
 
 using ..ISEM

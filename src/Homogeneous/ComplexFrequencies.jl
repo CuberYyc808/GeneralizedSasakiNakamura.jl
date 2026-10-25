@@ -7,7 +7,7 @@ using ..AsymptoticExpansionCoefficients
 using ..InitialConditions
 using ..Solutions
 
-using DifferentialEquations
+using OrdinaryDiffEq
 using StaticArrays
 
 _DEFAULTDATATYPE = Solutions._DEFAULTDATATYPE
@@ -157,7 +157,7 @@ function GSN_linear_eqn(u, p, rho)
     _sU = exp(2im*p.beta)*sU(p.s, p.m, p.a, p.omega, p.lambda, r)
 
     #=
-    Using the convention for DifferentialEquations
+    Using the convention for OrdinaryDiffEq
     u[1] = X(rho)
     u[2] = dX/drho = X'
     therefore

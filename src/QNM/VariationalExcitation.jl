@@ -1,6 +1,6 @@
 using ForwardDiff
 using StaticArrays
-using DifferentialEquations
+using OrdinaryDiffEq
 using ..GeneralizedSasakiNakamura: Potentials, InitialConditions,
     AsymptoticExpansionCoefficients, ExtremalRadial, Solutions
 
@@ -162,7 +162,7 @@ function _qnm_tangent_propagate(u,s,m,a,w,lambda,r0,r1,tol; tortoise=false,serie
     tortoise && (u=vcat(u,SVector(r0)))
     prob=ODEProblem(rhs,u,(0.0,1.0))
     sol=solve(prob,Vern9();reltol=tol,abstol=tol,save_everystep=false,dense=false,maxiters=10^7)
-    DifferentialEquations.SciMLBase.successful_retcode(sol) || error("tangent propagation: $(sol.retcode)")
+    SciMLBase.successful_retcode(sol) || error("tangent propagation: $(sol.retcode)")
     if tortoise
         abs(sol.u[end][5]-r1)<=1e-8*max(1,abs(r1)) ||
             error("horizon tortoise contour reached a different coordinate branch")

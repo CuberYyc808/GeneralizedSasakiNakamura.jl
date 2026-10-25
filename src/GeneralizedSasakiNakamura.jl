@@ -16,7 +16,8 @@ export r_from_rstar, rstar_from_r # Useful to be exposed
 using .Solutions
 
 using SpinWeightedSpheroidalHarmonics
-using DifferentialEquations # Should have been compiled by now
+using OrdinaryDiffEq
+import SciMLBase
 using Logging, LoggingExtras
 using KerrGeodesics
 
@@ -605,7 +606,7 @@ An ISEM solution stores `rsin = rsout = missing`. For `IN` and `UP`, its `rsmp` 
 At $|a| = 1$ the exact-extremal solver uses, with every `method`, `rsin` and `rsout` as given, `lambda`, and the expansion orders raised to at least 48 at the horizon and to at least 12 (real `omega`) or 18 (complex `omega`) at infinity.
 It uses `data_type` and `ODE_algorithm` only with `"linear"` or `"Riccati"`, and it ignores `rsmp`, `xm`, `N`, `sfe` and `lfe`.
 Inputs wider than binary64 (e.g. `BigFloat` `a` and `omega`) are solved by ISEM at that precision; the ODE methods are not used for them (see the tuple form).
-The ODE solver is `ODE_algorithm` (from `DifferentialEquations.jl`; default: `AutoVern9(Rosenbrock23(autodiff=false))`), working in the number type `data_type` (default: `ComplexF64`; e.g. `Complex{BigFloat}` for complex arbitrary precision numbers).
+The ODE solver is `ODE_algorithm` (an OrdinaryDiffEq.jl algorithm; default: `AutoVern9(Rosenbrock23(autodiff=false))`), working in the number type `data_type` (default: `ComplexF64`; e.g. `Complex{BigFloat}` for complex arbitrary precision numbers).
 A precomputed spin-weighted spheroidal eigenvalue can be passed as `lambda`; by default it is computed from `s`, `l`, `m` and `a*omega`.
 
 For $|a| < 1$, the ODE methods adjust the values they are given. With $f =\log_{10}(1/(1-|a|))$, `rsin` becomes $\min(r_{\rm in}, f\, r_{\rm in})$, so a negative `rsin` is multiplied by $f$ for $|a| > 0.9$;

@@ -97,7 +97,7 @@ The GSN-ISEM on-the-fly solve and evaluation speed:
 
 The following snippet solves the (source-free) Teukolsky function for the mode $s=-2, \ell=2, m=2, a/M=0.7, M\omega=0.5$ with the purely-ingoing boundary condition at the horizon, $R^{\textrm{in}}$, and the purely-outgoing boundary condition at spatial infinity, $R^{\textrm{up}}$:
 ```julia
-using GeneralizedSasakiNakamura # This is going to take some time to pre-compile, mostly due to DifferentialEquations.jl
+using GeneralizedSasakiNakamura # This is going to take some time to pre-compile
 
 # Specify which mode to solve
 s=-2; l=2; m=2; a=0.7; omega=0.5;
