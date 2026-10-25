@@ -400,7 +400,7 @@ InfinitySelection(
 # `radius_buffer2` for the radius estimate, `denom_inv[n+1] = 1/((n+2)(n+1))`,
 # the optional eikonal scratch and large-frequency plan, and whether the near-extremal march takes the
 # closed-form A, B below x = 0.1 (`closed_form_march`).
-struct IterationScratch
+struct IterationScratch{L<:Union{Nothing,LargeFrequencyExpansionRouting}}
     pq::Vector{ComplexF64}
     avec::Vector{ComplexF64}
     bvec::Vector{ComplexF64}
@@ -410,7 +410,9 @@ struct IterationScratch
     radius_buffer2::Vector{Float64}
     denom_inv::Vector{Float64}
     eikonal::Union{Nothing,EikonalScratch}
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}
+    # Concrete per scratch (the routing type carries its coefficient-set type), so that the large-frequency
+    # branch of _local_ab! is not dispatched dynamically at every step.
+    large_frequency_expansion::L
     closed_form_march::Bool
 end
 
