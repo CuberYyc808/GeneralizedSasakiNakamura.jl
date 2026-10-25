@@ -290,6 +290,55 @@ function _accurate_shift_rational!(out, terms, work, rational, pole_order, cente
     return eps(Float64) * condition
 end
 
+# Second gate of a shift that fails the per-coefficient bound: the same rounding contributions weighted by
+# h^n, h the step radius, i.e. the relative error of the series as it is used over one step rather than of
+# its worst single coefficient (whose relative error is large where the coefficient itself is small). The
+# shifted polynomials and the series are in `work` and `out` from _shift_rational!.
+function _weighted_shift_condition(out, terms, work, rational, pole_order, center, h)
+    p_len = length(rational.numerator)
+    q_len = length(rational.denominator) + pole_order
+    q_start = 1 + p_len
+    weighted(start, source, order) = begin
+        degree = length(source) + order - 1
+        numerator = 0.0
+        denominator = 0.0
+        hn = 1.0
+        @inbounds for n in 0:degree
+            scale = 0.0
+            weight = 1.0
+            for k in n:degree
+                scale += abs(_shift_source(source, order, k + 1)) * weight
+                k < degree && (weight *= abs(center) * (k + 1) / (k + 1 - n))
+            end
+            numerator += scale * hn
+            denominator += abs(work[start + n]) * hn
+            hn *= h
+        end
+        numerator / max(denominator, floatmin(Float64))
+    end
+    p_condition = weighted(1, rational.numerator, 0)
+    q_condition = weighted(q_start, rational.denominator, pole_order)
+    q0 = abs(work[q_start])
+    numerator = 0.0
+    denominator = 0.0
+    hn = 1.0
+    @inbounds for n in 0:(terms - 1)
+        scale = n < p_len ? abs(work[1 + n]) : 0.0
+        for k in 1:min(n, q_len - 1)
+            scale += abs(work[q_start + k] * out[n - k + 1])
+        end
+        numerator += scale / q0 * hn
+        denominator += abs(out[n + 1]) * hn
+        hn *= h
+    end
+    recurrence_condition = numerator / max(denominator, floatmin(Float64))
+    condition = max(p_condition, q_condition, recurrence_condition)
+    return isfinite(condition) ? condition : Inf
+end
+
+# Step radius at which a shifted series is used (the weight of the second gate): 0.3 min(|c|, |1 - c|).
+_shift_weight_radius(center) = 0.3 * min(abs(center), abs(1 - center))
+
 @inline function _valid_shift_center(center)
     finite = isfinite(real(center)) && isfinite(imag(center))
     finite || return false
@@ -311,6 +360,7 @@ function shifted_ab!(
     x0,
     order::Integer;
     eps_limit::Real=_SHIFT_EPS_LIMIT,
+    radius::Real=_shift_weight_radius(x0),
 )
     center = x0 isa Real ? Float64(x0) : ComplexF64(x0)
     _valid_shift_center(center) ||
@@ -322,8 +372,12 @@ function shifted_ab!(
         throw(ArgumentError("B-series output buffer is too short."))
     a_error = _accurate_shift_rational!(
         a_out, a_terms, work, endpoint.A, 1, center, eps_limit)
+    (a_error <= eps_limit || !isfinite(a_error)) || (a_error = min(a_error, eps(Float64) * _weighted_shift_condition(
+        a_out, a_terms, work, endpoint.A, 1, center, radius)))
     b_error = _accurate_shift_rational!(
         b_out, b_terms, work, endpoint.B, 2, center, eps_limit)
+    (b_error <= eps_limit || !isfinite(b_error)) || (b_error = min(b_error, eps(Float64) * _weighted_shift_condition(
+        b_out, b_terms, work, endpoint.B, 2, center, radius)))
     eps_condition = max(a_error, b_error)
     accepted = isfinite(eps_condition) && eps_condition <= eps_limit
     return accepted, a_terms, b_terms, eps_condition
@@ -339,6 +393,7 @@ function shifted_infinity_ab!(
     y0,
     order::Integer;
     eps_limit::Real=_SHIFT_EPS_LIMIT,
+    radius::Real=_shift_weight_radius(y0),
 )
     center = y0 isa Real ? Float64(y0) : ComplexF64(y0)
     _valid_shift_center(center) ||
@@ -350,8 +405,12 @@ function shifted_infinity_ab!(
         throw(ArgumentError("B-series output buffer is too short."))
     a_error = _accurate_shift_rational!(
         a_out, a_terms, work, endpoint.A, 1, center, eps_limit)
+    (a_error <= eps_limit || !isfinite(a_error)) || (a_error = min(a_error, eps(Float64) * _weighted_shift_condition(
+        a_out, a_terms, work, endpoint.A, 1, center, radius)))
     b_error = _accurate_shift_rational!(
         b_out, b_terms, work, endpoint.B, 4, center, eps_limit)
+    (b_error <= eps_limit || !isfinite(b_error)) || (b_error = min(b_error, eps(Float64) * _weighted_shift_condition(
+        b_out, b_terms, work, endpoint.B, 4, center, radius)))
     eps_condition = max(a_error, b_error)
     accepted = isfinite(eps_condition) && eps_condition <= eps_limit
     if accepted
@@ -603,20 +662,27 @@ function ordinary_ab_series!(
     pq::AbstractVector{<:Complex},
     coefficients::CoefficientSet,
     x0,
-    order::Integer,
+    order::Integer;
+    shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
 )
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
             coefficients.params.omega isa Real &&
             get(task_local_storage(), DIRECT_AB_KEY, false)
         return direct_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
-    use_shift = (hasproperty(coefficients.metadata, :horizon_shift) &&
-        getproperty(coefficients.metadata, :horizon_shift)) ||
-        (x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X)
+    # The binary64 shift needs binary64 buffers (_shift_source converts to ComplexF64).
+    use_shift = eltype(a_out) === ComplexF64 && (
+        (hasproperty(coefficients.metadata, :horizon_shift) &&
+            getproperty(coefficients.metadata, :horizon_shift)) ||
+        (x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X))
     if use_shift
         accepted, a_terms, b_terms, _ = shifted_ab!(
-            a_out, b_out, pq, coefficients.horizon, x0, order)
+            a_out, b_out, pq, coefficients.horizon, x0, order; eps_limit=shift_eps_limit)
         accepted && return a_terms, b_terms
+        # Below HORIZON_SHIFT_MAX_X the tables are off by ~1e-12 / x^2 in B: a rejected shift there takes the
+        # closed form in the horizon coordinate (horizon_closed_form_ab_series!), not the tables.
+        x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X &&
+            return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
     evaluate_ordinary_coefficients!(pq, coefficients.ordinary, x0)
     return ordinary_ab_series!(a_out, b_out, pq, coefficients.params.s, order)

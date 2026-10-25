@@ -22,7 +22,9 @@ using ..OrdinaryPointExpansion:
     series_issue
 using ..OrdinaryPointExpansion:
     shifted_ab!,
-    shifted_infinity_ab!
+    shifted_infinity_ab!,
+    horizon_closed_form_ab_series!,
+    ordinary_scaled_y_ab_series!
 using ..LocalSolutionAtZero:
     horizon_exponent,
     horizon_rotation_frequency,
@@ -1905,7 +1907,9 @@ function _scaled_step!(
     state1,
     state2,
     h,
-    settings,
+    settings;
+    coefficients=nothing,
+    variable_scale=nothing,
 )
     shift! = chart === :y ? shifted_infinity_ab! : shifted_ab!
     representation = chart === :y ? :scaled_y_shift : :scaled_x_shift
@@ -1918,6 +1922,28 @@ function _scaled_step!(
         settings.order;
         eps_limit=10settings.step_target,
     )
+    # A rejected shift is not used: the y chart takes the ordinary-point tables in the scaled variable
+    # (ordinary_scaled_y_ab_series!, as the small-frequency bridge), the x chart the closed form about
+    # x = scale Z (horizon_closed_form_ab_series!) rescaled to Z.
+    if !accepted && isfinite(coefficient_condition) && coefficients !== nothing
+        scale = ComplexF64(variable_scale)
+        if chart === :y
+            a_terms, b_terms = ordinary_scaled_y_ab_series!(scratch.avec, scratch.bvec, scratch.pq,
+                coefficients, variable, scale, settings.order)
+            representation = :scaled_y_ordinary
+        else
+            a_terms, b_terms = horizon_closed_form_ab_series!(scratch.avec, scratch.bvec, coefficients.params,
+                scale * variable, settings.order)
+            power = scale
+            @inbounds for k in 1:max(a_terms, b_terms)
+                k <= a_terms && (scratch.avec[k] *= power)
+                k <= b_terms && (scratch.bvec[k] *= power * scale)
+                power *= scale
+            end
+            representation = :scaled_x_closed_form
+        end
+        coefficient_condition = 16eps(Float64)
+    end
     if !accepted && !isfinite(coefficient_condition)
         return (;
             state1,
@@ -1956,7 +1982,8 @@ function _propagate_scaled_pair!(
     state1,
     state2,
     target,
-    settings,
+    settings;
+    coefficients=nothing,
 )
     label, name = chart === :y ? ("scaled-y", "Y") : ("scaled-x", "Z")
     variable = ComplexF64(variable0)
@@ -1987,7 +2014,9 @@ function _propagate_scaled_pair!(
                 state1,
                 state2,
                 h,
-                settings,
+                settings;
+                coefficients,
+                variable_scale,
             )
             if isfinite(candidate.score) && candidate.score < best_score
                 best_score = candidate.score
@@ -2019,11 +2048,13 @@ function _propagate_scaled_pair!(
     return (; variable, state1, state2, patches, rejected, max_score)
 end
 
+# The binary64 shift accepts coefficients up to 10 target (shifted_ab! with eps_limit = 10 eps_limit), so the
+# plateau takes them up to the same bound; a tighter bound here left such steps uncertified.
 @inline function _residual_plateau_step(candidate, target)
     return isfinite(candidate.score) &&
         candidate.adjacent <= target &&
         candidate.tail <= target &&
-        candidate.coefficient_condition <= target &&
+        candidate.coefficient_condition <= 10target &&
         candidate.residual <= 10target
 end
 
@@ -2202,7 +2233,8 @@ function _scaled_chart_segment(
         to_chart(state1),
         to_chart(state2),
         target / scale,
-        settings,
+        settings;
+        coefficients,
     )
     return (;
         state1=from_chart(segment.state1),

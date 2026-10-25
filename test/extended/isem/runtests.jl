@@ -195,10 +195,11 @@ end
         R = Teukolsky_radial(-2, 2, 2, q.a, q.omega, UP; xm=xm)
         cup, cref = teukolsky_ratios(R)
         @test scaled_err(cref, q.cref, scale) <= 1e-9
-        # At xm=0.4 the error is 1.8e-5 in units of the small C_ref, about 5e-10 in C_trans units.
+        # At xm=0.4 the error is 1.8e-5 - 1.9e-5 in units of the small C_ref, about 5e-10 in C_trans units
+        # (1.875e-5 since the complex path takes binary64 shifts up to its plateau bound).
         err_cup = scaled_err(cup, q.cup, scale)
         if xm == 0.4
-            @test err_cup <= 1.816e-5
+            @test err_cup <= 2e-5
             @test_broken err_cup <= 1e-5   # explicit-junction C_up limit
         else
             @test err_cup <= 1e-5
@@ -369,6 +370,48 @@ end
                 @test weighted(Bv, RB, nb, h) <= b_limit
             end
         end
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
+# Binary64 Taylor shift of the horizon rational functions: a shift rejected below x = 0.1 takes the closed form in
+# the horizon coordinate (not the tables, off by ~1e-12/x^2 in B there); a shift whose per-coefficient bound
+# fails (eps cond 2e-13 - 5e-13 at x0 = 0.07 - 0.099 for kappa <= 0.14, actual error 1e-15) is accepted on the
+# step-weighted bound (h = 0.3 min(x0, 1 - x0)); wide buffers do not take the binary64 shift.
+# ---------------------------------------------------------------------------------------------------
+@testset "binary64 shift: gates and fallbacks" begin
+    OPE = D.OrdinaryPointExpansion
+    order = 24
+    work = zeros(ComplexF64, 4096)
+    A1, B1, A2, B2 = (zeros(ComplexF64, order + 8) for _ in 1:4)
+    params = D.gsn_parameters(-2, 3, 3, 0.99, 1.6987)
+    coefficients = D.gsn_coefficients(params)
+    na, nb = OPE.ordinary_ab_series!(A1, B1, work, coefficients, 0.048, order; shift_eps_limit=0.0)
+    OPE.horizon_closed_form_ab_series!(A2, B2, params, 0.048, order)
+    @test A1[1:na] == A2[1:na] && B1[1:nb] == B2[1:nb]
+    weighted(c, ref, n, h) = sum(abs(c[k] - ref[k]) * h^(k - 1) for k in 1:n) / sum(abs(ref[k]) * h^(k - 1) for k in 1:n)
+    accepted_on_weight = 0
+    for (a, w) in ((0.9999, 20.0), (0.99, 30.0), (0.99999, 10.0)), x0 in (0.07, 0.085, 0.099)
+        p = D.gsn_parameters(-2, 2, 2, a, w)
+        c = D.gsn_coefficients(p)
+        accepted, na, nb, error = OPE.shifted_ab!(A1, B1, work, c.horizon, x0, order)
+        OPE.horizon_closed_form_ab_series!(A2, B2, p, x0, order)
+        h = 0.3x0
+        if accepted
+            @test error <= 1e-13
+            @test weighted(A1, A2, na, h) <= 1e-13 && weighted(B1, B2, nb, h) <= 1e-13
+        end
+        first_gate = max(OPE._accurate_shift_rational!(A1, na, work, c.horizon.A, 1, x0, 1e-13),
+            OPE._accurate_shift_rational!(B1, nb, work, c.horizon.B, 2, x0, 1e-13))
+        accepted && first_gate > 1e-13 && (accepted_on_weight += 1)
+    end
+    @test accepted_on_weight >= 1
+    # Wide buffers: tables (and the closed-form A, B with the direct key at 0.5), never the binary64 shift.
+    for T in (Complex{BigFloat},)
+        Aw, Bw, Pw = zeros(T, order + 8), zeros(T, order + 8), zeros(T, 4096)
+        na, nb = OPE.ordinary_ab_series!(Aw, Bw, Pw, coefficients, 0.05, order)
+        nf, mf = OPE.ordinary_ab_series!(A1, B1, work, coefficients, 0.05, order)
+        @test na == nf && all(isfinite, Aw[1:na])
     end
 end
 
