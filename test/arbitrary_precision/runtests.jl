@@ -230,5 +230,5 @@ end
         @test abs(Ehor / big"5.654138734536942973248997741647276606086e-9" - 1) < big"1e-34"
     end
     @test_throws ArgumentError GSN.Teukolsky_pointparticle_mode(-2, 2, 2, 0, 0, big"0.0", big"10.0", big"0.0", big"1.0";
-        submission = :anything)
+        submission = :anything, Nmax = 2^12, Kmax = 2^9)
 end
