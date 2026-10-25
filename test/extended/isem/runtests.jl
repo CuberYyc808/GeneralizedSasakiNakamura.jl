@@ -563,17 +563,15 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
-# Complex-rational route at the n = 1, 2 horizon resonances omega_n = (a m - i n kappa) / (2 r+): the plain horizon
-# recurrence stops before order 2 and its error ("ISEM GSN horizon recurrence lost floating-point credibility ...")
-# hands over to the factorized solution instead of failing the build. The infinity rescue matches the message of
+# Complex-rational route at the n = 1, 2, 3 horizon resonances omega_n = (a m - i n kappa) / (2 r+), and the
+# credibility errors of the plain recurrences ("ISEM GSN horizon recurrence lost floating-point credibility ..."). The infinity rescue matches the message of
 # LocalSolutionAtInfinity by the same prefix (no binary64 input found that reaches it).
 # ---------------------------------------------------------------------------------------------------
 @testset "complex rational: low horizon resonances" begin
     CR = D.ComplexRational
     a = 0.9
     kappa = sqrt((1 - a) * (1 + a))
-    # (n = 2, UP stops in the two-ray horizon path search: the UP horizon-anchor callers are not routed here yet)
-    for (n, branch) in ((1, :IN), (2, :IN), (1, :UP))
+    for n in (1, 2, 3), branch in (:IN, :UP)
         omega = (2a - im * n * kappa) / (2 * (1 + kappa))
         @test CR.complex_rational_build(-2, 2, 2, a, omega, branch) isa NamedTuple
     end
@@ -583,6 +581,54 @@ end
     @test occursin("\"ISEM GSN infinity recurrence lost floating-point credibility",
         read(first(functionloc(first(methods(D.LocalSolutionAtInfinity.infinity_local_solution)))), String))
     @test !CR._credibility_lost(ErrorException("ISEM GSN horizon recurrence lost"), :infinity)
+end
+
+# ---------------------------------------------------------------------------------------------------
+# Complex-rational horizon in binary64: the detuning delta from K+ in fma form (against 256 bits, with a in
+# BigFloat), a frequency 2e-14 off the n = 1 resonance, the a = 0.7, m = 1 growth mode (OUT n = 1), and the
+# closed-form horizon Laurent B with K+ (b_{-2} .. b_10 at the first Matsubara frequency against 256 bits; the
+# generic table's b_{-2} is off by 2e-11 at a = 0.9999 and 4e-8 at 0.999999). The double-double layer is gone.
+# ---------------------------------------------------------------------------------------------------
+@testset "complex rational horizon in binary64" begin
+    CR = D.ComplexRational
+    OPE = D.OrdinaryPointExpansion
+    setprecision(BigFloat, 256) do
+        for m in 1:3
+            a = 1 - 1e-8
+            kappa = sqrt((1 - a) * (1 + a))
+            omega = (a * m - im * kappa) / (2 * (1 + kappa))
+            data = CR._horizon_resonance_data(D.gsn_parameters(-2, max(2, m), m, a, omega), :in)
+            ab = big(a)
+            kb = sqrt((1 - ab) * (1 + ab))
+            difference = im * (2 * (1 + kb) * Complex{BigFloat}(omega) - ab * m) / kb
+            @test data.n == 1
+            @test abs(data.delta - (round(Int, real(difference)) - difference)) <= 1e-15
+        end
+        for (s, a) in ((-2, 0.9), (-2, 0.9999), (-2, 0.999999), (2, 0.99999))
+            kappa = sqrt((1 - a) * (1 + a))
+            omega = (2a - im * kappa) / (2 * (1 + kappa))
+            p = D.gsn_parameters(s, 2, 2, a, omega)
+            A, B = OPE.endpoint_ab_series(CR._complex_horizon_closed_form(D.gsn_coefficients(p)), :H, 12)
+            Cb = Complex{BigFloat}
+            ab = BigFloat(a)
+            kb = sqrt((1 - ab) * (1 + ab))
+            x = OPE.Taylor1(Cb, 16)
+            r = (1 + kb) + 2kb * x / (1 - x)
+            S = r^2 + ab^2
+            Bx2 = -GSN.Potentials.sU(s, 2, ab, Cb(omega), Cb(p.lambda), r) * S^2 / (4kb^2)
+            @test maximum(abs(B[k] - OPE.getcoeff(Bx2, k - 1)) / abs(OPE.getcoeff(Bx2, k - 1)) for k in 1:13) <= 1e-13
+        end
+    end
+    a = 0.9
+    kappa = sqrt((1 - a) * (1 + a))
+    @test CR.complex_rational_build(-2, 2, 2, a, (2a - im * kappa) / (2 * (1 + kappa)) + 2e-14im, :IN) isa NamedTuple
+    growth = 0.2041836836755107 + 0.20830902332069898im
+    @test CR._horizon_resonance_data(D.gsn_parameters(-2, 2, 1, 0.7, growth), :out).n == 1
+    for bc in (IN, UP)
+        @test isfinite(GSN_radial(-2, 2, 1, 0.7, growth, bc).incidence_amplitude)
+    end
+    @test !isdefined(D.NearExtreme, :factor_values_complex_dd) && !isdefined(CR, :_horizon_ab_dd) &&
+        !isdefined(D.LargeFrequencyExpansion, :DDComplex)
 end
 
 # ---------------------------------------------------------------------------------------------------

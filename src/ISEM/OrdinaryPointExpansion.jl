@@ -10,7 +10,7 @@ using ...Potentials: sF, sU, sF_delta, sW
 using TaylorSeries: Taylor1, getcoeff, derivative
 
 export PQLayout
-export pq_layout, split_starts, ab_term_counts
+export pq_layout, split_starts, ab_term_counts, horizon_kplus
 export rational_series_from_coefficients!
 export endpoint_ab_series!, endpoint_ab_series
 export ordinary_ab_series!, ordinary_ab_series
@@ -604,6 +604,13 @@ function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
     return a_terms, b_terms
 end
 
+# K+ = 2 r+ omega - a m with kappa = sqrt((1 - a)(1 + a)) in fma form, error <= 0.44 eps (n + m) at the horizon
+# resonances, where 2 r+ omega - a m and omega - m a / (2 r+) lose eps a m / |K+|.
+function horizon_kplus(a::Real, m, omega::Number)
+    kappa = sqrt((1 - a) * (1 + a))
+    return complex(fma(2kappa, real(omega), fma(-a, Float64(m), 2real(omega))), fma(2kappa, imag(omega), 2imag(omega)))
+end
+
 # A and B in the horizon coordinate x from the closed-form potentials with every horizon-vanishing factor kept
 # in factored form: r = r+ + 2 kappa x / (1 - x), Delta = 4 kappa^2 x / (1 - x)^2 (sF_delta),
 # S = r^2 + a^2, g = dx/dr* = 2 kappa x / S, so that
@@ -611,8 +618,10 @@ end
 # with K = S omega - a m and U S^2 = -K^2 + Delta W (sW): sU itself cancels internally by ~1e2 near the horizon
 # with no cancellation as x -> 0 or kappa -> 0. At x0 = 0 (exactly) the Laurent coefficients of the horizon
 # group :H are written (a_{-1} = 1 exactly), otherwise the Taylor coefficients about the ordinary point x0
-# (group :O). x0 and omega may be complex. Returns the numbers of terms.
-function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer)
+# (group :O). x0 and omega may be complex. With `kplus` (horizon_kplus), K = K+ + (r - r+)(r + r+) omega carries
+# K+ = 2 r+ omega - a m without the cancellation of S omega - a m (the complex-rational horizon); returns the
+# numbers of terms.
+function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer; kplus=nothing)
     s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
     kappa = sqrt((1 - a) * (1 + a))
     x = x0 + Taylor1(ComplexF64, order + 4)
@@ -622,7 +631,7 @@ function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order:
     Delta = 4kappa^2 * x / w^2
     cached = _PowerCachedSeries(r, 7)
     F = sF_delta(s, m, a, omega, lambda, cached, Delta)
-    K = S * omega - a * m
+    K = kplus === nothing ? S * omega - a * m : kplus + (2kappa * x / w) * (r + (1 + kappa)) * omega
     Ax = 1 - x * derivative(S) / S - F * S / (2kappa)
     Bx2 = (K^2 - Delta * sW(s, m, a, omega, lambda, cached)) / (4kappa^2)
     if iszero(x0)

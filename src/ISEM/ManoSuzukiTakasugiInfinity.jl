@@ -15,15 +15,6 @@ using ..Iteration:
     iterate_scaled_y,
     logscaled_state,
     materialize_logscaled_state
-using ..LargeFrequencyExpansion:
-    DDComplex,
-    dc_add,
-    dc_div,
-    dc_imul,
-    dc_mul,
-    dc_neg,
-    dc_sub,
-    dc_value
 export abel_denominator, mano_suzuki_takasugi_infinity_basis, mano_suzuki_takasugi_infinity_pair
 export build_mano_suzuki_takasugi_plan, build_mano_suzuki_takasugi_eval_plan, mano_suzuki_takasugi_route_state, mano_suzuki_takasugi_pin_state
 export mano_suzuki_takasugi_logscaled_seed, mano_suzuki_takasugi_logscaled_state
@@ -52,6 +43,82 @@ end
 Base.showerror(io::IO, err::ManoSuzukiTakasugiCertificateError) = print(io, err.message)
 export alpha_mano_suzuki_takasugi, beta_mano_suzuki_takasugi, gamma_mano_suzuki_takasugi
 export rn_cf, ln_cf, mano_suzuki_takasugi_guess, mano_suzuki_takasugi_nu, mano_suzuki_takasugi_nu_complex
+
+# Double-double complex arithmetic for _refined_amplitudes and its helpers (explicit backend = :mst only);
+# binary64 replacement pending: QNM near-AS n = 8, |a| < 0.015.
+struct DDComplex
+    high::ComplexF64
+    low::ComplexF64
+end
+
+DDComplex(value::Number) = DDComplex(ComplexF64(value), 0.0 + 0.0im)
+
+# Error-free sum (Knuth TwoSum): value + error == left + right exactly.
+@inline function two_sum(left::Float64, right::Float64)
+    value = left + right
+    right_virtual = value - left
+    error = (left - (value - right_virtual)) + (right - right_virtual)
+    return value, error
+end
+
+@inline function dc_normalize(high::ComplexF64, low::ComplexF64)
+    real_high, real_low = two_sum(real(high), real(low))
+    imag_high, imag_low = two_sum(imag(high), imag(low))
+    return DDComplex(
+        ComplexF64(real_high, imag_high),
+        ComplexF64(real_low, imag_low),
+    )
+end
+
+@inline function dc_add(left::DDComplex, right::DDComplex)
+    real_high, real_error = two_sum(real(left.high), real(right.high))
+    imag_high, imag_error = two_sum(imag(left.high), imag(right.high))
+    low = left.low + right.low + ComplexF64(real_error, imag_error)
+    return dc_normalize(ComplexF64(real_high, imag_high), low)
+end
+
+@inline dc_neg(value::DDComplex) = DDComplex(-value.high, -value.low)
+@inline dc_sub(left::DDComplex, right::DDComplex) =
+    dc_add(left, dc_neg(right))
+@inline dc_imul(value::DDComplex) = DDComplex(
+    ComplexF64(-imag(value.high), real(value.high)),
+    ComplexF64(-imag(value.low), real(value.low)),
+)
+
+# Complex product with its rounding error, using fma for the partial products.
+@inline function complex_product(left::ComplexF64, right::ComplexF64)
+    rr = real(left) * real(right)
+    ii = imag(left) * imag(right)
+    ri = real(left) * imag(right)
+    ir = imag(left) * real(right)
+    real_high, real_sum_error = two_sum(rr, -ii)
+    imag_high, imag_sum_error = two_sum(ri, ir)
+    real_error = fma(real(left), real(right), -rr) -
+        fma(imag(left), imag(right), -ii) + real_sum_error
+    imag_error = fma(real(left), imag(right), -ri) +
+        fma(imag(left), real(right), -ir) + imag_sum_error
+    return ComplexF64(real_high, imag_high),
+        ComplexF64(real_error, imag_error)
+end
+
+@inline function dc_mul(left::DDComplex, right::DDComplex)
+    high, error = complex_product(left.high, right.high)
+    low = error + left.high * right.low + left.low * right.high
+    return dc_normalize(high, low)
+end
+
+# Double-double division: binary64 quotient refined by two residual corrections.
+@inline function dc_div(numerator::DDComplex, denominator::DDComplex)
+    quotient = DDComplex(numerator.high / denominator.high)
+    for _ in 1:2
+        residual = dc_sub(numerator, dc_mul(denominator, quotient))
+        quotient = dc_add(quotient,
+            DDComplex(residual.high / denominator.high))
+    end
+    return quotient
+end
+
+@inline dc_value(value::DDComplex) = value.high + value.low
 
 const I = 1im
 const CF_MAX = 200

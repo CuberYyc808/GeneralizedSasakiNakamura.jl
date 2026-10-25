@@ -13,6 +13,8 @@ using ..ArbitraryPrecisionRoute: arbitrary_precision_route
 using ..CoefficientTables: gsn_coefficients
 using ..ComplexRational:
     ComplexRationalEvaluator,
+    _horizon_resonance_data,
+    _horizon_resonant_order,
     complex_rational_build,
     complex_rational_state_r,
     complex_up_horizon_in_candidate,
@@ -4275,12 +4277,8 @@ end
 # horizon solutions when it is a positive integer, else 0; `threshold` marks p = 0.
 function _complex_horizon_resonance(params::ComplexParameters)
     iszero(params.p) && return (order=0, threshold=true)
-    difference = 2im * (params.rplus / params.kappa) * params.p
-    order = round(Int, real(difference))
-    tolerance = 2048eps(Float64) * max(1.0, abs(difference))
-    resonant = order >= 1 &&
-        abs(difference - order) <= tolerance
-    return (order=resonant ? order : 0, threshold=false)
+    # the IN detuning from K+ in fma form and the classification of the complex-rational horizon series
+    return (order=_horizon_resonant_order(_horizon_resonance_data(params, :in)), threshold=false)
 end
 
 function _complex_amplitude_observable(route::ComplexRoute)

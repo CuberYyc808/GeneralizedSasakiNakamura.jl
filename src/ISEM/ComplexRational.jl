@@ -7,6 +7,7 @@ using ..Parameters:
     gsn_controls,
     gsn_parameters
 using ..CoefficientTables:
+    CoefficientSet,
     EndpointCoefficientSet,
     RationalCoefficients,
     gsn_coefficients
@@ -14,6 +15,7 @@ using ..OrdinaryPointExpansion:
     denom_ok,
     endpoint_ab_series,
     endpoint_power_lookup,
+    horizon_kplus,
     ordinary_ab_series!,
     ordinary_point_coeffs!,
     poly_pair,
@@ -26,20 +28,8 @@ using ..OrdinaryPointExpansion:
     horizon_closed_form_ab_series!,
     ordinary_scaled_y_ab_series!
 using ..LocalSolutionAtZero:
-    horizon_exponent,
-    horizon_rotation_frequency,
-    zero_local_solution
-using ..LargeFrequencyExpansion:
-    DDComplex,
-    dc_add,
-    dc_div,
-    dc_imul,
-    dc_mul,
-    dc_neg,
-    dc_scale,
-    dc_sub,
-    dc_value
-using ..NearExtreme: factor_values_complex_dd
+    horizon_rotation_frequency
+using ..NearExtreme: HorizonClosedFormLaurent
 using ..LocalSolutionAtInfinity: infinity_local_solution
 using ..Iteration:
     _best_infinity_order_metrics,
@@ -103,7 +93,6 @@ const _SCALED_Y_CHART_SOURCE = 0.125
 const _SCALED_Y_CHART_GROWTH = 4.0
 const _SCALED_Y_PHYSICAL_HANDOFF = 1.0e-2
 const _SCALED_X_PHYSICAL_HANDOFF = 1.0e-2
-const _HORIZON_RESONANCE_TOL = 2048eps(Float64)
 const _PRINCIPAL_MANO_SUZUKI_TAKASUGI_Y_SCALES =
     (0.005, 0.01, 0.02, 0.04, 0.08, 0.12, 0.16, 0.24)
 const _RHO_MAGNITUDES = ntuple(index -> Float64(2.0^(index - 1)), 17)
@@ -706,111 +695,27 @@ function _horizon_numerator(coeffs, a_power, b_power, mu, n::Int)
     return ComplexF64(numerator)
 end
 
-@inline _dc_zero(value::DDComplex) =
-    iszero(value.high) && iszero(value.low)
-
-function _dc_sqrt_real(value::DDComplex, initial::Float64)
-    root = DDComplex(initial)
-    @inbounds for _ in 1:3
-        root = dc_scale(dc_add(root, dc_div(value, root)), 0.5)
-    end
-    return root
-end
-
-function _horizon_exponent_dd(params, branch::Symbol)
-    one = DDComplex(1)
-    a = DDComplex(params.a)
-    kappa_squared = dc_mul(dc_sub(one, a), dc_add(one, a))
-    kappa = _dc_sqrt_real(kappa_squared, params.kappa)
-    r_plus = dc_add(one, kappa)
-    numerator = dc_sub(
-        dc_scale(dc_mul(r_plus, DDComplex(params.omega)), 2.0),
-        dc_scale(a, Float64(params.m)),
-    )
-    nu_h = dc_div(numerator, dc_scale(kappa, 2.0))
-    mu = dc_imul(nu_h)
-    branch in (:in, :ingoing, :IN) && return dc_neg(mu)
-    branch in (:out, :outgoing, :OUT) && return mu
-    throw(ArgumentError("horizon branch must be :in or :out."))
-end
-
-function _horizon_numerator_dd(
-    coeffs::Vector{DDComplex},
-    a_power,
-    b_power,
-    mu::DDComplex,
-    n::Int,
-)
-    numerator = DDComplex(0)
-    @inbounds for j in 0:(n - 1)
-        factor = dc_add(mu, DDComplex(Float64(n - j - 1)))
-        term = dc_mul(_as_dd(a_power(j)), factor)
-        numerator = dc_add(
-            numerator, dc_mul(term, coeffs[n - j]))
-    end
-    @inbounds for j in -1:(n - 2)
-        numerator = dc_add(
-            numerator,
-            dc_mul(_as_dd(b_power(j)), coeffs[n - j - 1]),
-        )
-    end
-    return numerator
-end
-
-@inline _as_dd(value::DDComplex) = value
-@inline _as_dd(value) = DDComplex(value)
-
-# First `count` power-series coefficients of numerator/denominator in double-double
-# arithmetic, allowing leading zero coefficients of the denominator when the numerator
-# shares them.
-function _rational_series_dd(numerator, denominator, count::Int)
-    first = findfirst(value -> !_dc_zero(value), denominator)
-    first === nothing &&
-        error("noninvertible q0 in compensated horizon P/Q recurrence")
-    shift = first - 1
-    @inbounds for index in 1:min(shift, length(numerator))
-        _dc_zero(numerator[index]) ||
-            error("compensated horizon P/Q has an unmatched pole")
-    end
-    out = Vector{DDComplex}(undef, count)
-    qinv = dc_div(DDComplex(1), denominator[first])
-    @inbounds for n in 0:(count - 1)
-        pindex = n + shift
-        value = pindex < length(numerator) ?
-            numerator[pindex + 1] : DDComplex(0)
-        for k in 1:min(n, length(denominator) - shift - 1)
-            value = dc_sub(value, dc_mul(
-                denominator[shift + k + 1], out[n - k + 1]))
-        end
-        out[n + 1] = dc_mul(value, qinv)
-    end
-    return out
-end
-
-function _horizon_ab_dd(coefficients, order::Int)
-    values = factor_values_complex_dd(coefficients.params)
-    spin = coefficients.params.s
-    b_length = spin == 0 ? 11 : 17
-    q_start = 23 + b_length
-    expected = spin == 0 ? 46 : 58
-    length(values) == expected ||
-        error("invalid compensated horizon factor layout")
-    a_count = order + 2
-    b_count = order + 3
-    avec = _rational_series_dd(
-        @view(values[1:11]), @view(values[12:22]), a_count)
-    bvec = _rational_series_dd(
-        @view(values[23:(q_start - 1)]),
-        @view(values[q_start:expected]),
-        b_count,
-    )
-    return avec, bvec
-end
-
-@inline function _dd_power_lookup(values, first_power::Int, power::Int)
-    index = power - first_power + 1
-    return 1 <= index <= length(values) ?
-        values[index] : DDComplex(0)
+# Horizon exponents of `branch` and the other branch, and the integer resonance of their difference
+# D = mu_other - mu, from K+ = 2 r+ omega - a m in fma form (a common function for every use): with
+# kappa = sqrt((1 - a)(1 + a)), K_re = fma(2 kappa, Re omega, fma(-a, m, 2 Re omega)),
+# K_im = fma(2 kappa, Im omega, 2 Im omega), mu_in/out = -/+ i K+ / (2 kappa), D_in = i K+ / kappa, and the
+# detuning delta = n - D (n = round(Re D)) as (n kappa + K_im)/kappa - i K_re/kappa (IN), its mirror (OUT): its
+# error is ~0.44 eps (n + m) up to a = 1 - 1e-8, where omega - m a/(2 r+) loses eps a m / kappa.
+function _horizon_resonance_data(params, branch::Symbol)
+    a = Float64(params.a)
+    kappa = sqrt((1 - a) * (1 + a))
+    kplus = horizon_kplus(a, params.m, ComplexF64(params.omega))
+    k_re, k_im = reim(kplus)
+    incoming = branch in (:in, :ingoing, :IN)
+    incoming || branch in (:out, :outgoing, :OUT) ||
+        throw(ArgumentError("horizon branch must be :in or :out."))
+    mu_in = complex(k_im, -k_re) / (2kappa)
+    mu = incoming ? mu_in : -mu_in
+    difference = incoming ? complex(-k_im, k_re) / kappa : complex(k_im, -k_re) / kappa
+    n = isfinite(real(difference)) && abs(real(difference)) < 2.0^52 ? round(Int, real(difference)) : 0
+    delta = incoming ? complex((n * kappa + k_im) / kappa, -k_re / kappa) :
+        complex((n * kappa - k_im) / kappa, k_re / kappa)
+    return (; mu, other_mu=-mu, difference, n, delta)
 end
 
 function _horizon_log_forcing(coeffs, a_power, mu, q::Int)
@@ -821,163 +726,66 @@ function _horizon_log_forcing(coeffs, a_power, mu, q::Int)
     return ComplexF64(forcing)
 end
 
-function _horizon_plain_coefficients(
-    a_power,
-    b_power,
-    mu,
-    order::Int,
-)
-    coeffs = Vector{ComplexF64}(undef, order + 1)
-    coeffs[1] = 1.0 + 0.0im
-    a_minus_one = a_power(-1)
-    b_minus_two = b_power(-2)
-    @inbounds for n in 1:order
-        numerator = _horizon_numerator(
-            coeffs, a_power, b_power, mu, n)
-        denominator = (mu + n) * (mu + n - 1) +
-            a_minus_one * (mu + n) + b_minus_two
-        scale = abs((mu + n) * (mu + n - 1)) +
-            abs(a_minus_one * (mu + n)) + abs(b_minus_two)
-        denom_ok(denominator, scale) ||
-            error("resonant companion horizon recurrence is ill-conditioned at n=$n")
-        coeffs[n + 1] = -numerator / denominator
-        series_issue(coeffs, n + 1) == :none ||
-            error("resonant companion horizon recurrence lost Float64 credibility at n=$n")
-    end
-    return coeffs
+# The integer n of an exponent resonance, or 0: |delta| <= 64 eps scale_n / n, the denom_ok threshold of the plain
+# recurrence at k = n, with scale_n = |(mu + n)(mu + n - 1)| + |a_{-1} (mu + n)| + |b_{-2}| at a_{-1} = 1,
+# b_{-2} = -mu^2 (the horizon indicial equation).
+function _horizon_resonant_order(resonance)
+    n, mu = resonance.n, resonance.mu
+    n >= 1 || return 0
+    scale = abs((mu + n) * (mu + n - 1)) + abs(mu + n) + abs2(mu)
+    return abs(resonance.delta) <= 64eps(Float64) * scale / n ? n : 0
 end
 
-# Log-Frobenius horizon solution when the two exponents differ by a positive integer:
-# X = x^mu sum c_n x^n + C log(x) x^mu' sum d_n x^n, with the companion series d_n and
-# the constant C fixed at the resonant order.
+# Indicial denominator I(mu + k) = k (k - D) in factored form, with k - D = (k - n) + delta exact near k = n.
+@inline _factored_denominator(k::Int, resonance) = k * ((k - resonance.n) + resonance.delta)
+
+# Horizon Frobenius coefficients with factored denominators, skipping `skip` (the resonant order); returns the
+# coefficients or errors where the series loses its binary64 credibility.
+function _horizon_factored_coefficients(a_power, b_power, mu, resonance, order::Int; skip::Int=-1,
+        forcing=nothing)
+    coeffs = Vector{ComplexF64}(undef, order + 1)
+    coeffs[1] = 1.0 + 0.0im
+    log_coefficient = zero(ComplexF64)
+    @inbounds for k in 1:order
+        numerator = _horizon_numerator(coeffs, a_power, b_power, mu, k)
+        if k == skip
+            log_coefficient = -numerator / k
+            coeffs[k + 1] = zero(ComplexF64)
+        else
+            k > skip >= 1 && (numerator += log_coefficient * forcing(k - skip))
+            value = -numerator / _factored_denominator(k, resonance)
+            isfinite(real(value)) && isfinite(imag(value)) ||
+                error("factorized horizon recurrence produced a nonfinite coefficient at n=$k")
+            coeffs[k + 1] = value
+        end
+        issue = series_issue(coeffs, k + 1)
+        issue in (:none, :consecutive_ratio_growth) ||
+            error("factorized horizon recurrence lost Float64 credibility at n=$k: $issue")
+    end
+    return coeffs, log_coefficient
+end
+
+# Log-Frobenius horizon solution when the two exponents differ by the positive integer n = resonance.n:
+# X = x^mu sum c_n x^n + C log(x) x^mu' sum d_n x^n, with the companion series d_n and the constant
+# C = -N_n / n (the forcing F_0 = I'(mu') = n at the resonance), all in binary64 with the factored denominators
+# and the horizon A, B of the coefficient set (closed form where attached).
 function _resonant_horizon_solution(
     coefficients,
     branch::Symbol,
     order::Int,
+    resonance=_horizon_resonance_data(coefficients.params, branch),
 )
-    other_branch = branch in (:in, :ingoing, :IN) ? :out : :in
-    mu = ComplexF64(horizon_exponent(
-        coefficients.params, branch))
-    log_mu = ComplexF64(horizon_exponent(
-        coefficients.params, other_branch))
-    difference = log_mu - mu
-    resonance = round(Int, real(difference))
-    resonance >= 1 &&
-        abs(difference - resonance) <=
-            _HORIZON_RESONANCE_TOL * max(1.0, abs(difference)) ||
-        error("horizon recurrence failure is not a positive-integer Frobenius resonance")
-    resonance <= order ||
-        error("horizon Frobenius resonance lies beyond the requested order")
-
-    a_coeffs, b_coeffs =
-        endpoint_ab_series(coefficients, :H, order)
-    a_dd, b_dd = _horizon_ab_dd(coefficients, order)
-    a_power = power -> ComplexF64(
-        dc_value(_dd_power_lookup(a_dd, -1, power)))
-    b_power = power -> ComplexF64(
-        dc_value(_dd_power_lookup(b_dd, -2, power)))
-    companion = _horizon_plain_coefficients(
-        a_power, b_power, log_mu, order)
-    solution = Vector{ComplexF64}(undef, order + 1)
-    solution[1] = 1.0 + 0.0im
-    a_minus_one = a_power(-1)
-    b_minus_two = b_power(-2)
-    log_coefficient = zero(ComplexF64)
-
-    @inbounds for n in 1:order
-        numerator = _horizon_numerator(
-            solution, a_power, b_power, mu, n)
-        denominator = (mu + n) * (mu + n - 1) +
-            a_minus_one * (mu + n) + b_minus_two
-        if n == resonance
-            forcing = _horizon_log_forcing(
-                companion, a_power, log_mu, 0)
-            !iszero(forcing) && isfinite(real(forcing)) &&
-                isfinite(imag(forcing)) ||
-                error("singular logarithmic Frobenius forcing at the horizon")
-            log_coefficient = ComplexF64(-numerator / forcing)
-            solution[n + 1] = zero(ComplexF64)
-        else
-            if n > resonance
-                numerator += log_coefficient * _horizon_log_forcing(
-                    companion, a_power, log_mu, n - resonance)
-            end
-            scale = abs((mu + n) * (mu + n - 1)) +
-                abs(a_minus_one * (mu + n)) + abs(b_minus_two)
-            denom_ok(denominator, scale) ||
-                error("logarithmic horizon recurrence is ill-conditioned at n=$n")
-            solution[n + 1] = -numerator / denominator
-        end
-        series_issue(solution, n + 1) == :none ||
-            error("logarithmic horizon recurrence lost Float64 credibility at n=$n")
-    end
-
-    return (
-        branch=branch,
-        exponent=mu,
-        coefficients=solution,
-        A=ComplexF64.(dc_value.(a_dd)),
-        B=ComplexF64.(dc_value.(b_dd)),
-        variable=:x,
-        requested_order=order,
-        effective_order=order,
-        truncation_reason=:none,
-        representation=:log_frobenius,
-        resonance_order=resonance,
-        log_exponent=log_mu,
-        log_coefficient,
-        log_coefficients=companion,
-    )
-end
-
-# Horizon Frobenius recurrence in double-double arithmetic with the denominator
-# factorized through the exponent difference; hands over to
-# `_resonant_horizon_solution` at an integer resonance.
-function _factorized_horizon_solution(
-    coefficients,
-    branch::Symbol,
-    order::Int,
-)
-    other_branch = branch in (:in, :ingoing, :IN) ? :out : :in
-    mu_dd = _horizon_exponent_dd(coefficients.params, branch)
-    other_mu_dd = _horizon_exponent_dd(
-        coefficients.params, other_branch)
-    mu = ComplexF64(dc_value(mu_dd))
-    other_mu = ComplexF64(dc_value(other_mu_dd))
-    a_coeffs, b_coeffs =
-        endpoint_ab_series(coefficients, :H, order)
+    mu = resonance.mu
+    log_mu = resonance.other_mu
+    a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :H, order)
     a_power = endpoint_power_lookup(a_coeffs, -1)
     b_power = endpoint_power_lookup(b_coeffs, -2)
-    solution = Vector{ComplexF64}(undef, order + 1)
-    solution_dd = Vector{DDComplex}(undef, order + 1)
-    solution[1] = 1.0 + 0.0im
-    solution_dd[1] = DDComplex(1)
-
-    @inbounds for n in 1:order
-        numerator = _horizon_numerator_dd(
-            solution_dd, a_power, b_power, mu_dd, n)
-        detuning = dc_sub(
-            dc_add(mu_dd, DDComplex(Float64(n))), other_mu_dd)
-        detuning_value = ComplexF64(dc_value(detuning))
-        resonance_scale = max(
-            1.0, abs(mu), abs(other_mu), Float64(n))
-        (_dc_zero(detuning) ||
-            abs(detuning_value) <=
-                _HORIZON_RESONANCE_TOL * resonance_scale) &&
-            return _resonant_horizon_solution(
-                coefficients, branch, order)
-        denominator = dc_scale(detuning, Float64(n))
-        value_dd = dc_div(dc_neg(numerator), denominator)
-        value = ComplexF64(dc_value(value_dd))
-        isfinite(real(value)) && isfinite(imag(value)) ||
-            error("factorized horizon recurrence produced a nonfinite coefficient at n=$n")
-        solution[n + 1] = value
-        solution_dd[n + 1] = value_dd
-        issue = series_issue(solution, n + 1)
-        issue in (:none, :consecutive_ratio_growth) ||
-            error("factorized horizon recurrence lost Float64 credibility at n=$n: $issue")
-    end
-
+    # the companion (exponent mu') has D' = -D: denominators k (k + D) = k ((k + n) - delta)
+    companion_resonance = (n=-resonance.n, delta=-resonance.delta)
+    companion, _ = _horizon_factored_coefficients(a_power, b_power, log_mu, companion_resonance, order)
+    forcing(q) = _horizon_log_forcing(companion, a_power, log_mu, q)
+    solution, log_coefficient = _horizon_factored_coefficients(a_power, b_power, mu, resonance, order;
+        skip=resonance.n, forcing)
     return (
         branch=branch,
         exponent=mu,
@@ -988,36 +796,108 @@ function _factorized_horizon_solution(
         requested_order=order,
         effective_order=order,
         truncation_reason=:none,
+        representation=:log_frobenius,
+        resonance_order=resonance.n,
+        log_exponent=log_mu,
+        log_coefficient,
+        log_coefficients=companion,
+    )
+end
+
+# Horizon Frobenius recurrence in binary64 with the denominator factored through the exponent difference,
+# I(mu + k) = k (k - D), for a series that the plain recurrence truncates (small denominator) or loses.
+function _factorized_horizon_solution(
+    coefficients,
+    branch::Symbol,
+    order::Int,
+    resonance=_horizon_resonance_data(coefficients.params, branch),
+)
+    a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :H, order)
+    a_power = endpoint_power_lookup(a_coeffs, -1)
+    b_power = endpoint_power_lookup(b_coeffs, -2)
+    solution, _ = _horizon_factored_coefficients(a_power, b_power, resonance.mu, resonance, order)
+    return (
+        branch=branch,
+        exponent=resonance.mu,
+        coefficients=solution,
+        A=a_coeffs,
+        B=b_coeffs,
+        variable=:x,
+        requested_order=order,
+        effective_order=order,
+        truncation_reason=:none,
         representation=:factorized_frobenius,
         resonance_order=0,
-        log_exponent=other_mu,
+        log_exponent=resonance.other_mu,
         log_coefficient=zero(ComplexF64),
         log_coefficients=ComplexF64[],
     )
 end
 
-# Horizon Frobenius solution; the factorized double-double recurrence (and its
-# logarithmic form at an integer resonance) is used when the plain recurrence
-# is truncated by a small denominator or loses Float64 credibility.
+# Guarded horizon Frobenius series with the factored denominators k (k - D) and the exponent of
+# _horizon_resonance_data (as zero_local_solution, which keeps the plain I(mu + k) for the real-frequency paths):
+# stops at the first suspicious coefficient and errors as LocalSolutionAtZero when fewer than two orders survive.
+function _guarded_horizon_solution(coefficients, branch::Symbol, order::Int, resonance)
+    a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :H, order)
+    a_power = endpoint_power_lookup(a_coeffs, -1)
+    b_power = endpoint_power_lookup(b_coeffs, -2)
+    mu = resonance.mu
+    coeffs = Vector{ComplexF64}(undef, order + 1)
+    coeffs[1] = 1.0 + 0.0im
+    effective_order, reason = order, :none
+    @inbounds for k in 1:order
+        value = -_horizon_numerator(coeffs, a_power, b_power, mu, k) / _factored_denominator(k, resonance)
+        coeffs[k + 1] = value
+        issue = isfinite(real(value)) && isfinite(imag(value)) ? series_issue(coeffs, k + 1) : :nonfinite
+        issue == :none || ((effective_order, reason) = (k - 1, issue); break)
+    end
+    minimum_order = min(2, order)
+    effective_order >= minimum_order || error(
+        "ISEM GSN horizon recurrence lost floating-point credibility before order $minimum_order: $reason")
+    effective_order < order && resize!(coeffs, effective_order + 1)
+    return (branch=branch, exponent=mu, coefficients=coeffs, A=a_coeffs, B=b_coeffs, variable=:x,
+        requested_order=order, effective_order, truncation_reason=reason)
+end
+
+# Horizon Frobenius solution of the complex path, classified once from the detuning delta of
+# _horizon_resonance_data: an integer resonance 1 <= n <= order with |delta| <= 64 eps scale_n / n (the
+# threshold at which the plain recurrence truncates) takes the logarithmic solution; otherwise the guarded
+# factored series (a resonance beyond `order` is not reached), or the unguarded factored series where fewer than
+# two orders of the guarded one survive.
 function _complex_horizon_solution(
     coefficients,
     branch::Symbol,
     order::Int,
 )
+    resonance = _horizon_resonance_data(coefficients.params, branch)
+    1 <= _horizon_resonant_order(resonance) <= order &&
+        return _resonant_horizon_solution(coefficients, branch, order, resonance)
     try
-        solution = zero_local_solution(
-            coefficients, branch, order)
-        if solution.effective_order < order &&
-                solution.truncation_reason == :small_recurrence_denominator
-            return _factorized_horizon_solution(
-                coefficients, branch, order)
-        end
-        return solution
+        return _guarded_horizon_solution(coefficients, branch, order, resonance)
     catch error
         _credibility_lost(error, :horizon) || rethrow()
-        return _factorized_horizon_solution(
-            coefficients, branch, order)
+        return _factorized_horizon_solution(coefficients, branch, order, resonance)
     end
+end
+
+# Coefficient set whose horizon carries the closed-form Laurent A, B (horizon_closed_form_ab_series! with K+ in
+# fma form) where |K+| < |a m| / 4 or at an exponent resonance (the factored and logarithmic series take
+# a_{-1} = 1, b_{-2} = -mu^2 exactly), used by the horizon series and their checks alike; elsewhere the generic
+# table is kept. The generic table holds K+
+# expanded, so where |K+| << |a m| its b_{-2} is off by eps (a m / |K+|)^2 (2.3e-10 at a = 0.9999 for the first
+# Matsubara frequency); with it the n = 2 resonance at (-2,2,2,0.9) did not certify its horizon path.
+function _complex_horizon_closed_form(coefficients)
+    params = coefficients.params
+    horizon = coefficients.horizon
+    kplus = horizon_kplus(Float64(params.a), params.m, ComplexF64(params.omega))
+    resonant = any(branch -> _horizon_resonant_order(_horizon_resonance_data(params, branch)) >= 1, (:in, :out))
+    resonant || abs(kplus) < abs(params.a * params.m) / 4 || return coefficients
+    laurent = HorizonClosedFormLaurent(params, 80; kplus)
+    all(value -> isfinite(real(value)) && isfinite(imag(value)), laurent.a) &&
+        all(value -> isfinite(real(value)) && isfinite(imag(value)), laurent.b) || return coefficients
+    return CoefficientSet(params, EndpointCoefficientSet(horizon.A, horizon.B, horizon.basis, laurent),
+        coefficients.infinity, coefficients.ordinary,
+        merge(coefficients.metadata, (complex_horizon_closed_form=true,)))
 end
 
 # Value, x-derivative and second x-derivative of an infinity local solution
@@ -3817,8 +3697,8 @@ function complex_rational_build(
         params; N=order, xm=initial_match_x, tol=tolerance,
         small_frequency_expansion=false, large_frequency_expansion=false)
     coefficients = nothing
-    coefficient_seconds = @elapsed coefficients = gsn_coefficients(
-        params; controls=initial_controls)
+    coefficient_seconds = @elapsed coefficients = _complex_horizon_closed_form(gsn_coefficients(
+        params; controls=initial_controls))
     locals = nothing
     local_seconds = @elapsed locals = _local_solutions(
         coefficients, branch, order)
@@ -4031,7 +3911,7 @@ function complex_up_horizon_in_candidate(evaluator, metadata)
     coefficients = evaluator.coefficients
     settings = evaluator.settings
     match_x = evaluator.match_x
-    horizon_in = zero_local_solution(
+    horizon_in = _complex_horizon_solution(
         coefficients, :in, _horizon_series_order(settings.order))
     p = params.omega - params.m * params.a / (2 * _rplus(params))
     seed = _select_rotated_horizon_path(

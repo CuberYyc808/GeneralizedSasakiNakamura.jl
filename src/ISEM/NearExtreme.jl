@@ -4,20 +4,12 @@ using ..CoefficientTables:
     CoefficientSet,
     EndpointCoefficientSet,
     RationalCoefficients
-using ..LargeFrequencyExpansion:
-    DDComplex,
-    dc_add,
-    dc_div,
-    dc_mul,
-    dc_scale,
-    dc_sub
 using ..OrdinaryPointExpansion:
     ab_term_counts,
     endpoint_ab_series!,
     horizon_closed_form_ab_series!
 using ..Parameters: select_spin_regime, is_binary64_parameters
 
-export factor_values_complex_dd
 export near_extreme_prepare, near_extreme_selected, near_extreme_march
 
 # Near-extremal horizon coefficients. Per-spin binary tables store the horizon
@@ -152,100 +144,6 @@ function factor_values(params)
     return values
 end
 
-function complex_powers_dd(value::DDComplex, maximum_power)
-    powers = Vector{DDComplex}(undef, maximum_power + 1)
-    powers[1] = DDComplex(1)
-    maximum_power == 0 && return powers
-    powers[2] = value
-    @inbounds for power in 2:maximum_power
-        powers[power + 1] = dc_mul(powers[power], powers[2])
-    end
-    return powers
-end
-
-# Double-double square root by three Newton steps from `initial`.
-function sqrt_dd(value::DDComplex, initial::Float64)
-    root = DDComplex(initial)
-    @inbounds for _ in 1:3
-        root = dc_scale(dc_add(root, dc_div(value, root)), 0.5)
-    end
-    return root
-end
-
-function pow_dd(value::DDComplex, exponent::Int)
-    iszero(exponent) && return DDComplex(1)
-    exponent < 0 && return dc_div(
-        DDComplex(1), pow_dd(value, -exponent))
-    result = DDComplex(1)
-    base = value
-    power = exponent
-    while power > 0
-        isodd(power) && (result = dc_mul(result, base))
-        power >>= 1
-        power > 0 && (base = dc_mul(base, base))
-    end
-    return result
-end
-
-# Factored horizon coefficients in double-double for complex omega and lambda,
-# returned unrounded as DDComplex values.
-function factor_values_complex_dd(params)
-    table = factor_table(params.s)
-    one = DDComplex(1)
-    sine = DDComplex(params.a)
-    cosine = sqrt_dd(
-        dc_mul(dc_sub(one, sine), dc_add(one, sine)),
-        params.kappa,
-    )
-    bases = (
-        DDComplex(params.lambda),
-        DDComplex(Float64(params.m)),
-        DDComplex(params.omega),
-        sine,
-        cosine,
-    )
-    powers = ntuple(variable ->
-        complex_powers_dd(bases[variable], table.maxima[variable]), 5)
-    monomials = Vector{DDComplex}(undef, length(table.exponents))
-    @inbounds for index in eachindex(monomials)
-        value = DDComplex(1)
-        exponents = table.exponents[index]
-        for variable in 1:5
-            exponent = Int(exponents[variable])
-            iszero(exponent) ||
-                (value = dc_mul(
-                    value, powers[variable][exponent + 1]))
-        end
-        monomials[index] = value
-    end
-
-    values = Vector{DDComplex}(undef, table.outputs)
-    @inbounds for slot in eachindex(values)
-        value = DDComplex(0)
-        first_term = Int(table.offsets[slot])
-        last_term = Int(table.offsets[slot + 1]) - 1
-        for term in first_term:last_term
-            value = dc_add(value, dc_mul(
-                monomials[Int(table.indices[term])],
-                DDComplex(table.weights[term]),
-            ))
-        end
-        values[slot] = value
-    end
-
-    ap, aq, bp, bq = table.powers
-    a_scale = pow_dd(cosine, ap - aq)
-    b_scale = pow_dd(cosine, bp - bq)
-    @inbounds for index in 1:11
-        values[index] = dc_mul(values[index], a_scale)
-    end
-    b_end = params.s == 0 ? 33 : 39
-    @inbounds for index in 23:b_end
-        values[index] = dc_mul(values[index], b_scale)
-    end
-    return values
-end
-
 # Multiply the A and B numerator blocks by cos(nu)^(numerator power - denominator power).
 function scale_factor!(values, cosine, powers, spin)
     ap, aq, bp, bq = powers
@@ -282,11 +180,11 @@ struct HorizonClosedFormLaurent{P}
     b::Vector{ComplexF64}
 end
 
-function HorizonClosedFormLaurent(params, order::Integer)
+function HorizonClosedFormLaurent(params, order::Integer; kplus=nothing)
     a_terms, b_terms = ab_term_counts(:H, order)
     a = Vector{ComplexF64}(undef, a_terms)
     b = Vector{ComplexF64}(undef, b_terms)
-    horizon_closed_form_ab_series!(a, b, params, 0.0, order)
+    horizon_closed_form_ab_series!(a, b, params, 0.0, order; kplus)
     return HorizonClosedFormLaurent(params, Int(order), a, b)
 end
 
