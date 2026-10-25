@@ -30,8 +30,9 @@ export y_branch_supported, route_y_solution, y_radial_function, near_horizon_y
 # (leading coefficient one, r* as in Coordinates) at real r near r_+, from the
 # Frobenius series of z^2 p2 R'' + z p1 R' + p0 R = 0 in z = r - r_+ (the
 # Teukolsky equation times Delta), exponents -s - i u and i u, u = r_+ k / kappa.
-# Returns (R_in, dR_in/dr, R_out, dR_out/dr, relative truncation error); the
-# series converges for |z| < 2 kappa (the next singular point is r_-).
+# Returns (R_in, dR_in/dr, R_out, dR_out/dr, relative truncation error, and the
+# cancellation sum |terms| / |sum| of the R_in and R_out series); the series
+# converges for |z| < 2 kappa (the next singular point is r_-).
 function teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
     kappa = sqrt(1 - a^2)
     rplus = 1 + kappa
@@ -65,6 +66,7 @@ function teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
         zn = 1.0
         n = 0
         tail = Inf
+        magnitude = 1.0
         while n < 400
             n += 1
             acc = 0.0im
@@ -76,12 +78,14 @@ function teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
             zn *= z
             term = c * zn
             value += term
+            magnitude += abs(term)
             derivative += (n + rho) * term / z
             tail = abs(term) / max(abs(value), floatmin(Float64))
             n >= 4 && tail <= eps(Float64) && break
         end
         power = exp(rho * log(z))
-        return power * value, power * derivative, tail
+        return power * value, power * derivative, tail,
+            magnitude / max(abs(value), floatmin(Float64))
     end
     rho_in = -s - im * u
     rho_out = im * u
@@ -89,11 +93,11 @@ function teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
         exp(im * k * rminus / kappa * log(kappa))
     norm_out = exp(im * k * rplus) * exp(-im * u * log(2.0)) *
         exp(-im * k * rminus / kappa * log(kappa))
-    Rin, dRin, tin = series(rho_in)
-    Rout, dRout, tout = series(rho_out)
+    Rin, dRin, tin, cin = series(rho_in)
+    Rout, dRout, tout, cout = series(rho_out)
     # Delta^{-s} e^{-i k r*} = norm_in z^{rho_in} (1 + O(z)), e^{i k r*} likewise.
     return (Rin * norm_in, dRin * norm_in, Rout * norm_out, dRout * norm_out,
-        max(tin, tout))
+        max(tin, tout), cin, cout)
 end
 
 # Teukolsky solution callables: r -> (R, R', R'', error), r -> (R, R') and r -> R.
@@ -1296,13 +1300,20 @@ end
 # for (a, omega) = (0.8, 0.9) with X good to 1e-13), and by 1e4 to 1e6 for
 # l = 3, omega = 2.3 - 3 at a >= 0.8, where Y is small next to C11 X and C12 X'
 # (4e-7 at r_+ + 0.05 for (0.9, 2.35)).
+# The series itself cancels for a large horizon exponent u = r_+ k / kappa: at
+# r_+ + kappa its sum |terms| / |sum| was 1e17 for (a, m, omega) = (0.99, -2, 14)
+# (u = 120; Y off by 8e-3 at r_+ + 0.75 kappa) and 1e12 for omega = 8. Where
+# eps times that cancellation exceeds NEAR_HORIZON_SERIES_CANCELLATION_TOL the
+# converted Y is used instead (1e-9 to 2e-8 there against the 256-bit reference).
 #
 # Self-check: the converted Y must agree with the series at r_+ + kappa / 2 and
-# r_+ + kappa; returns the wrapped solution and the mismatch. A mismatch means
-# either a wrong near-horizon solution or a conversion that loses that much just
-# beyond r_+ + kappa (see y_radial_function).
+# r_+ + kappa, at those of the two points where the series is used; returns the
+# wrapped solution and the mismatch. A mismatch means either a wrong
+# near-horizon solution or a conversion that loses that much just beyond
+# r_+ + kappa (see y_radial_function).
 const NEAR_HORIZON_CHECK_TOL = 1e-7
 const NEAR_HORIZON_REFINE_TOL = 1e-9
+const NEAR_HORIZON_SERIES_CANCELLATION_TOL = 1e-8
 
 function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
     (s == -2 && omega isa Real && !iszero(omega) && trans isa Number && isfinite(trans) &&
@@ -1312,7 +1323,7 @@ function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
     rplus = 1 + kappa
     rminus = 1 - kappa
     function series_y(r)
-        Rin, dRin, _, _, tail = teukolsky_horizon_pair(s, m, a, omega, lambda, r)
+        Rin, dRin, _, _, tail, cancellation = teukolsky_horizon_pair(s, m, a, omega, lambda, r)
         phase = omega * rstar_from_r(a, r) -
             a * m / (rplus - rminus) * log((r - rplus) / (r - rminus))
         delta = r^2 - 2r + a^2
@@ -1320,19 +1331,20 @@ function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
         e = trans * exp(-im * phase)
         Y = e * Rin / r^2
         dY = e * (dRin / r^2 - 2Rin / r^3 - im * K / delta * Rin / r^2)
-        return Y, dY, tail
+        return Y, dY, tail, eps(Float64) * cancellation <= NEAR_HORIZON_SERIES_CANCELLATION_TOL
     end
     r_max = rplus + kappa
     mismatch = 0.0
     for f in (0.5, 1.0)
-        S, _, tail = series_y(rplus + f * kappa)
+        S, _, tail, usable = series_y(rplus + f * kappa)
         tail <= 1e-14 || return ysoln, 0.0
+        usable || continue
         mismatch = max(mismatch, abs(ysoln(rplus + f * kappa)[1] / S - 1))
     end
     return (r -> begin
         rplus < r < r_max || return ysoln(r)
-        Y, dY, tail = series_y(r)
-        tail <= 1e-14 || return ysoln(r)
+        Y, dY, tail, usable = series_y(r)
+        (tail <= 1e-14 && usable) || return ysoln(r)
         return (Y, dY, ysoln(r)[3], zero(abs(Y)))
     end), mismatch
 end

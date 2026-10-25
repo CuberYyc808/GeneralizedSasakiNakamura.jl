@@ -43,6 +43,7 @@ grid_point(id) = only(g for g in GRID_POINTS if g.id == id)
 @testset "isem" begin
 
 include(joinpath(@__DIR__, "small_reflection.jl"))
+include(joinpath(@__DIR__, "near_horizon_cancellation.jl"))
 
 # ---------------------------------------------------------------------------------------------------
 # Near the positive imaginary axis, a = 0, omega = eps + 0.3i: a junction that puts the infinity ray through
