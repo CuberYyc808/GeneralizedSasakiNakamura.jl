@@ -530,9 +530,9 @@ end
 
 # ---------------------------------------------------------------------------------------------------
 # 12. High frequency: the reflected amplitude from the complex path (ISEM.ComplexPathAmplitudes), standalone and
-#     through the route (Matching._complex_path_reflection, taken where the route's |B_ref / B_inc| < 1e-6), and Y at
-#     large r from the two infinity series (RadialFunctions.TwoWaveYSolution). The reflection is compared relative
-#     to itself; |dB_ref / B_inc| <= 1e-30 counts as exact (it moves R(r) at r = 1e4 by 1e-14), which is where the
+#     through the route (Matching._complex_path_reflection, taken where the route's |B_ref / B_inc| < 1e-6, or < 1e-2 at
+#     horizon exponent r_+ k / kappa < 10), and Y at large r from the two infinity series
+#     (RadialFunctions.TwoWaveYSolution). The reflection is compared relative to itself; |dB_ref / B_inc| <= 1e-30 counts as exact (it moves R(r) at r = 1e4 by 1e-14), which is where the
 #     Float64 path floor sits for B_ref / B_inc ~ 1e-60 - 1e-74 at omega = 10. Superradiant modes (k <= 0) keep the
 #     route's value and are not tested here.
 # ---------------------------------------------------------------------------------------------------
@@ -549,7 +549,7 @@ is_superradiant(a, m, omega) = omega <= m * a / (2 * kerr_rplus(a))
             R = Teukolsky_radial(g.s, g.l, g.m, g.a, w, bc)
             q_ref = ref.reflection / ref.incidence
             q = R.reflection_amplitude / R.incidence_amplitude
-            if abs(q_ref) < D.Matching.COMPLEX_PATH_RATIO
+            if D.Matching._complex_path_ratio_small(abs(q_ref), g.m, g.a, w)
                 res = CPA.complex_path_amplitudes(g.s, g.m, g.a, w, real(R.mode.lambda), Symbol(ref.branch))
                 @test abs(res.ratio - q_ref) <= 1e-9 * abs(q_ref)
                 @test complex_path_ratio_ok(q, q_ref)
@@ -570,7 +570,7 @@ end
             q_ref = ref.reflection / ref.incidence
             q = R.reflection_amplitude / R.incidence_amplitude
             @test isapprox(R.incidence_amplitude / R.transmission_amplitude, ref.incidence; rtol=1e-9)
-            if abs(q_ref) < D.Matching.COMPLEX_PATH_RATIO
+            if D.Matching._complex_path_ratio_small(abs(q_ref), ref.m, ref.a, ref.omega)
                 # The regime the route hands to the complex path: the method itself and the route's result.
                 res = CPA.complex_path_amplitudes(ref.s, ref.m, ref.a, ref.omega, real(R.mode.lambda), ref.branch)
                 @test complex_path_ratio_ok(res.ratio, q_ref)

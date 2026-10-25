@@ -1439,7 +1439,18 @@ end
 # a path in the complex r plane), scaled by the route's incidence; the incidence and the bases are kept, so X(r) at
 # large r (incidence * infinity_in + reflection * infinity_out) carries the corrected reflection as well. On 474
 # BigFloat(256) references (s = -2..2, a = 0..0.9999, omega = 1.5..20) the complex path was the more accurate of the
-# two in every case below this ratio. Superradiant modes (k <= 0) and a failed path keep the route's value.
+# two in every case below this ratio. Superradiant modes (k <= 0) and a failed path keep the route's value: there the
+# matching is good to 1e-13 and the path is not (Y off by 3e-6 at (-2, 4, 4, 0.9, 0.3)).
+# The matching loses about 1e-12 / ratio of the reflection, so the ratio 1e-6 alone left up to 1e-5 in Y at large r:
+# (-2, 2, 1, 0.99, 1.15) had ratio 4.5e-6, B_ref off by 1.1e-5 (5.9e-14 from the path) and Y off by 8e-7 at r = 10 and
+# 1.1e-5 at r = 50. Up to COMPLEX_PATH_WIDE_RATIO the path is therefore also taken where the horizon exponent
+# u = r_+ k / kappa is below COMPLEX_PATH_MAX_HORIZON_EXPONENT. On 950 routes ((l, m) = (2, 2), (2, 1), (3, 3), (3, 2),
+# (4, 4), a = 0.5 - 0.99, omega = 0.3 - 4) 9.9% take the path in addition; on 34 of them (66-point scan, u <= 5.8)
+# against teukref the largest Y error at r_+ + 1.4 to r = 50 fell from 1.1e-5 to 1.6e-8 (median 3e-9 to 1e-10), none
+# got worse, and the path cost 1.6 ms (median, 30 ms at most). The path rescales R by e^(u |arg z|) and loses accuracy
+# at large u: of the 49 references of the homogeneous suite (section 12) in this band, the 41 with u <= 9.1 got better
+# or stayed (7.2e-6 to 4.5e-13 at best) and the 8 counter-rotating ones at a >= 0.99 (u = 15 - 249) got worse
+# ((2, 4, -4, 0.9999, 1.5) UP 1.7e-8 to 2.9e-6), so these keep the matched reflection.
 # The matching itself only loses the reflection where it cancels, that is where the GSN ratio |reflection /
 # incidence| of the route is small; at high l and low omega the Teukolsky ratio falls below COMPLEX_PATH_RATIO
 # through the conversion factors alone while the GSN ratio is ~1 (2% of the radial solves of the generic flux
@@ -1447,6 +1458,8 @@ end
 # checks, against 1e-14 from the path) and the flux is bitwise the same, so the path is taken only where the GSN
 # ratio is also below COMPLEX_PATH_GSN_RATIO; the 60 references above it are good to 3.8e-11 from the matching.
 const COMPLEX_PATH_RATIO = 1e-6
+const COMPLEX_PATH_WIDE_RATIO = 1e-2
+const COMPLEX_PATH_MAX_HORIZON_EXPONENT = 10
 const COMPLEX_PATH_GSN_RATIO = 1e-3
 
 # Whether the route's reflection is taken from the complex path (see _complex_path_reflection).
@@ -1456,15 +1469,26 @@ function _complex_path_switch(route::Route)
     (isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return false
     s, m, a, w = p.s, p.m, Float64(p.a), Float64(real(p.omega))
     lambda = real(p.lambda)
-    w - m * a / (2 * (1 + sqrt(1 - a^2))) > 0 || return false
+    _horizon_exponent(m, a, w) > 0 || return false
     incidence_factor, reflection_factor = route.branch === :IN ?
         (ConversionFactors.Binc(s, m, a, w, lambda), ConversionFactors.Bref(s, m, a, w, lambda)) :
         (ConversionFactors.Cinc(s, m, a, w, lambda), ConversionFactors.Cref(s, m, a, w, lambda))
     incidence = incidence_factor * route.incidence
     reflection = reflection_factor * route.reflection
-    return isfinite(incidence) && abs(reflection) < COMPLEX_PATH_RATIO * abs(incidence) &&
+    return isfinite(incidence) && _complex_path_ratio_small(abs(reflection / incidence), m, a, w) &&
         abs(route.reflection) < COMPLEX_PATH_GSN_RATIO * abs(route.incidence)
 end
+
+# u = r_+ k / kappa with k = omega - m Omega_H (Inf at a = 1 for k > 0; the sign of k otherwise).
+function _horizon_exponent(m, a, omega)
+    rplus = 1 + sqrt(1 - a^2)
+    return rplus * (omega - m * a / (2 * rplus)) / sqrt(1 - a^2)
+end
+
+# Whether the Teukolsky ratio |reflection / incidence| of a non-superradiant mode is small enough for the complex
+# path (see COMPLEX_PATH_RATIO).
+_complex_path_ratio_small(ratio, m, a, omega) = ratio < COMPLEX_PATH_RATIO ||
+    (ratio < COMPLEX_PATH_WIDE_RATIO && _horizon_exponent(m, a, omega) < COMPLEX_PATH_MAX_HORIZON_EXPONENT)
 
 function _with_reflection(route::Route, reflection)
     fields = Any[getfield(route, f) for f in fieldnames(typeof(route))]

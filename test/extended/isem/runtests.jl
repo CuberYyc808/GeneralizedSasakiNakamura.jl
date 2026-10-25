@@ -42,6 +42,8 @@ grid_point(id) = only(g for g in GRID_POINTS if g.id == id)
 
 @testset "isem" begin
 
+include(joinpath(@__DIR__, "small_reflection.jl"))
+
 # ---------------------------------------------------------------------------------------------------
 # Near the positive imaginary axis, a = 0, omega = eps + 0.3i: a junction that puts the infinity ray through
 # the r* image of r = 0 returns O(1)-wrong amplitudes while reporting ~1e-12. Independent 384-bit references
