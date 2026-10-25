@@ -1014,10 +1014,7 @@ function _complex_horizon_solution(
         end
         return solution
     catch error
-        occursin(
-            "ISEM GSN horizon recurrence lost Float64 credibility",
-            sprint(showerror, error),
-        ) || rethrow()
+        _credibility_lost(error, :horizon) || rethrow()
         return _factorized_horizon_solution(
             coefficients, branch, order)
     end
@@ -1197,6 +1194,11 @@ function _infinity_check_from_ab(
     )
 end
 
+# Whether `error` is the loss of credibility of the LocalSolutionAtZero (:horizon) or LocalSolutionAtInfinity
+# (:infinity) recurrence, by the start of its message ("ISEM GSN <endpoint> recurrence lost ...").
+_credibility_lost(error, endpoint::Symbol) =
+    occursin("ISEM GSN $endpoint recurrence lost", sprint(showerror, error))
+
 # Infinity local solution, in the scaled variable (1 - x)/omega for small
 # |omega|, strong damping, or when the unscaled recurrence loses credibility.
 function _complex_infinity_solution(coefficients, branch::Symbol, order::Int)
@@ -1215,11 +1217,7 @@ function _complex_infinity_solution(coefficients, branch::Symbol, order::Int)
     try
         return infinity_local_solution(coefficients, branch, order)
     catch exception
-        message = sprint(showerror, exception)
-        occursin(
-            "ISEM GSN infinity recurrence lost Float64 credibility",
-            message,
-        ) || rethrow()
+        _credibility_lost(exception, :infinity) || rethrow()
         return infinity_local_solution(
             coefficients,
             branch,

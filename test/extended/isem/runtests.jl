@@ -561,6 +561,29 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Complex-rational route at the n = 1, 2 horizon resonances omega_n = (a m - i n kappa) / (2 r+): the plain horizon
+# recurrence stops before order 2 and its error ("ISEM GSN horizon recurrence lost floating-point credibility ...")
+# hands over to the factorized solution instead of failing the build. The infinity rescue matches the message of
+# LocalSolutionAtInfinity by the same prefix (no binary64 input found that reaches it).
+# ---------------------------------------------------------------------------------------------------
+@testset "complex rational: low horizon resonances" begin
+    CR = D.ComplexRational
+    a = 0.9
+    kappa = sqrt((1 - a) * (1 + a))
+    # (n = 2, UP stops in the two-ray horizon path search: the UP horizon-anchor callers are not routed here yet)
+    for (n, branch) in ((1, :IN), (2, :IN), (1, :UP))
+        omega = (2a - im * n * kappa) / (2 * (1 + kappa))
+        @test CR.complex_rational_build(-2, 2, 2, a, omega, branch) isa NamedTuple
+    end
+    @test CR._credibility_lost(ErrorException(
+        "ISEM GSN infinity recurrence lost floating-point credibility before order 2: small_recurrence_denominator"),
+        :infinity)
+    @test occursin("\"ISEM GSN infinity recurrence lost floating-point credibility",
+        read(first(functionloc(first(methods(D.LocalSolutionAtInfinity.infinity_local_solution)))), String))
+    @test !CR._credibility_lost(ErrorException("ISEM GSN horizon recurrence lost"), :infinity)
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------
