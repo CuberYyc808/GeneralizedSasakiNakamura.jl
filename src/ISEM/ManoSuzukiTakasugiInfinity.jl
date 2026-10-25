@@ -390,11 +390,31 @@ function beta_mano_suzuki_takasugi(n::Integer, p::ManoSuzukiTakasugiParams)
     scale = abs(p.lambda) + abs(s*(s+1)) + abs(product) +
         abs(eps2) + abs(linear) + abs(correction)
     # Both the angular terms and the frequency terms can cancel; under severe
-    # cancellation beta_n is recomputed in double-double (_dd_beta).
+    # cancellation beta_n is recomputed without them (_beta_cancellation_free).
     if Base.eps(Float64)*scale > MANO_SUZUKI_TAKASUGI_COEFF_ERROR_MAX*abs(value)
-        return dc_value(_dd_beta(Int(n), p, DDComplex(p.nu_offset)))
+        return _beta_cancellation_free(Int(n), p)
     end
     return value
+end
+
+# beta_n without the cancellations of the plain form: the offset t = nu - l is split into its nearest integer k
+# (absorbed exactly in d = l + n + k) and a small exact remainder dt = t - k, so that
+# (n + nu)(n + nu + 1) - s(s + 1) = [d(d + 1) - s(s + 1)] + dt(2d + 1 + dt) with the bracket an exact integer, and
+# eps kappa tau = eps (eps - m a) is taken from eps and a directly (not through the rounded kappa and tau). The
+# integer shift matters for the shifted and mirrored representations of the amplitude code, where t is O(1);
+# for the principal one (k = 0) this is the original grouping. `offset` defaults to p.nu_offset.
+function _beta_cancellation_free(n::Int, p::ManoSuzukiTakasugiParams, offset::ComplexF64=p.nu_offset)
+    k = isfinite(real(offset)) ? round(Int, real(offset)) : 0
+    dt = offset - k
+    eps = p.epsilon
+    degree = p.l + n + k
+    integer_part = Float64(degree * (degree + 1) - p.s * (p.s + 1))
+    twice = ComplexF64(2degree + 1)
+    product = (ComplexF64(degree) + dt) * (ComplexF64(degree + 1) + dt)
+    eps2 = eps * eps
+    eps_q = eps * (eps - p.m * p.a)
+    frequency = (eps_q + eps2) + eps_q * (ComplexF64(p.s * p.s) + eps2) / product
+    return ((integer_part - p.lambda) + frequency) + dt * (twice + dt)
 end
 
 """

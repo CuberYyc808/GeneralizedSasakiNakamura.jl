@@ -259,6 +259,70 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# MST beta_n where its terms cancel (_beta_cancellation_free, binary64 only). Bound on the rows that take it:
+# |dbeta| <= 4 eps |eps (eps - m a)| (1 + s^2 / max(1, l(l+1))) + eps |beta|, against a 256-bit evaluation of the
+# same beta_n with the same rounded nu_offset, in the principal, integer-shifted (_amp_data) and mirrored
+# (_amp_mirror_data) representations. nu and the NIA amplitudes against the values with the former double-double
+# evaluation (rtol 1e-11).
+# ---------------------------------------------------------------------------------------------------
+@testset "MST beta_n without cancellation" begin
+    function beta_reference(n, p)
+        B = Complex{BigFloat}
+        epsilon = 2 * B(p.omega)
+        nu = BigFloat(p.l) + B(p.nu_offset)
+        product = (n + nu) * (n + nu + 1)
+        q = epsilon * (epsilon - p.m * BigFloat(p.a))
+        return -B(p.lambda) - p.s * (p.s + 1) + product + epsilon^2 + q + q * (p.s^2 + epsilon^2) / product
+    end
+    triggered(n, p) = begin
+        product = ManoSuzukiTakasugi._nu_factor(p, n) * ManoSuzukiTakasugi._nu_factor(p, n, 1)
+        linear = p.epsilon * p.kappa * p.tau
+        scale = abs(p.lambda) + abs(p.s * (p.s + 1)) + abs(product) + abs(p.epsilon^2) + abs(linear) +
+            abs(linear * (p.s^2 + p.epsilon^2) / product)
+        eps() * scale > ManoSuzukiTakasugi.MANO_SUZUKI_TAKASUGI_COEFF_ERROR_MAX *
+            abs(ManoSuzukiTakasugi.beta_mano_suzuki_takasugi(n, p))
+    end
+    setprecision(BigFloat, 256) do
+        for (s, l, m, a, omega) in ((-2, 2, 2, 0.9, 0.02), (-2, 3, 3, 0.99, 0.02), (-2, 10, 10, 0.9, 0.02),
+                (2, 2, 2, 0.7, 0.02), (-2, 2, 2, 0.9, 0.02 - 0.005im))
+            lambda = D.gsn_parameters(s, l, m, a, omega).lambda
+            nu = ManoSuzukiTakasugi.mano_suzuki_takasugi_nu(s, l, m, a, omega, lambda)
+            p = ManoSuzukiTakasugi.ManoSuzukiTakasugiParams(s, l, m, a, omega, lambda, nu)
+            centered = nu - round(Int, real(nu))
+            representations = [p; [ManoSuzukiTakasugi._amp_data(p, centered, k).params for k in (-4, -3, 2, 3)];
+                ManoSuzukiTakasugi._amp_mirror_data(ManoSuzukiTakasugi.ManoSuzukiTakasugiSeriesData(p)).params]
+            q = abs(p.epsilon * (p.epsilon - m * a))
+            rows = 0
+            for rep in representations, n in vcat(-12:12, 2l + 1)
+                triggered(n, rep) || continue
+                rows += 1
+                beta = ManoSuzukiTakasugi.beta_mano_suzuki_takasugi(n, rep)
+                bound = 4eps() * q * (1 + s^2 / max(1, l * (l + 1))) + eps() * abs(beta)
+                @test abs(beta - beta_reference(n, rep)) <= bound
+            end
+            @test rows > 0
+        end
+    end
+    # (-2,2,2,0.9,0.02): beta_0 = 1.008e-4 against terms of O(1) (trigger ratio ~1e3).
+    lambda = D.gsn_parameters(-2, 2, 2, 0.9, 0.02).lambda
+    nu = ManoSuzukiTakasugi.mano_suzuki_takasugi_nu(-2, 2, 2, 0.9, 0.02, lambda)
+    @test abs(nu - 1.9991938315757756) <= 1e-16
+    p = ManoSuzukiTakasugi.ManoSuzukiTakasugiParams(-2, 2, 2, 0.9, 0.02, lambda, nu)
+    @test ManoSuzukiTakasugi.beta_mano_suzuki_takasugi(0, p) ≈ 1.00770491750275e-4 rtol=1e-12
+    for (omega, reference) in (
+            (0.02, (5.170990823599011e7 + 1.1176837663275938e9im, -38.84161114371828 - 115.90899721067663im)),
+            (0.002, (1.4237641494113684e13 + 1.1581900243290817e14im, -209.4122074005712 - 1229.993587255915im)),
+            (0.02 - 0.005im, (-9.060346618569436e8 + 3.6026602122935605e8im,
+                -8.388716652494214 - 114.25437546951402im)))
+        lambda = D.gsn_parameters(-2, 2, 2, 0.9, omega).lambda
+        amplitudes = ManoSuzukiTakasugi.mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
+            -2, 2, 2, 0.9, omega, lambda, :IN)
+        @test amplitudes.teuk[1] ≈ reference[1] rtol=1e-11
+        @test amplitudes.teuk[2] ≈ reference[2] rtol=1e-11
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------
