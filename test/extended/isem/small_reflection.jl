@@ -7,3 +7,22 @@
     @test Y.Y_solution(10.0)[1] ≈ -2.6970325277921525e-5 - 8.666135783741672e-5im rtol=1e-8
     @test Y.Y_solution(50.0)[1] ≈ 2.2779902278298815e-5 + 2.384758130773702e-5im rtol=1e-8
 end
+
+# The near-horizon re-solve of Y (RadialFunctions.y_radial_function) keeps the first solution when the re-solve
+# fails a certificate, and rethrows programming errors. (l, m, a, omega) = (2, 2, 0.99, 1.15) takes the re-solve
+# (mismatch 1e-8); its coefficient backend is swapped for one that throws.
+@testset "Y re-solve: certificate failures fall back, programming errors propagate" begin
+    route = D.radial_route(-2, 2, 2, 0.99, 1.15, :IN;
+        small_frequency_expansion=:auto, large_frequency_expansion=:auto)
+    reference = D.y_radial_function(route).Y_solution(1.5)[1]
+    backend = D.CoefficientTables._BACKEND[]
+    try
+        D.CoefficientTables._BACKEND[] = (args...; kwargs...) -> error("no certified seed (test)")
+        @test isfinite(D.y_radial_function(route).Y_solution(1.5)[1])
+        D.CoefficientTables._BACKEND[] = (args...; kwargs...) -> throw(MethodError(+, ("test",)))
+        @test_throws MethodError D.y_radial_function(route)
+    finally
+        D.CoefficientTables._BACKEND[] = backend
+    end
+    @test D.y_radial_function(route).Y_solution(1.5)[1] == reference
+end

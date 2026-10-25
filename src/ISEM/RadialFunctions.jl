@@ -1415,7 +1415,13 @@ end
 # with the smaller mismatch is kept; a mismatch above NEAR_HORIZON_CHECK_TOL
 # warns. Where Y = C11 X + C12 X' cancels strongly the X error of the tables
 # shows up in Y: (l, a, omega) = (3, 0.9, 2.35) had 2e-7 at r_+ + 0.7 (1e-8
-# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10).
+# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10). The re-solve is an optional refinement of an already
+# certified solution: a certificate or precision failure in it keeps the first solution (whose mismatch still
+# warns), while the errors of RESOLVE_PROGRAMMING_ERRORS point to a defect and are rethrown.
+const RESOLVE_PROGRAMMING_ERRORS = Union{InterruptException, MethodError, BoundsError, UndefVarError,
+    DimensionMismatch, AssertionError, TypeError, InexactError, KeyError, FieldError, StackOverflowError,
+    OutOfMemoryError}
+
 function y_radial_function(route::Route)
     _check_y_branch(route)
     amps = _route_y_amplitudes(route)
@@ -1429,7 +1435,7 @@ function y_radial_function(route::Route)
                     route.branch; controls=route.controls), route)
             end
         catch err
-            err isa InterruptException && rethrow()
+            err isa RESOLVE_PROGRAMMING_ERRORS && rethrow()
             nothing
         end
         if refined isa Route
