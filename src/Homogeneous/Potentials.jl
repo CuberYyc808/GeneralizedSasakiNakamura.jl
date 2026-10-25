@@ -3,7 +3,7 @@ module Potentials
 using ..Kerr
 using ..Transformation
 
-export sF, sU, VT, radial_Teukolsky_equation
+export sF, sU, sF_delta, sU_delta, sW, VT, radial_Teukolsky_equation
 
 const I = 1im # Mathematica being Mathematica
 
@@ -206,5 +206,8 @@ function VSN(s::Int, m::Int, a, omega, lambda, r)
         _sU(r) - ( 0.5/_eta(r) * _d2etadrstar2(r) - 0.75/(_eta(r)^2)*(_detadrstar(r))^2 )
     end
 end
+
+
+include("PotentialsDelta.jl")
 
 end

@@ -323,6 +323,56 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Closed-form A and B in the horizon coordinate (horizon_closed_form_ab_series!): every horizon-vanishing factor
+# kept in factored form and U S^2 = -K^2 + Delta W (sW). Against the same series from the original sF and sU in
+# 256-bit arithmetic, weighted by h^k with h = 0.3 min(x0, 1 - x0) (0.05 for the Laurent series at x0 = 0).
+# The G-007 centres (-2,3,3,0.99,1.6987) are where the horizon shift was off by 1.5e-12 to 5.5e-12 in B.
+# ---------------------------------------------------------------------------------------------------
+@testset "horizon closed-form A and B" begin
+    OPE = D.OrdinaryPointExpansion
+    function reference(p, x0, order)
+        B = BigFloat
+        C = Complex{B}
+        a = B(p.a)
+        kappa = sqrt((1 - a) * (1 + a))
+        x = C(x0) + OPE.Taylor1(C, order + 4)
+        r = (1 + kappa) + 2kappa * x / (1 - x)
+        S = r^2 + a^2
+        F = GSN.Potentials.sF(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        U = GSN.Potentials.sU(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        Ax = 1 - x * OPE.derivative(S) / S - F * S / (2kappa)
+        Bx2 = -U * S^2 / (4kappa^2)
+        return iszero(x0) ? (Ax, Bx2) : (Ax / x, Bx2 / x^2)
+    end
+    weighted(c, ref, n, h) = Float64(sum(abs(c[k] - OPE.getcoeff(ref, k - 1)) * h^(k - 1) for k in 1:n) /
+        sum(abs(OPE.getcoeff(ref, k - 1)) * h^(k - 1) for k in 1:n))
+    order = 24
+    setprecision(BigFloat, 256) do
+        for (s, l, m, a, omega, centres, b_limit) in (
+                (-2, 2, 2, 0.9999, 0.5, (0.0, 0.02, 0.1, 0.4, 0.8), 1e-15),
+                (-2, 2, 2, 0.9999, 20.0, (0.0, 0.02, 0.1, 0.4), 1e-15),
+                (-2, 2, 2, 1 - 1e-10, 0.5, (0.0, 0.02, 0.1), 1e-15),
+                (-2, 3, 3, 0.99, 1.6987, (0.048, 0.067, 0.095), 2e-14),
+                (2, 2, 2, 0.9, 0.3, (0.0, 0.05, 0.3), 5e-15),
+                (-1, 2, 1, 0.7, 0.4, (0.0, 0.05, 0.3), 1e-14),
+                (0, 1, 1, 0.9, 0.4, (0.0, 0.05, 0.3), 1e-14),
+                (-2, 2, 2, 0.9, 0.5 - 0.1im, (0.0, 0.05, 0.3), 5e-15))
+            p = (s=s, l=l, m=m, a=a, omega=omega, lambda=D.gsn_parameters(s, l, m, a, omega).lambda)
+            for x0 in centres
+                A = zeros(ComplexF64, order + 4)
+                Bv = zeros(ComplexF64, order + 4)
+                na, nb = OPE.horizon_closed_form_ab_series!(A, Bv, p, x0, order)
+                RA, RB = reference(p, x0, order)
+                h = iszero(x0) ? 0.05 : 0.3 * min(x0, 1 - x0)
+                iszero(x0) && @test A[1] === 1.0 + 0.0im
+                @test weighted(A, RA, na, h) <= 5e-15
+                @test weighted(Bv, RB, nb, h) <= b_limit
+            end
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------

@@ -6,7 +6,7 @@ using ..CoefficientTables:
     RationalCoefficients,
     evaluate_ordinary_coefficients!,
     evaluate_ordinary_variable!
-using ...Potentials: sF, sU
+using ...Potentials: sF, sU, sF_delta, sW
 using TaylorSeries: Taylor1, getcoeff, derivative
 
 export PQLayout
@@ -18,6 +18,7 @@ export ordinary_scaled_y_ab_series!
 export shifted_ab!, shifted_infinity_ab!
 export ordinary_point_coeffs!
 export DIRECT_AB_KEY, direct_ab_series!, direct_ab_value
+export horizon_closed_form_ab_series!
 export endpoint_power_lookup
 export poly_value, poly_pair, poly_triple
 export series_issue, denom_ok
@@ -523,6 +524,50 @@ function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
     cached = _PowerCachedSeries(r, 7)
     A = (derivative(g) - sF(s, m, a, omega, lambda, cached)) / g
     B = -sU(s, m, a, omega, lambda, cached) / g^2
+    a_terms, b_terms = ab_term_counts(:O, order)
+    for k in 1:a_terms
+        a_out[k] = getcoeff(A, k - 1)
+    end
+    for k in 1:b_terms
+        b_out[k] = getcoeff(B, k - 1)
+    end
+    return a_terms, b_terms
+end
+
+# A and B in the horizon coordinate x from the closed-form potentials with every horizon-vanishing factor kept
+# in factored form: r = r+ + 2 kappa x / (1 - x), Delta = 4 kappa^2 x / (1 - x)^2 (sF_delta),
+# S = r^2 + a^2, g = dx/dr* = 2 kappa x / S, so that
+#     A x = 1 - x S'/S - F S / (2 kappa),    B x^2 = -U S^2 / (4 kappa^2) = (K^2 - Delta W) / (4 kappa^2)
+# with K = S omega - a m and U S^2 = -K^2 + Delta W (sW): sU itself cancels internally by ~1e2 near the horizon
+# with no cancellation as x -> 0 or kappa -> 0. At x0 = 0 (exactly) the Laurent coefficients of the horizon
+# group :H are written (a_{-1} = 1 exactly), otherwise the Taylor coefficients about the ordinary point x0
+# (group :O). x0 and omega may be complex. Returns the numbers of terms.
+function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer)
+    s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
+    kappa = sqrt((1 - a) * (1 + a))
+    x = x0 + Taylor1(ComplexF64, order + 4)
+    w = 1 - x
+    r = (1 + kappa) + 2kappa * x / w
+    S = r^2 + a^2
+    Delta = 4kappa^2 * x / w^2
+    cached = _PowerCachedSeries(r, 7)
+    F = sF_delta(s, m, a, omega, lambda, cached, Delta)
+    K = S * omega - a * m
+    Ax = 1 - x * derivative(S) / S - F * S / (2kappa)
+    Bx2 = (K^2 - Delta * sW(s, m, a, omega, lambda, cached)) / (4kappa^2)
+    if iszero(x0)
+        a_terms, b_terms = ab_term_counts(:H, order)
+        for k in 1:a_terms
+            a_out[k] = getcoeff(Ax, k - 1)
+        end
+        for k in 1:b_terms
+            b_out[k] = getcoeff(Bx2, k - 1)
+        end
+        a_out[1] == 1 || error("horizon closed form: a_{-1} = $(a_out[1]) is not exactly 1")
+        return a_terms, b_terms
+    end
+    A = Ax / x
+    B = Bx2 / x^2
     a_terms, b_terms = ab_term_counts(:O, order)
     for k in 1:a_terms
         a_out[k] = getcoeff(A, k - 1)
