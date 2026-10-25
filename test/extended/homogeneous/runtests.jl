@@ -504,6 +504,20 @@ end
     @test D.Matching._complex_path_reflection(route) === route
 end
 
+# R of a real-frequency IN solution at large r from the two Teukolsky series at infinity (B_inc R_in + B_ref R_out):
+# the conversion from (X, X') left R_in of (-2, 2, 2, 0, 15) wrong by 2e-7 at r = 6 and 3e-5 at r = 20. References:
+# the package's 256-bit arbitrary-precision route.
+@testset "IN solution at large r from the two infinity series" begin
+    R = Teukolsky_radial(-2, 2, 2, 0.0, 15.0, IN)
+    for (r, value, derivative) in (
+            (6.0, -1.7718229100260645 + 1.577881368372402im, 35.495195199330865 + 39.85766641226379im),
+            (20.0, 0.260896781609612 - 1.2703981211043136im, -21.183289547937942 - 4.298841125770251im),
+            (100.0, -0.08506339788486916 - 0.29554347010628756im, -4.52280833248401 + 1.3048255042723345im))
+        @test R.Teukolsky_solution(r)[1] ≈ value rtol=1e-10
+        @test R.Teukolsky_solution(r)[2] ≈ derivative rtol=1e-10
+    end
+end
+
 @testset "complex path: exact extremal against the a = 1 - 1e-10 limit" begin
     for ref in COMPLEX_PATH_EXTREMAL_LIMITS
         lam = real(Teukolsky_radial(ref.s, ref.l, ref.m, 1.0, ref.omega, IN).mode.lambda)

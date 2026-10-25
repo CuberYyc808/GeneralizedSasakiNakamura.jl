@@ -248,20 +248,77 @@ function (series::TeukolskyInfinityInSeries)(r, rstar)
         last / max(abs(h), floatmin(Float64))
 end
 
-struct TeukolskyPairEvaluator{R,C,T,E}
+struct TeukolskyPairEvaluator{R,C,T,E,W}
     route::R
     converter::C
     inv_scale::T
     infinity_series::E
     infinity_scale::ComplexF64
+    two_wave::W
 end
 
-# Use the infinity series where it applies (UP, real omega); otherwise convert
-# the GSN state at r to (R, R').
+TeukolskyPairEvaluator(route, converter, inv_scale, infinity_series, infinity_scale) =
+    TeukolskyPairEvaluator(route, converter, inv_scale, infinity_series, infinity_scale, nothing)
+
+# R of a real-frequency IN route at large r from the two Teukolsky series at infinity,
+# R = B_inc R_in + B_ref R_out (route normalization), where their truncation is below the
+# conversion's own error eps (2 omega r)^4: the conversion from (X, X') amplifies the rounding of X
+# by about that much (R_in of (s, l, m, a, omega) = (-2, 2, 2, 0, 15) was off by 2e-7 at r = 6 and
+# 3e-5 at r = 20), the series not at all, given an accurate B_ref (Matching._complex_path_reflection).
+struct TeukolskyTwoWave
+    a::Float64
+    omega::Float64
+    s::Int
+    incidence::ComplexF64
+    reflection::ComplexF64
+    cin::Vector{ComplexF64}
+    cout::Vector{ComplexF64}
+    r_two::Float64
+end
+
+function _teukolsky_two_wave(route::Route, factors)
+    p = route.params
+    (route.branch === :IN && isreal(p.omega) && real(p.omega) > 0 && 0 <= p.a < 1) || return nothing
+    return teukolsky_two_wave(p.s, p.m, p.a, real(p.omega), real(p.lambda),
+        route.incidence * factors.incidence, route.reflection * factors.reflection)
+end
+
+# The two-wave R of an IN solution with Teukolsky amplitudes (incidence, reflection) in its own normalization, or
+# nothing if the series reach their tolerance at none of TWO_WAVE_RADII.
+function teukolsky_two_wave(s, m, a, omega, lambda, incidence, reflection)
+    a, w, lambda = Float64(a), Float64(omega), Float64(lambda)
+    (w > 0 && 0 <= a < 1 && isfinite(incidence) && isfinite(reflection)) || return nothing
+    cin = _infinity_in_coefficients(s, m, a, w, lambda, TWO_WAVE_SERIES_ORDER)
+    cout = _infinity_out_coefficients(s, m, a, w, lambda, TWO_WAVE_SERIES_ORDER)
+    kappa = sqrt(1 - a^2)
+    for r in TWO_WAVE_RADII
+        r > 1 + kappa || continue
+        if _two_wave_series_ok(_infinity_solutions(s, a, w, ComplexF64(r), cin, cout)[5], w, r)
+            return TeukolskyTwoWave(a, w, s, ComplexF64(incidence), ComplexF64(reflection), cin, cout, r)
+        end
+    end
+    return nothing
+end
+
+two_wave_pair(t::TeukolskyTwoWave, r) = _two_wave_pair(t, r)
+
+function _two_wave_pair(t::TeukolskyTwoWave, r)
+    (r isa Real && r >= t.r_two) || return nothing
+    Rin, dRin, Rout, dRout, err = _infinity_solutions(t.s, t.a, t.omega, ComplexF64(r), t.cin, t.cout)
+    _two_wave_series_ok(err, t.omega, r) || return nothing
+    return t.incidence * Rin + t.reflection * Rout, t.incidence * dRin + t.reflection * dRout, err
+end
+
+# Use the infinity series where it applies (UP, real omega; IN at large r, real omega); otherwise
+# convert the GSN state at r to (R, R').
 function _teukolsky_pair_with_error(e::TeukolskyPairEvaluator,r)
     if e.infinity_series !== nothing
         endpoint = e.infinity_series(r)
         endpoint !== nothing && return e.infinity_scale*endpoint[1],e.infinity_scale*endpoint[2],endpoint[3]
+    end
+    if e.two_wave !== nothing
+        pair = _two_wave_pair(e.two_wave, r)
+        pair !== nothing && return e.inv_scale * pair[1], e.inv_scale * pair[2], pair[3]
     end
     x = x_from_r(e.route.params, r)
     state = route_state(e.route, x; radius=r)
@@ -697,7 +754,8 @@ function _teukolsky_solution(route::Route, scale_value, pair_converter)
         teukolsky_infinity_series(p,max(route.infinity_out_order,route.controls.ordinary_order),
             max(route.controls.tolerance,_ENDPOINT_SEED_TARGET)) : nothing
     endpoint_scale = ComplexF64(first(_normalization_scale(route,:teukolsky))/scale_value)
-    pair_value = TeukolskyPairEvaluator(route,pair_converter,inv_scale,endpoint,endpoint_scale)
+    two_wave = _teukolsky_two_wave(route, _teukolsky_amplitude_factors(route))
+    pair_value = TeukolskyPairEvaluator(route,pair_converter,inv_scale,endpoint,endpoint_scale,two_wave)
     tuple_value = TeukolskyTupleEvaluator(p, pair_value, getfield(tt, :d2R))
     radial_value = TeukolskyRadialEvaluator(pair_value)
     return TeukolskySolution(tuple_value, pair_value, radial_value)

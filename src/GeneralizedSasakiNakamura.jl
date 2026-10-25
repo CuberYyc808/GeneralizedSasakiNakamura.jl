@@ -1377,10 +1377,30 @@ function _teukolsky_from_gsn(gsn_func,s,m,a,omega,data_type,requested_tolerance)
         gsn_func.mode.omega,
         gsn_func.mode.lambda,
         gsn_func.GSN_solution)
+    # Real-frequency ISEM IN solutions take R(r) at large r from the two Teukolsky series at infinity,
+    # B_inc R_in + B_ref R_out, where they beat the conversion's eps (2 omega r)^4 (ISEM.RadialFunctions.TeukolskyTwoWave).
+    # The series are set up on the first evaluation at r >= 3 (under a lock: one function may be evaluated from
+    # several threads), so a solution only used near the horizon does not pay for them.
+    use_two_wave = gsn_func.boundary_condition == IN && isreal(omega) && gsn_func.method == "ISEM" &&
+        !ExtremalRadial.is_exact_extremal_spin(a) && data_type <: Complex{Float64}
+    two_wave = Ref{Any}(missing)
+    two_wave_lock = ReentrantLock()
+    lambda_value = gsn_func.mode.lambda
     teuk_func = r -> begin
         if infinity_series !== nothing
             endpoint = infinity_series(r)
             endpoint !== nothing && return Solutions.SA[endpoint[1],endpoint[2]]
+        end
+        if use_two_wave && r isa Real && r >= first(ISEM.RadialFunctions.TWO_WAVE_RADII)
+            tw = lock(two_wave_lock) do
+                two_wave[] === missing && (two_wave[] = ISEM.RadialFunctions.teukolsky_two_wave(s, m, a, real(omega),
+                    real(lambda_value), incidence_amplitude, reflection_amplitude))
+                two_wave[]
+            end
+            if tw !== nothing
+                pair = ISEM.RadialFunctions.two_wave_pair(tw, r)
+                pair !== nothing && return Solutions.SA[pair[1],pair[2]]
+            end
         end
         return converted_solution(r)/transmission_amplitude_conv_factor
     end
