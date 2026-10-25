@@ -16,6 +16,7 @@ export extremal_teukolsky_horizon_coefficients
 export extremal_teukolsky_horizon_state
 export extremal_gsn_horizon_state, extremal_horizon_normalization
 export extremal_horizon_closed_normalization, extremal_gsn_horizon_coefficients
+export extremal_horizon_start
 export solve_extremal_gsn, extremal_complex_path_amplitudes
 
 const _NORMALIZATION_PRECISION_BITS = 384
@@ -280,7 +281,19 @@ function extremal_gsn_horizon_coefficients(
         end
         coefficients[n + 2] = acc / (2alpha * (n + 1))
     end
-    return (alpha=alpha, gamma=gamma, coefficients=coefficients)
+    return (alpha=alpha, gamma=gamma, coefficients=coefficients, p0=P(0))
+end
+
+"""
+    extremal_horizon_start(s, m, a, omega, lambda; cap=0.15)
+
+Start `h = r - 1` of the asymptotic horizon expansion: `min(cap, |alpha| / max(32, |P_0|))`, `alpha = i delta` and
+`P_0` the constant term of the recurrence (`extremal_gsn_horizon_coefficients`), where its terms
+`x_n h^n ~ n! (h / 2|alpha|)^n` stay far below eps before they grow.
+"""
+function extremal_horizon_start(s::Int, m::Int, a, omega, lambda; cap=0.15)
+    series = extremal_gsn_horizon_coefficients(s, m, a, omega, lambda, :ingoing; order=0)
+    return min(cap, abs(series.alpha) / max(32, abs(series.p0)))
 end
 
 """
@@ -297,7 +310,11 @@ function extremal_gsn_horizon_state(
     h = r - one(r)
     iszero(h) && throw(DomainError(r, "the radial state is singular at r = r_+"))
     series = extremal_gsn_horizon_coefficients(s, m, a, omega, lambda, branch; order)
-    value, derivative = _poly_pair(series.coefficients, h)
+    # The expansion is asymptotic (x_n ~ n!/(2 alpha)^n): summed up to its smallest term, whose size is the
+    # truncation error.
+    terms = abs.(series.coefficients) .* abs(h) .^ (0:order)
+    last_term = argmin(terms)
+    value, derivative = _poly_pair(view(series.coefficients, 1:last_term), h)
     prefactor = exp(series.alpha / h) * h^series.gamma
     rho = r^2 + a * a
     X = prefactor * value
@@ -772,7 +789,7 @@ where the two infinity branches have equal size. Returns `(incidence, reflection
 endpoint)`, with `tail` the largest relative truncation estimate of the Taylor patches.
 """
 function extremal_complex_path_amplitudes(s::Int, m::Int, a, omega, lambda;
-        h0=0.02, rmid=2.0, rout=60.0, frac=0.1, zmax=1.5,
+        h0=nothing, rmid=2.0, rout=60.0, frac=0.1, zmax=1.5,
         horizon_order::Int=_NORMALIZATION_SERIES_ORDER, infinity_order::Int=12,
         series_order::Int=_SERIES_ORDER, dlambda=nothing, path_omega=omega)
     _checked_extremal_sign(a) > 0 || throw(ArgumentError(
@@ -783,6 +800,8 @@ function extremal_complex_path_amplitudes(s::Int, m::Int, a, omega, lambda;
     path_alpha = im * (2path_omega - m)
     theta = angle(path_alpha) - oftype(real(alpha), pi)
     theta <= -oftype(theta, pi) && (theta += 2 * oftype(theta, pi))
+    # Start of the asymptotic horizon state: |alpha| / max(32, |P_0|) (extremal_horizon_start), at most 0.02.
+    h0 === nothing && (h0 = extremal_horizon_start(s, m, a, omega, lambda; cap=oftype(real(alpha), 0.02)))
     rin = 1 + h0 * cis(theta)
     rturn = 1 + oftype(real(alpha), 0.3) * cis(theta / 2)
     rmidc = complex(oftype(real(alpha), rmid))

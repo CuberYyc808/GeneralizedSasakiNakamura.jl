@@ -193,8 +193,10 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
     rp=1+sqrt(1-a*a)
     rh=if abs(a)==1
         alpha=im*(2w0-m*a)
+        # |alpha| / max(extremal_scale, |P_0|): the asymptotic horizon state inside its region of use.
+        p0=ExtremalRadial.extremal_gsn_horizon_coefficients(s,m,a,w0,lambda0,:ingoing;order=0).p0
         distance=extremal_scale === nothing ? extremal_radius :
-            min(extremal_radius,abs(alpha)/extremal_scale)
+            min(extremal_radius,abs(alpha)/max(extremal_scale,abs(p0)))
         1+distance*cis(angle(alpha)-copysign(pi/2,imag(alpha)))
     else
         complex(rp+horizon_scale*sqrt(1-a*a))

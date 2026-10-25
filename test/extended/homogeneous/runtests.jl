@@ -496,6 +496,22 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# 10c. Exact-extremal real-frequency solves start inside the region of use of the asymptotic horizon expansion,
+#      h = min(0.15, |delta| / max(32, |P_0|)), summed to its smallest term: q = B_ref/B_inc against the
+#      a = 1 - 1e-10 ISEM solution (an O(kappa) = 1.4e-5 limit). Before, the start 0.05 |delta|^0.7 with 49 terms
+#      was off by 1e-4 at |delta| = 0.1 and by O(1) at 0.01.
+# ---------------------------------------------------------------------------------------------------
+@testset "exact extremal start against the a = 1 - 1e-10 limit" begin
+    for (omega, tolerance) in ((0.7, 1e-8), (0.85, 1e-7), (0.95, 1e-6), (0.995, 5e-5))
+        X = GSN_radial(-2, 2, 2, 1.0, omega, IN)
+        L = GSN_radial(-2, 2, 2, 1 - 1e-10, omega, IN)
+        q = X.reflection_amplitude / X.incidence_amplitude
+        qlimit = L.reflection_amplitude / L.incidence_amplitude
+        @test abs(q / qlimit - 1) <= tolerance
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # 11. Coordinates: r_from_rstar inverts rstar_from_r; r* is increasing in r.
 # ---------------------------------------------------------------------------------------------------
 @testset "tortoise coordinate" begin

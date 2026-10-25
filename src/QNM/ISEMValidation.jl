@@ -129,15 +129,19 @@ end
 # Re(alpha) > 0 the outgoing solution still grows against the ingoing one by
 # e^{2 Re(alpha)/h}; in Float64 this can limit the incidence closure for damped
 # modes of either sense of rotation, which the incidence gate reports.
-function _extremal_qnm_horizon_start(m, a, omega; series_terms=40,
+function _extremal_qnm_horizon_start(m, a, omega; series_terms=32, p0=0,
         minimum_h=1.0e-6, maximum_h=0.05)
     detuning = abs(2omega - m * sign(a))
-    h = clamp(2detuning / series_terms, minimum_h, maximum_h)
+    # |alpha| / max(32, |P_0|) as ExtremalRadial.extremal_horizon_start.
+    h = clamp(detuning / max(series_terms, abs(p0)), minimum_h, maximum_h)
     return rstar_from_r(a, one(h) + h)
 end
 
 function _extremal_qnm_radial_solver(s, l, m, a, omega, boundary)
-    rsin = _extremal_qnm_horizon_start(m, a, ComplexF64(omega))
+    lambda = spin_weighted_spheroidal_eigenvalue(s, l, m, a * ComplexF64(omega))
+    rsin = _extremal_qnm_horizon_start(m, a, ComplexF64(omega);
+        p0=ExtremalRadial.extremal_gsn_horizon_coefficients(s, m, a, ComplexF64(omega), lambda, :ingoing;
+            order=0).p0)
     return GSN_radial(
         s, l, m, a, omega, boundary, rsin, 60.0;
         method="ISEM",

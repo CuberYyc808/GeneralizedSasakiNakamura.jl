@@ -191,14 +191,16 @@ _is_static_frequency(omega) = iszero(omega)
 _is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) &&
     !iszero(omega) && omega == m * Kerr.omega_horizon(a)
 
-# Numerical boundaries for the exact-extremal solver. For real omega the inner start
-# follows the scale of the irregular horizon expansion, h = r - 1 = 0.05 |2 omega - m a|^0.7
-# (at most 0.25, at r* >= -400): starting deeper amplifies the error of the asymptotic
-# horizon state for s > 0, starting shallower leaves its region of use.
-function _extremal_default_bounds(m, a, omega)
+# Numerical boundaries for the exact-extremal solver. For real omega the inner start is where the
+# asymptotic horizon expansion is used inside its region of use, h = r - 1 =
+# min(0.15, |2 omega - m a| / max(32, |P_0|)) (ExtremalRadial.extremal_horizon_start); the former
+# 0.05 |2 omega - m a|^0.7 with a fixed 49 terms left the state off by 1e-8 at |2 omega - m a| = 0.6 and by
+# O(1) below 0.2. Small detuning starts at a very negative r*.
+function _extremal_default_bounds(s, l, m, a, omega)
     if isreal(omega)
-        h = min(0.05 * abs(2 * real(omega) - m * a)^0.7, 0.25)
-        rsin = h > 0 ? max(Coordinates.rstar_from_r(a, 1 + h), -400.0) : -400.0
+        lambda = _swsh_eigenvalue(s, l, m, a * omega)
+        h = ExtremalRadial.extremal_horizon_start(s, m, a, omega, lambda)
+        rsin = h > 0 ? Coordinates.rstar_from_r(a, 1 + h) : -400.0
         return (rsin, 160.0)
     end
     damping = abs(imag(omega))
@@ -544,7 +546,7 @@ function _gsn_from_extremal(s, l, m, a, omega, boundary_condition,
     solved = ExtremalRadial.solve_extremal_gsn(
         s, m, a, omega, lambda_value, branch, rsin, rsout;
         method=method_symbol,
-        horizon_order=max(horizon_expansion_order, 48),
+        horizon_order=max(horizon_expansion_order, 64),
         infinity_order=max(infinity_expansion_order,
             isreal(omega) ? 12 : 18),
         series_order=36,
@@ -552,7 +554,7 @@ function _gsn_from_extremal(s, l, m, a, omega, boundary_condition,
     mode = Mode(s, l, m, a, omega, lambda_value)
     return GSNRadialFunction(
         mode, boundary_condition, rsin, rsout, missing,
-        max(horizon_expansion_order, 48),
+        max(horizon_expansion_order, 64),
         max(infinity_expansion_order, isreal(omega) ? 12 : 18),
         solved.transmission, solved.incidence, solved.reflection,
         solved.numerical, solved.riccati, solved.solution,
@@ -1092,7 +1094,7 @@ function GSN_radial(
     requested_tolerance = tol === nothing ? tolerance : tol
     if !_is_static_frequency(omega)
         rsin, rsout = ExtremalRadial.is_exact_extremal_spin(a) ?
-            _extremal_default_bounds(m, a, omega) : (_DEFAULT_rsin, _DEFAULT_rsout)
+            _extremal_default_bounds(s, l, m, a, omega) : (_DEFAULT_rsin, _DEFAULT_rsout)
         return GSN_radial(s, l, m, a, omega, boundary_condition, rsin, rsout;
             method=method, tolerance=requested_tolerance, xm=xm, sfe=sfe, lfe=lfe, N=N)
     else
@@ -1161,7 +1163,7 @@ function GSN_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAU
         Xin = GSN_radial(s, l, m, a, omega0, IN)
         Xup = GSN_radial(s, l, m, a, omega0, UP)
     elseif ExtremalRadial.is_exact_extremal_spin(a)
-        rsin, rsout = _extremal_default_bounds(m, a, omega)
+        rsin, rsout = _extremal_default_bounds(s, l, m, a, omega)
         Xin = GSN_radial(s, l, m, a, omega, IN, rsin, rsout;
             method, data_type, ODE_algorithm, tolerance)
         Xup = GSN_radial(s, l, m, a, omega, UP, rsin, rsout;
@@ -1440,7 +1442,7 @@ function Teukolsky_radial(
         return ISEM._spin_reflect_teukolsky_radial_function(positive, m, a)
     end
     if ExtremalRadial.is_exact_extremal_spin(a) && !_is_static_frequency(omega)
-        rsin, rsout = _extremal_default_bounds(m, a, omega)
+        rsin, rsout = _extremal_default_bounds(s, l, m, a, omega)
         return Teukolsky_radial(
             s, l, m, a, omega, boundary_condition, rsin, rsout;
             method, tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol)
