@@ -20,6 +20,7 @@ using OrdinaryDiffEq
 import SciMLBase
 using Logging, LoggingExtras
 using KerrGeodesics
+using PrecompileTools: @setup_workload, @compile_workload
 
 export GSN_radial, Teukolsky_radial # Homogeneous solutions
 export GSN_pointparticle_mode, Teukolsky_pointparticle_mode, Teukolsky_pointparticle_flux # Inhomogeneous solutions
@@ -2332,5 +2333,17 @@ export LeaverResult, ISEMValidationResult, ExcitationFactorResult
 export qnm_frequency, qnm_sequence, validate_qnm_with_isem
 export qnm_excitation_factor, qnm, qnm_pair
 export angular_A_to_lambda, lambda_to_angular_A
+
+# Precompile the common calls: Y_radial IN and UP at an ordinary point, at a low (MST) frequency and at a negative
+# frequency, Y_solution, Teukolsky_radial and GSN_radial.
+@setup_workload begin
+    @compile_workload begin
+        for (s, bc) in ((-2, IN), (2, UP)), omega in (0.5, 0.01, -0.5)
+            Y_radial(s, 2, 2, 0.7, omega, bc).Y_solution(6.0)
+        end
+        Teukolsky_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
+        GSN_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
+    end
+end
 
 end
