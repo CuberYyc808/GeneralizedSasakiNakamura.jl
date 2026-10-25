@@ -1118,16 +1118,8 @@ function _fast_route(
     end
     result = try
         ManoSuzukiTakasugiInfinity._principal_amplitudes(data, branch_symbol)
-    catch error
-        error isa ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError &&
-            error.kind == :nia_amplitude_certificate ||
-            return nothing
-        try
-            ManoSuzukiTakasugiInfinity._refined_amplitudes(
-                data, branch_symbol)
-        catch
-            return nothing
-        end
+    catch
+        return nothing
     end
     result.certificate_accepted || return nothing
     # The analytic amplitudes stand alone here, with nothing to compare them
@@ -1135,23 +1127,7 @@ function _fast_route(
     # otherwise the two-ray route is built and the overlay adjudicates.
     maximum(result.gsn_error) <=
         (tol === nothing ? _FAST_ANCHOR_TOLERANCE : tol) || return nothing
-    state_data = if hasproperty(result, :nu)
-        refined_nu = ComplexF64(result.nu)
-        ManoSuzukiTakasugiInfinity._negative_imaginary_axis_series_data(
-            ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiParams(
-                data.params.s,
-                data.params.l,
-                data.params.m,
-                data.params.a,
-                data.params.omega,
-                data.params.lambda,
-                refined_nu,
-            ),
-            ManoSuzukiTakasugiInfinity.MANO_SUZUKI_TAKASUGI_NEGATIVE_IMAGINARY_AXIS_TAIL,
-        )
-    else
-        data
-    end
+    state_data = data
     direct_controls = gsn_controls(
         params;
         N=_FAST_ANCHOR_ORDER,
@@ -1169,7 +1145,7 @@ function _fast_route(
         if branch_symbol == :UP
             anchor = _mano_suzuki_takasugi_out_anchor(
                 coefficients;
-                nu=hasproperty(result, :nu) ? result.nu : nothing,
+                nu=nothing,
                 allow_relaxed=true,
             )
             (
@@ -1182,29 +1158,19 @@ function _fast_route(
                 certified=Bool(anchor.certified),
             )
         else
-            pin = if hasproperty(result, :nu_offset_dd)
-                ManoSuzukiTakasugiInfinity._dd_pin_state(
-                    coefficients,
-                    state_data,
-                    result.nu_offset_dd,
-                    _STATE_ANCHOR_X;
-                    scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
-                )
-            else
-                plan = (
-                    data=state_data,
-                    converter=ManoSuzukiTakasugiInfinity._p_converter(params),
-                    pin_norm=ManoSuzukiTakasugiInfinity._incoming_raw_factor(
-                        state_data),
-                    pin_scale=nothing,
-                )
-                ManoSuzukiTakasugiInfinity.mano_suzuki_takasugi_pin_state(
-                    coefficients,
-                    plan,
-                    _STATE_ANCHOR_X;
-                    scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
-                )
-            end
+            plan = (
+                data=state_data,
+                converter=ManoSuzukiTakasugiInfinity._p_converter(params),
+                pin_norm=ManoSuzukiTakasugiInfinity._incoming_raw_factor(
+                    state_data),
+                pin_scale=nothing,
+            )
+            pin = ManoSuzukiTakasugiInfinity.mano_suzuki_takasugi_pin_state(
+                coefficients,
+                plan,
+                _STATE_ANCHOR_X;
+                scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
+            )
             (
                 X=ComplexF64(pin.X),
                 dXdx=ComplexF64(pin.dXdx),

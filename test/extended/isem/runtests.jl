@@ -518,6 +518,41 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Complex-frequency MST nu without false roots: low-frequency Newton near delta_LF (certified by
+# proximity), otherwise the monodromy seed refined with a capped step and accepted on the branch ratio
+# |cos(2 pi nu) - T| <= 1e-3 min(|T - 1|, |T + 1|); reported nearest l; the fast NIA route is principal-only. The
+# real-frequency complex-nu functions (_monodromy_trace_data, mano_suzuki_takasugi_nu_complex) are unchanged.
+# ---------------------------------------------------------------------------------------------------
+@testset "complex-frequency MST nu" begin
+    MST = ManoSuzukiTakasugi
+    lambda(s, l, m, a, omega) = D.gsn_parameters(s, l, m, a, omega).lambda
+    # (-2,2,2,0.99) omega = 0.9 - 0.1i: the former solve accepted the false root nu = 0.5.
+    nu = MST.mano_suzuki_takasugi_nu(-2, 2, 2, 0.99, 0.9 - 0.1im, lambda(-2, 2, 2, 0.99, 0.9 - 0.1im))
+    T = MST._monodromy_trace(-2, 2, 0.99, 0.9 - 0.1im, lambda(-2, 2, 2, 0.99, 0.9 - 0.1im))
+    @test abs(cos(2pi * nu) - T) <= 1e-3 * min(abs(T - 1), abs(T + 1))
+    @test abs(nu - 0.5) > 0.1
+    @test MST.mano_suzuki_takasugi_nu(0, 1, 0, 0.3, 0.4 - 0.2im, lambda(0, 1, 0, 0.3, 0.4 - 0.2im)) ≈
+        0.902057023056281 + 0.475914584918468im rtol=1e-13
+    # A former root on the branch keeps its representation (here 6.904..., = the nearest-l 1.904... + 5).
+    strong = MST.mano_suzuki_takasugi_nu(-2, 2, 2, 0.0, 0.3 - 3im, lambda(-2, 2, 2, 0.0, 0.3 - 3im))
+    @test abs((strong - round(real(strong) - 1.9043019195709)) - (1.9043019195709 + 0.5799795646989im)) <= 1e-12
+    for (r, offset) in ((3e-3, -1.7587165e-5 + 7.3224239e-6im), (3e-4, -1.760692724e-7 + 7.335653e-8im),
+            (1e-4, -1.95648932e-8 + 8.151829e-9im))
+        omega = r * (1 - 0.2im)
+        @test MST.mano_suzuki_takasugi_nu(-2, 2, 2, 0.7, omega, lambda(-2, 2, 2, 0.7, omega)) - 2 ≈ offset rtol=1e-7
+    end
+    @test MST.mano_suzuki_takasugi_nu(-2, 2, 2, 0.7, 0.05 - 0.01im, lambda(-2, 2, 2, 0.7, 0.05 - 0.01im)) ≈
+        1.99519665943676158 + 0.00198342406033778im rtol=1e-13
+    # Real frequency, complex nu: unchanged.
+    real_lambda = lambda(-2, 3, 3, 0.9, 1.0)
+    @test MST.mano_suzuki_takasugi_nu_complex(-2, 3, 3, 0.9, 1.0, real_lambda) === -0.499999999999985 - 1.2619741165115073im
+    @test MST._monodromy_trace_data(-2, 3, 0.9, 1.0 + 0.0im, real_lambda).value === -1388.6261776840256 - 1.3120419640876786e-10im
+    # The fast NIA route takes the principal amplitudes only (no double-double refinement).
+    fast_route_code = join(string.(Base.uncompressed_ast.(methods(D.NegativeImaginaryAxisAmplitudes._fast_route))))
+    @test !occursin("_refined_amplitudes", fast_route_code) && !occursin("_dd_pin_state", fast_route_code)
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------
@@ -578,12 +613,15 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
-# The full-state MST backend on the qnm(.68) stencil is rejected, i.e. it fails closed.
+# The full-state MST backend on the qnm(.68) stencil: the former nu solve took the false root nu = 3/2 there and
+# the backend failed closed; on the true root (1.71297 + 0.40470i) it agrees with the default (analytic MST) route.
 # complex_negative_imaginary_axis_jump is not verified (no independent reference).
 # ---------------------------------------------------------------------------------------------------
 @testset "fail-closed and unverified paths" begin
     w = 0.5239751042900836 - 0.08151262363120163im
-    @test_throws Exception D.radial_route(-2, 2, 2, 0.68, w, :IN; backend=:mst)
+    mst = D.radial_route(-2, 2, 2, 0.68, w, :IN; backend=:mst)
+    default = D.radial_route(-2, 2, 2, 0.68, w, :IN)
+    @test mst.reflection / mst.transmission ≈ default.reflection / default.transmission rtol=1e-12
     @test_skip false   # needs independent a = 0 and a = 0.7 references at -0.3i for the NIA jump
     for w in (1e-6, 1e-5), bc in (IN, UP)
         P = Teukolsky_radial(-2, 2, 2, 0.7, w, bc)

@@ -4798,7 +4798,8 @@ end
 end
 
 # Amplitudes as in _principal_amplitudes, with nu refined and the sums evaluated in
-# double-double.
+# double-double. Reached only from _physical_amplitude_plan (explicit backend = :mst); binary64 replacement
+# pending: QNM near-AS n = 8, |a| < 0.015, where the principal sums cancel by ~1e7.
 @noinline function _refined_amplitudes(
     data::ManoSuzukiTakasugiSeriesData,
     branch::Symbol,
@@ -6915,6 +6916,7 @@ function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Sy
         push!(errors, "principal=$(sprint(showerror, error))")
     end
 
+    # binary64 replacement pending: QNM near-AS n = 8, |a| < 0.015 (see _refined_amplitudes)
     try
         result = _refined_amplitudes(data, branch)
         base = data.params
@@ -7792,45 +7794,27 @@ function _mano_suzuki_takasugi_nu_offset(
     return ComplexF64(x1)
 end
 
-# nu - l for complex omega by damped Newton iteration from the low-frequency guess.
-function _mano_suzuki_takasugi_nu_offset(
-    s,
-    l,
-    m,
-    a,
-    omega::Complex,
-    lambda;
-    maxiter::Int=60,
-    tol::Float64=1.0e-13,
-)
-    epsilon = 2.0 * ComplexF64(omega)
-    iszero(epsilon) && return ComplexF64(0)
-    iszero(imag(epsilon)) && return _mano_suzuki_takasugi_nu_offset(
-        s, l, m, a, real(omega), lambda; maxiter, tol)
-
-    current = ComplexF64(_mano_suzuki_takasugi_guess_offset(s, l, epsilon))
+# Damped Newton iteration for nu - l from `start` on the MST equation (finite-difference derivative); returns
+# the best offset and its residual scaled by `scale`.
+function _mano_suzuki_takasugi_nu_newton(start, s, l, m, a, omega, lambda, scale; maxiter, tol)
+    current = ComplexF64(start)
     value = _mano_suzuki_takasugi_eq_value(current, s, l, m, a, omega, lambda)
-    scale = max(abs(ComplexF64(lambda)), abs(l * (l + 1)), 1.0)
     best = current
     best_residual = abs(value) / scale
-    best_residual <= tol && return best
-
+    best_residual <= tol && return (offset=best, residual=best_residual)
     for _ in 1:maxiter
         h = max(1.0e-7, sqrt(eps(Float64)) * max(1.0, abs(current)))
         plus = _mano_suzuki_takasugi_eq_value(current + h, s, l, m, a, omega, lambda)
         minus = _mano_suzuki_takasugi_eq_value(current - h, s, l, m, a, omega, lambda)
         derivative = (plus - minus) / (2h)
         _finite_complex(derivative) && !iszero(derivative) || break
-
         step = value / derivative
         accepted = false
         trial = current
         trial_value = value
         for damping in 0:10
-            factor = exp2(-damping)
-            candidate = current - factor * step
-            candidate_value = _mano_suzuki_takasugi_eq_value(
-                candidate, s, l, m, a, omega, lambda)
+            candidate = current - exp2(-damping) * step
+            candidate_value = _mano_suzuki_takasugi_eq_value(candidate, s, l, m, a, omega, lambda)
             if abs(candidate_value) < abs(value)
                 trial = candidate
                 trial_value = candidate_value
@@ -7846,16 +7830,100 @@ function _mano_suzuki_takasugi_nu_offset(
             best = current
             best_residual = residual
         end
-        residual <= tol && return current
+        residual <= tol && break
         abs(step) <= tol * max(1.0, abs(current)) && break
     end
+    return (offset=best, residual=best_residual)
+end
 
-    best_residual <= 32tol || throw(ManoSuzukiTakasugiCertificateError(
+# nu - l for complex omega. With delta_LF = the low-frequency offset:
+#   |delta_LF| <= 0.05: damped Newton from delta_LF (accurate to O(eps^4) there, where the monodromy seed is
+#     not), accepted when the residual is <= 32 tol and the root is near delta_LF but not at nu = l
+#     (|nu - l - delta_LF| <= |delta_LF| / 2, |nu - l| >= |delta_LF| / 2): for |omega| <~ 3e-3 the false root
+#     nu = l has |cos(2 pi nu) - T| below 1e-8;
+#   otherwise (or if that is not accepted): the root of that Newton iteration when it is on the branch (below),
+#     which keeps the representation of every former true root; else the seed from the monodromy trace T (acos(T)/(2 pi) mod 1 with the
+#     sign and shift rules of _monodromy_seed) refined by _refine_nu, whose step is capped at 1e-4 max(1, |nu|)
+#     (an uncapped Newton walked to false zeros), accepted on the residual (<= 32 tol) and on the branch,
+#     |cos(2 pi nu) - T| <= 1e-3 min(|T - 1|, |T + 1|) (a fixed 1e-8 (1 + |T|) rejected strongly damped true
+#     roots: the binary64 trace at (-2,2,2,0) omega = 0.3 - 3i is off by 5e-6);
+#   if the trace is not available, Newton from delta_LF, rejecting a root at an integer or half-integer
+#     nu, |2 nu - round(2 Re nu)| <= 0.1 |delta_LF| (relative: an absolute 1e-8 rejected true roots for
+#     |omega| in (3.7e-7, 7e-5)).
+function _mano_suzuki_takasugi_nu_offset(
+    s,
+    l,
+    m,
+    a,
+    omega::Complex,
+    lambda;
+    maxiter::Int=60,
+    tol::Float64=1.0e-13,
+)
+    epsilon = 2.0 * ComplexF64(omega)
+    iszero(epsilon) && return ComplexF64(0)
+    iszero(imag(epsilon)) && return _mano_suzuki_takasugi_nu_offset(
+        s, l, m, a, real(omega), lambda; maxiter, tol)
+    omegac = ComplexF64(omega)
+    delta = ComplexF64(_mano_suzuki_takasugi_guess_offset(s, l, epsilon))
+    scale = max(abs(ComplexF64(lambda)), abs(l * (l + 1)), 1.0)
+    if abs(delta) <= 0.05
+        low = _mano_suzuki_takasugi_nu_newton(delta, s, l, m, a, omegac, lambda, scale; maxiter, tol)
+        low.residual <= 32tol && abs(low.offset - delta) <= abs(delta) / 2 &&
+            abs(low.offset) >= abs(delta) / 2 && return low.offset
+    end
+    trace = try
+        _monodromy_trace_data(s, m, a, omegac, lambda)
+    catch err
+        err isa ManoSuzukiTakasugiCertificateError || rethrow()
+        nothing
+    end
+    best_residual = Inf
+    if trace !== nothing
+        T = trace.value
+        branch_tolerance = 1.0e-3 * min(abs(T - 1), abs(T + 1))
+        # The former solve (Newton from delta_LF) where its root is on the branch: its representation of nu
+        # (an integer shift) is the one the amplitude representations were tuned on.
+        if abs(delta) > 0.05
+            former = _mano_suzuki_takasugi_nu_newton(delta, s, l, m, a, omegac, lambda, scale; maxiter, tol)
+            former.residual <= 32tol && abs(cos(2pi * (l + former.offset)) - T) <= branch_tolerance &&
+                return former.offset
+        end
+        base = acos(T) / (2pi)
+        candidates = ComplexF64[]
+        for sign in (-1, 1)
+            candidate = sign * base
+            candidate -= round(real(candidate))
+            push!(candidates, candidate)
+        end
+        opposite_half_plane(candidate) = abs(imag(omegac)) <= 1.0e-14 || imag(candidate) * imag(omegac) <= 0
+        sort!(candidates; by=candidate -> (opposite_half_plane(candidate) ? 0 : 1,
+            abs(real(candidate)), -abs(imag(candidate))))
+        seed = first(candidates)
+        equation = nu -> _mano_suzuki_takasugi_eq_value(ComplexF64(nu) - ComplexF64(l), s, l, m, a, omegac, lambda)
+        shifts = unique!(Int[-(l + 1), -l, -(l + 2), 0, -4, -3, -2, -1, 1, 2, 3, 4])
+        for shift in shifts
+            candidate = _refine_nu(equation, seed + shift, scale; tol)
+            best_residual = min(best_residual, candidate.residual)
+            if candidate.residual <= 32tol && abs(cos(2pi * candidate.nu) - T) <= branch_tolerance
+                # The representation nearest l (nu + integer), when it is a root as well.
+                nearest = candidate.nu + round(l - real(candidate.nu))
+                nearest == candidate.nu && return candidate.nu - l
+                abs(equation(nearest)) / scale <= 32tol && return nearest - l
+                return candidate.nu - l
+            end
+        end
+    else
+        low = _mano_suzuki_takasugi_nu_newton(delta, s, l, m, a, omegac, lambda, scale; maxiter, tol)
+        nu = l + low.offset
+        integer_or_half = abs(2nu - round(2real(nu))) <= 0.1abs(delta)
+        low.residual <= 32tol && !integer_or_half && return low.offset
+        best_residual = low.residual
+    end
+    throw(ManoSuzukiTakasugiCertificateError(
         :complex_nu,
-        "complex MST nu solve rejected: residual=$(best_residual), " *
-        "nu_offset=$(best), omega=$(omega)",
+        "complex MST nu solve rejected: residual=$(best_residual), omega=$(omega)",
     ))
-    return best
 end
 
 struct ManoSuzukiTakasugiMonodromyParams
