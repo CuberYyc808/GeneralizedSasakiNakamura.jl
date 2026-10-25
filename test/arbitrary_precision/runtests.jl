@@ -216,3 +216,19 @@ end
         end
     end
 end
+
+# Arbitrary-precision point-particle modes (ArbitraryPrecisionModes): a BigFloat orbit takes orbit, harmonic, Y and
+# source integral in BigFloat. The Schwarzschild circular (2, 2) mode at p = 10 against the 40-digit references of
+# test/extended/pointparticle_mode (Zerilli-Moncrief, MST and direct Teukolsky integration agree to 40-50 digits);
+# 128 bits reproduce 36 digits. A submission (binary64 geometry) is refused.
+@testset "arbitrary-precision point-particle mode" begin
+    setprecision(BigFloat, 128) do
+        Einf = GSN.Teukolsky_pointparticle_mode(-2, 2, 2, 0, 0, big"0.0", big"10.0", big"0.0", big"1.0").energy_flux
+        Ehor = GSN.Teukolsky_pointparticle_mode(2, 2, 2, 0, 0, big"0.0", big"10.0", big"0.0", big"1.0").energy_flux
+        @test Einf isa BigFloat
+        @test abs(Einf / big"2.684397739551056800957597197786816721611e-5" - 1) < big"1e-34"
+        @test abs(Ehor / big"5.654138734536942973248997741647276606086e-9" - 1) < big"1e-34"
+    end
+    @test_throws ArgumentError GSN.Teukolsky_pointparticle_mode(-2, 2, 2, 0, 0, big"0.0", big"10.0", big"0.0", big"1.0";
+        submission = :anything)
+end

@@ -1527,6 +1527,7 @@ include("Inhomogeneous/SolutionsY.jl")
 include("Inhomogeneous/GridSampling.jl")
 include("Inhomogeneous/ConvolutionIntegrals.jl")
 include("Inhomogeneous/ModeSummation.jl")
+include("Inhomogeneous/ArbitraryPrecisionModes.jl")
 
 
 function Base.show(io::IO, ::MIME"text/plain", ysol::SolutionsY.YSolutionResult)
@@ -1958,6 +1959,12 @@ end
 # x = -0.0 is the same polar orbit as x = +0.0; normalize it so that the retrograde branches are not taken.
 _pointparticle_float(a, p, e, x) = (Float64(a), Float64(p), Float64(e), iszero(x) ? 0.0 : Float64(x))
 
+# Whether an orbit is given in a floating-point type wider than binary64 (BigFloat, Double64, ...).
+function _arbitrary_precision_orbit(a, p, e, x)
+    T = promote_type(typeof.((a, p, e, x))...)
+    return T <: AbstractFloat && T !== Float64 && T !== Float32 && T !== Float16 && precision(T) > 53
+end
+
 """
     with_pointparticle_submission(f, a, p, e, x; Nmax=2^14, Kmax=2^12, stop_requested=nothing, lifecycle_observer=nothing)
 
@@ -2146,7 +2153,20 @@ Return a `TeukolskyPointParticleMode` holding the mode information, the Teukolsk
 the trajectory, the Y solution, the spin-weighted spheroidal harmonic and the method settings used.
 """
 function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8, levin_adaptive::Bool = true, stop_requested=nothing, lifecycle_observer=nothing)
-    # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
+    # A non-binary64 floating-point orbit (BigFloat, Double64) takes the arbitrary-precision route
+    # (ArbitraryPrecisionModes); the binary64 routes take any other real input converted to Float64.
+    if _arbitrary_precision_orbit(a, p, e, x)
+        # A submission holds binary64 geometry and caches; an equal BigFloat orbit would match it.
+        submission === nothing || throw(ArgumentError("Teukolsky_pointparticle_mode: an arbitrary-precision orbit " *
+            "cannot use a submission (its geometry and caches are binary64)."))
+        T = promote_type(typeof.((a, p, e, x))...)
+        r = ArbitraryPrecisionModes.arbitrary_precision_pointparticle_mode(s, l, m, n, k, T(a), T(p), T(e), T(x);
+            tol = tol == 1e-8 ? nothing : tol)
+        return TeukolskyPointParticleMode(PointParticleMode(s, l, m, n, k, T(a), r.omega, r.lambda), r.amplitude,
+            r.energy_flux, r.angular_momentum_flux, r.carter_constant_flux, r.orbit, r.Y_solution, r.SWSH,
+            (method = "arbitrary_precision_trapezoidal", radial_method = "ISEM arbitrary precision", N = r.N, K = r.K,
+                change = r.change, roundoff = r.roundoff))
+    end
     a, p, e, x = _pointparticle_float(a, p, e, x)
     method = lowercase(String(method))
     if method == "auto"
