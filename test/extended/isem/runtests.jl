@@ -449,6 +449,8 @@ end
             @test A[1] === 1.0 + 0.0im
             @test weighted(A, RA, length(A)) <= 1e-14
             @test weighted(B, RB, length(B)) <= 1e-13
+            # b_{-2}, b_{-1} on their own (the weighted sum is dominated by b_{-2}; measured <= 2.4e-16)
+            @test all(abs(B[k] - OPE.getcoeff(RB, k - 1)) <= 4e-15 * abs(OPE.getcoeff(RB, k - 1)) for k in 1:2)
             # a longer request is computed again, not padded
             A2, _ = OPE.endpoint_ab_series(route.coefficients, :H, 100)
             @test A2[1:length(A)] == A && !iszero(A2[end])
@@ -464,8 +466,10 @@ end
 
 # ---------------------------------------------------------------------------------------------------
 # Large-frequency route in binary64 (LargeFrequencyExpansionRouting, no double-double table): the routed A, B
-# against the same series from the original sF, sU in 256-bit arithmetic (b0 and the step-weighted B,
-# h = 0.3 min(x0, 1 - x0)), and the incidence against the former double-double route (agreement 2e-14 - 5e-11).
+# against the same series from the original sF, sU in 256-bit arithmetic (a0, b0 and the step-weighted A, B,
+# h = 0.3 min(x0, 1 - x0)) on 7 parameter sets x 10 points, the shift and closed form below x = 0.7 (measured
+# <= 1e-14 in b0, 2e-14 in B) and the tables above (2.1e-13 in B at a = 0.9999), and the incidence against the
+# former double-double route (agreement 2e-14 - 5e-11).
 # ---------------------------------------------------------------------------------------------------
 @testset "large-frequency route in binary64" begin
     OPE = D.OrdinaryPointExpansion
@@ -483,21 +487,25 @@ end
         U = GSN.Potentials.sU(p.s, p.m, a, C(p.omega), C(p.lambda), r)
         return (1 - x * OPE.derivative(S) / S - F * S / (2kappa)) / x, (-U * S^2 / (4kappa^2)) / x^2
     end
+    weighted(V, R, n, h) = sum(abs(V[k] - OPE.getcoeff(R, k - 1)) * h^(k - 1) for k in 1:n) /
+        sum(abs(OPE.getcoeff(R, k - 1)) * h^(k - 1) for k in 1:n)
     setprecision(BigFloat, 256) do
         for (s, l, m, a, omega) in ((-2, 2, 2, 0.9, 1000.0), (-2, 2, 2, 0.3, 300.0), (-2, 2, 2, 0.9999, 20.0),
-                (-2, 12, -12, 0.99, 15.0))
+                (-2, 12, -12, 0.99, 15.0), (-2, 2, 2, 0.99, 30.0), (1, 3, -1, 0.3, 20.0), (-2, 10, 10, 0.9, 50.0))
             p = D.gsn_parameters(s, l, m, a, omega)
             routing = LFE.large_frequency_expansion_routing(D.gsn_coefficients(p))
-            for x0 in (0.07, 0.12, 0.2, 0.3)
+            for x0 in (0.03, 0.07, 0.12, 0.2, 0.3, 0.4, 0.5, 0.6, 0.75, 0.9)
                 A = zeros(ComplexF64, order + 4)
                 Bv = zeros(ComplexF64, order + 4)
                 na, nb = LFE.large_frequency_expansion_ab!(A, Bv, routing, x0, order)
-                _, RB = reference(p, x0)
+                RA, RB = reference(p, x0)
                 h = 0.3 * min(x0, 1 - x0)
-                b0 = OPE.getcoeff(RB, 0)
+                a0, b0 = OPE.getcoeff(RA, 0), OPE.getcoeff(RB, 0)
+                tables = x0 >= LFE.LARGE_FREQUENCY_EXPANSION_CLOSED_FORM_MAX_X
+                @test abs(A[1] - a0) <= 3e-14 * abs(a0)
                 @test abs(Bv[1] - b0) <= 3e-14 * abs(b0)
-                @test sum(abs(Bv[k] - OPE.getcoeff(RB, k - 1)) * h^(k - 1) for k in 1:nb) <=
-                    1e-13 * sum(abs(OPE.getcoeff(RB, k - 1)) * h^(k - 1) for k in 1:nb)
+                @test weighted(A, RA, na, h) <= (tables ? 5e-14 : 1e-14)
+                @test weighted(Bv, RB, nb, h) <= (tables ? 5e-13 : 1e-13)
             end
         end
     end

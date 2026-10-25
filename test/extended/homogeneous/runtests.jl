@@ -427,7 +427,9 @@ end
 # 10b. Exact-extremal horizon in binary64: closed-form leading amplitudes N_in, N_out (against the Richardson limit
 #      of the Teukolsky-converted branch, at 384 bits for |delta| = 0.3 and 512 bits at h = 1e-14 |delta| for small
 #      detuning), the GSN horizon recurrence against itself at 256 bits (same rounded r), W[X_in, X_out]/eta = alpha/eta(1),
-#      Taylor1 over Complex{Dual}, and no BigFloat in the default a = +-1 solves (results unchanged at 8-bit BigFloat).
+#      Taylor1 over Complex{Dual}, and no default-precision BigFloat in the default a = +-1 solves (results unchanged
+#      at an 8-bit default; this does not see explicit setprecision blocks, which the source and allocation audit
+#      under dev/ checks).
 # ---------------------------------------------------------------------------------------------------
 @testset "exact extremal horizon in binary64" begin
     ER = GSN.ExtremalRadial
@@ -489,6 +491,7 @@ end
         () -> GSN_radial(2, 3, 3, 1.0, 1.0, UP).incidence_amplitude,
         () -> ER.extremal_complex_path_amplitudes(-2, 2, 1.0, 0.9 - 0.3im,
             GSN.SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 0.9 - 0.3im)).incidence)
+    # Default-precision BigFloat only (an explicit setprecision block would not change the result).
     for f in calls
         value = f()
         @test isfinite(value) && value === setprecision(() -> f(), BigFloat, 8)
