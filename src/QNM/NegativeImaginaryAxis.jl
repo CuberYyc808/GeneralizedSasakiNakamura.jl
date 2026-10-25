@@ -584,7 +584,10 @@ relative to max(1, |omega|).
 """
 function _near_axis_precision_check(mode::QNMMode, a::Float64,
         omega::ComplexF64, polish_options; precision_bits::Int,
-        root_tolerance, stability_tolerance)
+        root_tolerance, stability_tolerance, wide::Bool=true)
+    # Without wide arithmetic (a Float64 solve that did not ask for it) the re-polish stays in Float64 with the
+    # deeper continued fraction; it checks the root's stability under that change, not under precision.
+    wide || return _near_axis_float64_check(mode, a, omega, polish_options; root_tolerance, stability_tolerance)
     return setprecision(BigFloat, precision_bits) do
         B = BigFloat
         options = merge(polish_options, (
@@ -617,4 +620,24 @@ function _near_axis_precision_check(mode::QNMMode, a::Float64,
             drift,
         )
     end
+end
+
+function _near_axis_float64_check(mode::QNMMode, a::Float64, omega::ComplexF64, polish_options;
+        root_tolerance, stability_tolerance)
+    options = merge(polish_options, (
+        sheet_id=Symbol(polish_options.sheet_id, :_near_axis_check),
+        cf_minimum_iterations=max(polish_options.cf_minimum_iterations, 600),
+        cf_maximum_iterations=max(polish_options.cf_maximum_iterations, 24000),
+        root_tolerance=Float64(root_tolerance),
+    ))
+    polished = try
+        _polish_frequency_root(mode, a, omega; options...)
+    catch
+        nothing
+    end
+    polished === nothing && return (verified=false, precision_bits=53, converged=false,
+        stop_reason=:evaluation_error, bigfloat_omega=missing, drift=Inf)
+    drift = Float64(abs(polished.omega - omega) / max(1.0, abs(polished.omega)))
+    return (verified=polished.converged && drift <= stability_tolerance, precision_bits=53,
+        converged=polished.converged, stop_reason=polished.stop_reason, bigfloat_omega=missing, drift)
 end

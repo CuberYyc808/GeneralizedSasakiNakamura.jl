@@ -105,7 +105,9 @@ end
 # QNMEndpointResult or QNMFailure (with radial solutions when `detailed`).
 function _qnm_branch_observables(root, excitation_options;
         input_a=root.a, detailed::Bool=false)
-    if !(root.status in (:accepted, :estimated))
+    # A Float64 root that missed its continued-fraction gates without wide arithmetic (:float64_unconverged)
+    # is carried as an estimate.
+    if !(root.status in (:accepted, :estimated, :float64_unconverged))
         return QNMFailure((
             a=input_a,
             mode=root.mode,
@@ -238,11 +240,11 @@ function _qnm_branch_observables(root, excitation_options;
             :near_extremal_scaled_incidence_estimate :
             excitation.stop_reason
     finite_observables = _finite_qnm_observables(validation, excitation)
-    estimated = !accepted && root.status in (:accepted, :estimated) &&
+    estimated = !accepted && root.status in (:accepted, :estimated, :float64_unconverged) &&
         finite_observables &&
         ((validation.status == :accepted &&
           (excitation.stop_reason == :richardson_step_gate ||
-           conditioned_near_extremal || root.status == :estimated)) ||
+           conditioned_near_extremal || root.status in (:estimated, :float64_unconverged))) ||
          (high_damping_diagnostic &&
           excitation.stop_reason == :scaled_incidence_gate))
     status = accepted ? :accepted : estimated ? :estimated : :failed
@@ -253,7 +255,8 @@ function _qnm_branch_observables(root, excitation_options;
         oftype(achieved_relative_precision, 1.0e-7)
     limiting_gate = !estimated ? :none : high_damping_diagnostic ?
         :scaled_incidence_gate : root.status == :estimated ?
-        :conditioned_root_gate : conditioned_near_extremal ?
+        :conditioned_root_gate : root.status == :float64_unconverged ?
+        :float64_unconverged_root : conditioned_near_extremal ?
         excitation.stop_reason == :richardson_step_gate ?
             :richardson_step_and_scaled_incidence_gates :
             :scaled_incidence_gate : :richardson_step_gate
