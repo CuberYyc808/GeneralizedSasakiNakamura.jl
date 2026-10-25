@@ -463,6 +463,61 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Large-frequency route in binary64 (LargeFrequencyExpansionRouting, no double-double table): the routed A, B
+# against the same series from the original sF, sU in 256-bit arithmetic (b0 and the step-weighted B,
+# h = 0.3 min(x0, 1 - x0)), and the incidence against the former double-double route (agreement 2e-14 - 5e-11).
+# ---------------------------------------------------------------------------------------------------
+@testset "large-frequency route in binary64" begin
+    OPE = D.OrdinaryPointExpansion
+    LFE = D.LargeFrequencyExpansion
+    order = 24
+    function reference(p, x0)
+        B = BigFloat
+        C = Complex{B}
+        a = B(p.a)
+        kappa = sqrt((1 - a) * (1 + a))
+        x = C(x0) + OPE.Taylor1(C, order + 4)
+        r = (1 + kappa) + 2kappa * x / (1 - x)
+        S = r^2 + a^2
+        F = GSN.Potentials.sF(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        U = GSN.Potentials.sU(p.s, p.m, a, C(p.omega), C(p.lambda), r)
+        return (1 - x * OPE.derivative(S) / S - F * S / (2kappa)) / x, (-U * S^2 / (4kappa^2)) / x^2
+    end
+    setprecision(BigFloat, 256) do
+        for (s, l, m, a, omega) in ((-2, 2, 2, 0.9, 1000.0), (-2, 2, 2, 0.3, 300.0), (-2, 2, 2, 0.9999, 20.0),
+                (-2, 12, -12, 0.99, 15.0))
+            p = D.gsn_parameters(s, l, m, a, omega)
+            routing = LFE.large_frequency_expansion_routing(D.gsn_coefficients(p))
+            for x0 in (0.07, 0.12, 0.2, 0.3)
+                A = zeros(ComplexF64, order + 4)
+                Bv = zeros(ComplexF64, order + 4)
+                na, nb = LFE.large_frequency_expansion_ab!(A, Bv, routing, x0, order)
+                _, RB = reference(p, x0)
+                h = 0.3 * min(x0, 1 - x0)
+                b0 = OPE.getcoeff(RB, 0)
+                @test abs(Bv[1] - b0) <= 3e-14 * abs(b0)
+                @test sum(abs(Bv[k] - OPE.getcoeff(RB, k - 1)) * h^(k - 1) for k in 1:nb) <=
+                    1e-13 * sum(abs(OPE.getcoeff(RB, k - 1)) * h^(k - 1) for k in 1:nb)
+            end
+        end
+    end
+    for (s, l, m, a, omega, incidence) in (
+            (-2, 2, 2, 0.9, 20.0, -0.2028523462891846 - 0.9630739718688905im),
+            (-2, 2, 2, 0.9, 100.0, -0.2384005200976732 - 0.9679345545822073im),
+            (-2, 2, 2, 0.9, 1000.0, -0.24631869496336617 - 0.968865476475265im),
+            (-2, 2, 2, 0.3, 300.0, 0.9855675520769968 - 0.16776416077873474im),
+            (1, 3, -1, 0.3, 20.0, 0.8704450796168449 + 0.447686211167735im),
+            (-2, 2, 2, 0.99, 30.0, -0.18270063341340384 + 0.9683492074837651im),
+            (-2, 2, 2, 0.9999, 20.0, -0.9398794117784254 + 0.25947803497603955im),
+            (-2, 2, 2, 0.99999, 10.0, 0.8215442520091041 + 0.4748802574659085im),
+            (-2, 10, 10, 0.9, 50.0, -0.5975729886615191 - 0.7617267374726725im),
+            (-2, 12, -12, 0.99, 15.0, 0.5210981653863948 - 1.0370632541085072im))
+        X = GSN_radial(s, l, m, a, omega, IN; lfe=true)
+        @test abs(X.incidence_amplitude - incidence) <= 1e-10 * abs(incidence)
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 module Eikonal
 
 using ..CoefficientTables: CoefficientSet
-using ..LargeFrequencyExpansion: LargeFrequencyExpansionPlan, large_frequency_expansion_ab!
+using ..LargeFrequencyExpansion: LargeFrequencyExpansionRouting, large_frequency_expansion_ab!
 using ..OrdinaryPointExpansion:
     ordinary_ab_series!,
     poly_pair,
@@ -931,7 +931,7 @@ function eikonal_path(
     residual_limit=EIKONAL_RESIDUAL_LIMIT,
     check_limit=EIKONAL_CHECK_LIMIT,
     terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}=nothing,
+    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
     target = Float64(target_x)
@@ -1010,7 +1010,7 @@ function eikonal_split(
     check_limit=EIKONAL_CHECK_LIMIT,
     split_limit=EIKONAL_SPLIT_LIMIT,
     terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}=nothing,
+    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
     allow_partial::Bool=false,
 )
     current_x = Float64(seed_x)
@@ -1196,7 +1196,7 @@ function eikonal_split_pair(
     check_limit=EIKONAL_CHECK_LIMIT,
     split_limit=EIKONAL_SPLIT_LIMIT,
     terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}=nothing,
+    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
     target = Float64(target_x)
@@ -1397,7 +1397,7 @@ function eikonal_pair(
     residual_limit=EIKONAL_RESIDUAL_LIMIT,
     check_limit=EIKONAL_CHECK_LIMIT,
     terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}=nothing,
+    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
     target = Float64(target_x)

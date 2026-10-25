@@ -4,7 +4,7 @@ using ..CoefficientTables: CoefficientSet
 using ..OrdinaryPointExpansion: direct_ab_value, horizon_closed_form_ab_series!, HORIZON_SHIFT_MAX_X
 using ..ApparentSingularities: apparent_points, apparent_basis, apparent_jump, next_apparent, APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
-using ..LargeFrequencyExpansion: LargeFrequencyExpansionPlan, large_frequency_expansion_plan, large_frequency_expansion_ab!
+using ..LargeFrequencyExpansion: LargeFrequencyExpansionRouting, large_frequency_expansion_routing, large_frequency_expansion_ab!
 using ..NearExtreme: near_extreme_selected, near_extreme_march
 using ..Eikonal:
     EikonalPatch,
@@ -410,7 +410,7 @@ struct IterationScratch
     radius_buffer2::Vector{Float64}
     denom_inv::Vector{Float64}
     eikonal::Union{Nothing,EikonalScratch}
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionPlan}
+    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}
     closed_form_march::Bool
 end
 
@@ -441,8 +441,7 @@ function IterationScratch(
         Vector{Float64}(undef, buffer_order + 1),
         buffer_order >= 2 ? [1.0 / ((n + 2) * (n + 1)) for n in 0:(buffer_order - 2)] : Float64[],
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
-        large_frequency_expansion ? large_frequency_expansion_plan(coefficients.params,
-            coefficients.ordinary.basis, buffer_order) : nothing,
+        large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing,
         closed_form_march,
     )
 end

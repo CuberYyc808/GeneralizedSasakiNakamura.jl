@@ -7,15 +7,6 @@ using ..OrdinaryPointExpansion:
     poly_triple,
     poly_value
 using ..LocalSolutionAtInfinity: infinity_exponents
-using ..LargeFrequencyExpansion:
-    DDComplex,
-    dc_add,
-    dc_div,
-    dc_mul,
-    dc_neg,
-    dc_scale,
-    dc_sub,
-    dc_value
 
 export InfinityLargeFrequencyExpansionBranch, InfinityLargeFrequencyExpansionPatch
 export large_frequency_expansion_infinity_single, large_frequency_expansion_infinity_pair, large_frequency_expansion_infinity_reach, large_frequency_expansion_infinity_reach_pair
@@ -57,98 +48,12 @@ struct InfinityLargeFrequencyExpansionPatch
     scale::ComplexF64
 end
 
-# Double-double power series of a rational endpoint coefficient (leading zero
-# denominator terms removed); `nothing` if the denominator vanishes identically.
-function _rational(rational, count)
-    numerator = DDComplex.(rational.numerator)
-    denominator = DDComplex.(rational.denominator)
-    first = findfirst(value -> !iszero(dc_value(value)), denominator)
-    first === nothing && return nothing
-    shift = first - 1
-    out = fill(DDComplex(0), count)
-    qinv = dc_div(DDComplex(1), denominator[first])
-    @inbounds for n in 0:(count - 1)
-        pindex = n + shift
-        value = pindex < length(numerator) ? numerator[pindex + 1] :
-            DDComplex(0)
-        for k in 1:min(n, length(denominator) - shift - 1)
-            value = dc_sub(value, dc_mul(
-                denominator[shift + k + 1], out[n - k + 1]))
-        end
-        out[n + 1] = dc_mul(value, qinv)
-    end
-    return out
-end
-
-@inline function _laurent(values, first_power, power)
-    index = power - first_power + 1
-    return 1 <= index <= length(values) ? values[index] : DDComplex(0)
-end
-
+# Laurent series of the infinity A and B (endpoint_ab_series, group :I, with order + 5 and order + 8 terms), or
+# `nothing` if a denominator vanishes identically.
 function _endpoint_ab(coefficients, order)
-    avec = _rational(coefficients.infinity.A, order + 5)
-    bvec = _rational(coefficients.infinity.B, order + 8)
-    (avec === nothing || bvec === nothing) && return nothing
-    return avec, bvec
-end
-
-# Double-double recurrence for the c_n of one branch; _fast_branch is the binary64
-# version used for the order preflight.
-function _branch(avec, bvec, params, branch, order)
-    rho64, sigma64 = infinity_exponents(params, branch)
-    sign = branch == :out ? 1.0 : -1.0
-    horizon = (2 * params.omega * (1 + params.kappa) -
-        params.a * params.m) / (2 * params.kappa)
-    alpha64 = ComplexF64(1im * sign * horizon)
-    rho = DDComplex(rho64)
-    sigma = DDComplex(sigma64)
-    alpha = DDComplex(alpha64)
-    a(power) = _laurent(avec, -1, power)
-    b(power) = _laurent(bvec, -4, power)
-    p = fill(DDComplex(0), order + 2)
-    q = fill(DDComplex(0), order + 1)
-    p[1] = dc_scale(sigma, -2.0)
-    p[2] = dc_sub(dc_scale(rho, 2.0), a(-1))
-    alpha2 = dc_mul(alpha, alpha)
-    @inbounds for j in 2:(order + 1)
-        p[j + 1] = dc_sub(dc_neg(a(j - 2)), dc_scale(alpha, 2.0))
-    end
-    @inbounds for j in 0:order
-        value = dc_add(b(j - 2), dc_mul(sigma, a(j)))
-        value = dc_sub(value, dc_mul(rho, a(j - 1)))
-        j == 0 && (value = dc_add(value,
-            dc_sub(dc_mul(rho, rho), rho)))
-        value = dc_add(value, dc_scale(dc_mul(sigma, alpha), 2.0))
-        if j >= 1
-            value = dc_sub(value, dc_scale(dc_mul(rho, alpha), 2.0))
-            for power in -1:(j - 2)
-                value = dc_add(value, dc_mul(alpha, a(power)))
-            end
-        end
-        j >= 2 && (value = dc_add(value,
-            dc_scale(dc_sub(alpha2, alpha), Float64(j - 1))))
-        q[j + 1] = value
-    end
-    coeffs = fill(DDComplex(0), order + 1)
-    coeffs[1] = DDComplex(1)
-    @inbounds for n in 0:(order - 1)
-        numerator = n >= 1 ?
-            dc_scale(coeffs[n + 1], Float64((n - 1) * n)) :
-            DDComplex(0)
-        for j in 1:(n + 1)
-            numerator = dc_add(numerator, dc_scale(
-                dc_mul(p[j + 1], coeffs[n - j + 2]),
-                Float64(n + 1 - j)))
-        end
-        for j in 0:n
-            numerator = dc_add(numerator,
-                dc_mul(q[j + 1], coeffs[n - j + 1]))
-        end
-        coeffs[n + 2] = dc_div(dc_neg(numerator),
-            dc_scale(p[1], Float64(n + 1)))
-    end
-    return InfinityLargeFrequencyExpansionBranch(
-        branch, rho64, sigma64, alpha64, dc_value.(coeffs))
+    endpoint = coefficients.infinity
+    (all(iszero, endpoint.A.denominator) || all(iszero, endpoint.B.denominator)) && return nothing
+    return endpoint_ab_series(coefficients, :I, order + 3)
 end
 
 @inline function _complex_laurent(values, first_power, power)
@@ -156,6 +61,8 @@ end
     return 1 <= index <= length(values) ? values[index] : ComplexF64(0)
 end
 
+# Recurrence for the c_n of one branch in binary64 (it agrees with the former double-double recurrence to
+# rounding; residual floor 2e-16).
 function _fast_branch(avec, bvec, params, branch, order)
     rho, sigma = infinity_exponents(params, branch)
     sign = branch == :out ? 1.0 : -1.0
@@ -247,71 +154,29 @@ function _residual(state, A, B)
         max(abs(second) + abs(first) + abs(zeroth), eps(Float64))
 end
 
-function _dd_poly(coeffs, y, order)
-    count = min(order + 1, length(coeffs))
-    value = DDComplex(coeffs[count])
-    derivative = DDComplex(0)
-    second = DDComplex(0)
-    ydd = DDComplex(y)
-    @inbounds for index in (count - 1):-1:1
-        second = dc_add(dc_mul(second, ydd),
-            dc_scale(derivative, 2.0))
-        derivative = dc_add(dc_mul(derivative, ydd), value)
-        value = dc_add(dc_mul(value, ydd), DDComplex(coeffs[index]))
-    end
-    return value, derivative, second
+# ODE residual in the y variable, from the series and the Laurent A, B at y.
+function _y_residual(plan, avec, bvec, y, order)
+    count = min(Int(order) + 1, length(plan.coeffs))
+    z, dz, ddz = poly_triple(@view(plan.coeffs[1:count]), y)
+    inv_y = inv(y)
+    inv_x = inv(1 - y)
+    log_derivative = -plan.sigma * inv_y^2 + plan.rho * inv_y - plan.alpha * inv_x
+    log_second = 2plan.sigma * inv_y^3 - plan.rho * inv_y^2 - plan.alpha * inv_x^2
+    A = _laurent_value(avec, -1, y)
+    B = _laurent_value(bvec, -4, y)
+    second = ddz + 2log_derivative * dz + (log_second + log_derivative^2) * z
+    first = -A * (dz + log_derivative * z)
+    zeroth = B * z
+    scale = abs(second) + abs(first) + abs(zeroth)
+    return abs(second + first + zeroth) / max(scale, eps(Float64))
 end
 
-function _dd_laurent(values, first_power, y)
-    ydd = DDComplex(y)
-    value = values[end]
-    @inbounds for index in (length(values) - 1):-1:1
-        value = dc_add(dc_mul(value, ydd), values[index])
+function _laurent_value(values, first_power, y)
+    value = zero(ComplexF64)
+    @inbounds for index in length(values):-1:1
+        value = value * y + values[index]
     end
-    factor = DDComplex(1)
-    if first_power < 0
-        inv_y = dc_div(DDComplex(1), ydd)
-        for _ in 1:(-first_power)
-            factor = dc_mul(factor, inv_y)
-        end
-    else
-        for _ in 1:first_power
-            factor = dc_mul(factor, ydd)
-        end
-    end
-    return dc_mul(factor, value)
-end
-
-# ODE residual evaluated in double-double in the y variable.
-function _dd_residual(plan, avec, bvec, y, order)
-    z, dz, ddz = _dd_poly(plan.coeffs, y, order)
-    inv_y = dc_div(DDComplex(1), DDComplex(y))
-    inv_x = dc_div(DDComplex(1), DDComplex(1 - y))
-    inv_y2 = dc_mul(inv_y, inv_y)
-    inv_x2 = dc_mul(inv_x, inv_x)
-    sigma = DDComplex(plan.sigma)
-    rho = DDComplex(plan.rho)
-    alpha = DDComplex(plan.alpha)
-    log_derivative = dc_sub(
-        dc_add(dc_neg(dc_mul(sigma, inv_y2)), dc_mul(rho, inv_y)),
-        dc_mul(alpha, inv_x))
-    log_second = dc_sub(
-        dc_sub(dc_scale(dc_mul(dc_mul(sigma, inv_y2), inv_y), 2.0),
-            dc_mul(rho, inv_y2)),
-        dc_mul(alpha, inv_x2))
-    A = _dd_laurent(avec, -1, y)
-    B = _dd_laurent(bvec, -4, y)
-    second = dc_add(ddz, dc_add(
-        dc_scale(dc_mul(log_derivative, dz), 2.0),
-        dc_mul(dc_add(log_second,
-            dc_mul(log_derivative, log_derivative)), z)))
-    first = dc_neg(dc_mul(A,
-        dc_add(dz, dc_mul(log_derivative, z))))
-    zeroth = dc_mul(B, z)
-    residual = dc_add(dc_add(second, first), zeroth)
-    scale = abs(dc_value(second)) + abs(dc_value(first)) +
-        abs(dc_value(zeroth))
-    return abs(dc_value(residual)) / max(scale, eps(Float64))
+    return first_power < 0 ? value / y^(-first_power) : value * y^first_power
 end
 
 function _reach_check(plan, ab, y)
@@ -319,9 +184,10 @@ function _reach_check(plan, ab, y)
     full = _state(plan, y, order)
     nested = _state(plan, y, max(8, order - LARGE_FREQUENCY_EXPANSION_INFINITY_ORDER_STEP))
     tail = _tail(plan, y, order)
-    residual = _dd_residual(plan, ab[1], ab[2], y, order)
+    residual = _y_residual(plan, ab[1], ab[2], y, order)
     check = _error(full, nested)
-    accepted = tail <= LARGE_FREQUENCY_EXPANSION_INFINITY_TAIL && residual <= LARGE_FREQUENCY_EXPANSION_INFINITY_RESIDUAL &&
+    accepted = isfinite(residual) && tail <= LARGE_FREQUENCY_EXPANSION_INFINITY_TAIL &&
+        residual <= LARGE_FREQUENCY_EXPANSION_INFINITY_RESIDUAL &&
         check <= LARGE_FREQUENCY_EXPANSION_INFINITY_CHECK
     return (; accepted, full, tail, residual, check)
 end
@@ -479,7 +345,7 @@ function large_frequency_expansion_infinity_single(coefficients::CoefficientSet,
     order > 0 || return nothing
     ab = _endpoint_ab(coefficients, order)
     ab === nothing && return nothing
-    plan = _branch(ab[1], ab[2], coefficients.params, branch, order)
+    plan = _fast_branch(ab[1], ab[2], coefficients.params, branch, order)
     selected = _select(plan, y, A, B)
     selected === nothing && return nothing
     patch = InfinityLargeFrequencyExpansionPatch(
@@ -516,8 +382,8 @@ function large_frequency_expansion_infinity_pair(coefficients::CoefficientSet,
     (order1 > 0 && order2 > 0) || return nothing
     ab = _endpoint_ab(coefficients, max(order1, order2))
     ab === nothing && return nothing
-    plan1 = _branch(ab[1], ab[2], coefficients.params, branch1, order1)
-    plan2 = _branch(ab[1], ab[2], coefficients.params, branch2, order2)
+    plan1 = _fast_branch(ab[1], ab[2], coefficients.params, branch1, order1)
+    plan2 = _fast_branch(ab[1], ab[2], coefficients.params, branch2, order2)
     selected1 = _select(plan1, y, A, B)
     selected2 = _select(plan2, y, A, B)
     (selected1 !== nothing && selected2 !== nothing) || return nothing
@@ -546,7 +412,7 @@ function large_frequency_expansion_infinity_reach(coefficients::CoefficientSet, 
     y > seed_y * (1 + 100eps(Float64)) || return nothing
     ab = _endpoint_ab(coefficients, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     ab === nothing && return nothing
-    plan = _branch(ab[1], ab[2], coefficients.params,
+    plan = _fast_branch(ab[1], ab[2], coefficients.params,
         branch, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     selected = _reach((plan,), ab, seed_y, match_x)
     selected === nothing && return nothing
@@ -566,9 +432,9 @@ function large_frequency_expansion_infinity_reach_pair(coefficients::Coefficient
     y > seed_y * (1 + 100eps(Float64)) || return nothing
     ab = _endpoint_ab(coefficients, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     ab === nothing && return nothing
-    plan1 = _branch(ab[1], ab[2], coefficients.params,
+    plan1 = _fast_branch(ab[1], ab[2], coefficients.params,
         branch1, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
-    plan2 = _branch(ab[1], ab[2], coefficients.params,
+    plan2 = _fast_branch(ab[1], ab[2], coefficients.params,
         branch2, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     selected = _reach((plan1, plan2), ab, seed_y, match_x)
     selected === nothing && return nothing
@@ -603,7 +469,7 @@ function large_frequency_expansion_infinity_anchor(coefficients::CoefficientSet,
     target_y > canonical_seed * (1 + 100eps(Float64)) || return nothing
     ab = _endpoint_ab(coefficients, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     ab === nothing && return nothing
-    plan = _branch(ab[1], ab[2], coefficients.params,
+    plan = _fast_branch(ab[1], ab[2], coefficients.params,
         branch, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     selected = _reach((plan,), ab, canonical_seed, match_x)
     selected === nothing && return nothing
@@ -629,9 +495,9 @@ function large_frequency_expansion_infinity_anchor_pair(coefficients::Coefficien
     target_y > canonical_seed * (1 + 100eps(Float64)) || return nothing
     ab = _endpoint_ab(coefficients, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     ab === nothing && return nothing
-    plan1 = _branch(ab[1], ab[2], coefficients.params,
+    plan1 = _fast_branch(ab[1], ab[2], coefficients.params,
         branch1, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
-    plan2 = _branch(ab[1], ab[2], coefficients.params,
+    plan2 = _fast_branch(ab[1], ab[2], coefficients.params,
         branch2, LARGE_FREQUENCY_EXPANSION_INFINITY_MAX_ORDER)
     selected = _reach((plan1, plan2), ab, canonical_seed, match_x)
     selected === nothing && return nothing

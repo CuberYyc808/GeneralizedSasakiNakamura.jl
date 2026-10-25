@@ -1,6 +1,7 @@
 module HorizonLargeFrequencyExpansion
 
 using ..CoefficientTables: CoefficientSet
+using ..LargeFrequencyExpansion: large_frequency_expansion_ab_value
 using ..LocalSolutionAtZero:
     horizon_series_triple,
     zero_local_solution
@@ -68,10 +69,8 @@ function _residual(candidate, A, B)
         max(abs(second) + abs(first) + abs(zeroth), eps(Float64))
 end
 
-function _ab_value(coefficients, x)
-    avec, bvec = ordinary_ab_series(coefficients, x, 2)
-    return avec[1], bvec[1]
-end
+# A and B at x by the large-frequency routing (LargeFrequencyExpansion.large_frequency_expansion_ab_value).
+_ab_value(coefficients, x) = large_frequency_expansion_ab_value(coefficients, x)
 
 # Lowest order (from LARGE_FREQUENCY_EXPANSION_HORIZON_MIN_ORDER in steps of LARGE_FREQUENCY_EXPANSION_HORIZON_ORDER_STEP) at which the
 # series passes all three checks at x, or `nothing`.
