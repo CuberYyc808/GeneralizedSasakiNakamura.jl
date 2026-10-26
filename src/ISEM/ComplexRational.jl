@@ -2003,12 +2003,20 @@ function _propagate_step!(
         h = initial_h
         plateau_candidate = nothing
         plateau_h = h
+        # The endpoint-shifted series depends on x only and nothing below
+        # overwrites it, so it is formed once for all step halvings.
+        a_terms, b_terms, representation, coefficient_condition = shifted ?
+            _local_ab_series!(scratch, coefficients, x, settings.order,
+                settings.step_target, true) : (0, 0, :ordinary, 0.0)
+        shifted && representation == :ordinary_shift_fallback && continue
         for attempt in 1:32
-            candidate = _local_step!(
-                scratch, coefficients, x, state1, state2, h, settings,
-                shifted)
-            shifted && candidate.representation ==
-                :ordinary_shift_fallback && break
+            candidate = shifted ?
+                _local_step_from_ab!(scratch, state1, state2, h, settings,
+                    a_terms, b_terms, representation,
+                    coefficient_condition) :
+                _local_step!(
+                    scratch, coefficients, x, state1, state2, h, settings,
+                    shifted)
             # Non-finite Taylor coefficients do not depend on h: no smaller step can pass.
             if !_finite_coefficients(scratch, settings.order)
                 rejected += 33 - attempt

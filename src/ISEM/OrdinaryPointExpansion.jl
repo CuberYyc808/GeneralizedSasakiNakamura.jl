@@ -297,30 +297,35 @@ end
 # h^n, h the step radius, i.e. the relative error of the series as it is used over one step rather than of
 # its worst single coefficient (whose relative error is large where the coefficient itself is small). The
 # shifted polynomials and the series are in `work` and `out` from _shift_rational!.
+# One shifted polynomial's weighted condition. A separate function, not a closure in
+# _weighted_shift_condition: a closure sharing its accumulator names boxed them and
+# allocated on every update.
+function _weighted_shift_part(work, start, source, order, center, h)
+    degree = length(source) + order - 1
+    numerator = 0.0
+    denominator = 0.0
+    hn = 1.0
+    @inbounds for n in 0:degree
+        scale = 0.0
+        weight = 1.0
+        for k in n:degree
+            scale += abs(_shift_source(source, order, k + 1)) * weight
+            k < degree && (weight *= abs(center) * (k + 1) / (k + 1 - n))
+        end
+        numerator += scale * hn
+        denominator += abs(work[start + n]) * hn
+        hn *= h
+    end
+    return numerator / max(denominator, floatmin(Float64))
+end
+
 function _weighted_shift_condition(out, terms, work, rational, pole_order, center, h)
     p_len = length(rational.numerator)
     q_len = length(rational.denominator) + pole_order
     q_start = 1 + p_len
-    weighted(start, source, order) = begin
-        degree = length(source) + order - 1
-        numerator = 0.0
-        denominator = 0.0
-        hn = 1.0
-        @inbounds for n in 0:degree
-            scale = 0.0
-            weight = 1.0
-            for k in n:degree
-                scale += abs(_shift_source(source, order, k + 1)) * weight
-                k < degree && (weight *= abs(center) * (k + 1) / (k + 1 - n))
-            end
-            numerator += scale * hn
-            denominator += abs(work[start + n]) * hn
-            hn *= h
-        end
-        numerator / max(denominator, floatmin(Float64))
-    end
-    p_condition = weighted(1, rational.numerator, 0)
-    q_condition = weighted(q_start, rational.denominator, pole_order)
+    p_condition = _weighted_shift_part(work, 1, rational.numerator, 0, center, h)
+    q_condition = _weighted_shift_part(
+        work, q_start, rational.denominator, pole_order, center, h)
     q0 = abs(work[q_start])
     numerator = 0.0
     denominator = 0.0
