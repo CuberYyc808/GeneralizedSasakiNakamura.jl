@@ -3957,18 +3957,27 @@ function _complex_route_impl(
             # P route without a usable match: retry the rational build with
             # the relaxed infinity rotation bound. The match then flows into
             # the rational path below.
-            relaxed = !_principal_small_frequency_expansion_axis(
-                    ComplexF64(omega)) && _p_route_unmatched(fallback) ?
+            off_axis = !_principal_small_frequency_expansion_axis(
+                ComplexF64(omega))
+            relaxed = off_axis && _p_route_unmatched(fallback) ?
                 _relaxed_rotation_build(s, l, m, a, omega, branch, tol,
                     fallback) : nothing
             if relaxed !== nothing
                 relaxed
             else
-                _replay_logs(p_logs)
-                p_failure === nothing || throw(
+                p_failure === nothing || (_replay_logs(p_logs); throw(
                     ErrorException(p_failure.msg * " It was the fallback " *
                         "after the two-ray rational build failed: " *
-                        sprint(showerror, error)))
+                        sprint(showerror, error))))
+                # Off the negative imaginary axis (whose P consensus below can
+                # still repair the match) an unmatched P result is an error.
+                off_axis && _p_route_unmatched(fallback) && throw(
+                    ErrorException("P-equation route split mismatch " *
+                        "$(_metadata_value(fallback.metadata, :split_mismatch, NaN))" *
+                        " is above $(_P_ROUTE_UNMATCHED_MISMATCH); no usable " *
+                        "match. It was the fallback after the two-ray rational " *
+                        "build failed: " * sprint(showerror, error)))
+                _replay_logs(p_logs)
                 fallback = _tag_p_build_fallback(
                     fallback, fallback_trigger, sprint(showerror, error))
                 fallback = _principal_small_frequency_expansion_overlay(
