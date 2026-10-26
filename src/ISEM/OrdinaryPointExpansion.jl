@@ -551,8 +551,11 @@ end
 # (0.95, 0.9) jump by 4e-9 between neighbouring omega (1e-10 with the tables).
 const HORIZON_SHIFT_MAX_X = 0.1
 
-# Task-local switch (set by the Y self-check re-solve): real points between
-# HORIZON_SHIFT_MAX_X and DIRECT_AB_MAX_X take A and B from direct_ab_series!.
+# Real binary64 points between HORIZON_SHIFT_MAX_X and DIRECT_AB_MAX_X take A and B from direct_ab_series!:
+# there the tables put an error of about 1e-10 into B_inc / B_trans of (2, 2) at a = 0.95, omega = 0.74 - 0.81
+# (near m Omega_H), which scattered between neighbouring omega by 4e-12 (Chebyshev tail over 129 points; 4e-13
+# with the closed form, 3e-12 largest error against a 128-bit reference). DIRECT_AB_KEY (set by the Y self-check
+# re-solve) takes them for every element type.
 const DIRECT_AB_KEY = :GSN_ISEM_DIRECT_AB
 const DIRECT_AB_MAX_X = 0.7
 
@@ -694,8 +697,9 @@ end
 # Taylor series of A and B about the ordinary point x0: by shifting the horizon
 # rational functions when `metadata.horizon_shift` is set or x0 is a real point
 # below HORIZON_SHIFT_MAX_X, and the shift is accepted; from the closed-form
-# potentials when DIRECT_AB_KEY is set and x0 is real and below DIRECT_AB_MAX_X;
-# otherwise from the ordinary-point tables.
+# potentials for real x0 in [HORIZON_SHIFT_MAX_X, DIRECT_AB_MAX_X) at real omega
+# (binary64 buffers, or any when DIRECT_AB_KEY is set); otherwise from the
+# ordinary-point tables.
 function ordinary_ab_series!(
     a_out::AbstractVector{<:Complex},
     b_out::AbstractVector{<:Complex},
@@ -707,7 +711,7 @@ function ordinary_ab_series!(
 )
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
             coefficients.params.omega isa Real &&
-            get(task_local_storage(), DIRECT_AB_KEY, false)
+            (eltype(a_out) === ComplexF64 || get(task_local_storage(), DIRECT_AB_KEY, false))
         return direct_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
     # The binary64 shift needs binary64 buffers (_shift_source converts to ComplexF64).
