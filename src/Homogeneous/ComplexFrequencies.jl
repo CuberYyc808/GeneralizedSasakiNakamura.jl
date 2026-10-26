@@ -497,7 +497,6 @@ function semianalytical_Xin(s::Int, m::Int, a, beta_pos, beta_neg, omega, lambda
 
         return (_Xin, _dXin_drs)
     else
-        # Return the numerical solution
         return Xinsoln(rho)
     end
 end
@@ -559,7 +558,6 @@ function semianalytical_Xup(s::Int, m::Int, a, beta_pos, beta_neg, omega, lambda
 
         return (_Xup, _dXup_drs)
     else
-        # Return the numerical solution
         return Xupsoln(rho)
     end
 end
