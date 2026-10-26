@@ -3808,12 +3808,42 @@ end
 # Above this P-equation split mismatch the P fallback has no usable match.
 const _P_ROUTE_UNMATCHED_MISMATCH = 1.0e-6
 
-# P fallback that returned NaN amplitudes (`nothing`) or a split mismatch above
-# _P_ROUTE_UNMATCHED_MISMATCH.
+# Split mismatch of a P route's match (plan.matching, as _route_split_mismatch
+# reads it), or `nothing` when the route does not record one.
+function _p_split_mismatch(route::ComplexRoute)
+    value = route.plan.matching.split_mismatch
+    return value === missing ? nothing : Float64(value)
+end
+
+# P fallback that returned NaN amplitudes (`nothing`) or a recorded split
+# mismatch above _P_ROUTE_UNMATCHED_MISMATCH (or not finite). A route without a
+# recorded mismatch is not unmatched.
 function _p_route_unmatched(route)
     route === nothing && return true
-    mismatch = _metadata_value(route.metadata, :split_mismatch, NaN)
-    return !(mismatch <= _P_ROUTE_UNMATCHED_MISMATCH)
+    mismatch = _p_split_mismatch(route)
+    return mismatch !== nothing && !(mismatch <= _P_ROUTE_UNMATCHED_MISMATCH)
+end
+
+_p_unmatched_error(route, rational_error) = ErrorException(
+    "P-equation route split mismatch $(_p_split_mismatch(route)) is above " *
+    "$(_P_ROUTE_UNMATCHED_MISMATCH); no usable match. It was the fallback " *
+    "after the two-ray rational build failed: " *
+    sprint(showerror, rational_error))
+
+# Negative imaginary axis repairs of the P fallback `original`: the final route
+# must not be the unrepaired unmatched P fallback, nor a P route rebuilt by a
+# repair step (its own P solution) with an unmatched split. Amplitude overlays
+# keep the original P solution and their own acceptance.
+function _check_repaired_p_fallback(route, original, rational_error)
+    if route === original
+        _p_route_unmatched(route) &&
+            throw(_p_unmatched_error(route, rational_error))
+    elseif route.state_evaluator isa ComplexStateEvaluator &&
+            route.p_solution !== original.p_solution &&
+            _p_route_unmatched(route)
+        throw(_p_unmatched_error(route, rational_error))
+    end
+    return route
 end
 
 # Rational build with the relaxed infinity rotation bound, after the default
@@ -3836,8 +3866,9 @@ function _relaxed_rotation_build(s, l, m, a, omega, branch, tol, p_route)
     error_bound = max(_metadata_value(metadata, :incidence_error, Inf),
         _metadata_value(metadata, :reflection_error, Inf))
     p_route === nothing && return build
-    p_mismatch = _metadata_value(p_route.metadata, :split_mismatch, NaN)
-    return isnan(p_mismatch) || error_bound < p_mismatch ? build : nothing
+    p_mismatch = _p_split_mismatch(p_route)
+    return p_mismatch === nothing || isnan(p_mismatch) ||
+        error_bound < p_mismatch ? build : nothing
 end
 
 function _complex_route_impl(
@@ -3971,15 +4002,12 @@ function _complex_route_impl(
                         sprint(showerror, error))))
                 # Off the negative imaginary axis (whose P consensus below can
                 # still repair the match) an unmatched P result is an error.
-                off_axis && _p_route_unmatched(fallback) && throw(
-                    ErrorException("P-equation route split mismatch " *
-                        "$(_metadata_value(fallback.metadata, :split_mismatch, NaN))" *
-                        " is above $(_P_ROUTE_UNMATCHED_MISMATCH); no usable " *
-                        "match. It was the fallback after the two-ray rational " *
-                        "build failed: " * sprint(showerror, error)))
+                off_axis && _p_route_unmatched(fallback) &&
+                    throw(_p_unmatched_error(fallback, error))
                 _replay_logs(p_logs)
                 fallback = _tag_p_build_fallback(
                     fallback, fallback_trigger, sprint(showerror, error))
+                p_original = fallback
                 fallback = _principal_small_frequency_expansion_overlay(
                     fallback, fallback.controls)
                 fallback = _try_p_negative_imaginary_axis_build_consensus(
@@ -3988,6 +4016,7 @@ function _complex_route_impl(
                     fallback, s, l, m, a, omega, branch)
                 fallback = _try_negative_imaginary_axis_side(
                     fallback, s, l, m, a, omega)
+                _check_repaired_p_fallback(fallback, p_original, error)
                 return _apply_exact_pole_normalization(
                     fallback, pole_normalization)
             end
@@ -4447,6 +4476,8 @@ function _complex_gsn_wrapper(route::ComplexRoute)
         propagation_representation=full_mst_backend ? :direct_mst :
             anchor_backend ? :ordinary_taylor : :complex_rational,
         matching_representation=match_policy,
+        match_policy,
+        match_error=_complex_match_error(route),
         control_tolerance=route.plan.controls.tolerance,
         horizon_endpoint_score=_metadata_value(
             route.metadata, :horizon_endpoint_score, missing),
@@ -4533,6 +4564,16 @@ function _complex_gsn_wrapper(route::ComplexRoute)
         getfield(root, :UNIT_GSN_TRANS),
         "ISEM",
     )
+end
+
+# Estimated error of the route's match (larger of the matched incidence and
+# reflection errors), whatever backend supplied the amplitudes; missing when
+# not recorded.
+function _complex_match_error(route::ComplexRoute)
+    errors = (_metadata_value(route.metadata, :incidence_error, missing),
+        _metadata_value(route.metadata, :reflection_error, missing))
+    any(ismissing, errors) && return missing
+    return Float64(max(errors...))
 end
 
 # Certification fields of the GSN metadata (see ISEM.certificate): a second pass stores certified = false, its
