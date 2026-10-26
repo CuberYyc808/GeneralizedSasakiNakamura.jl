@@ -4,16 +4,18 @@ using Test
 const TEST_GROUPS = (
     "api", "homogeneous", "isem", "qnm", "pointparticle_mode", "flux", "regression", "threads",
 )
+# Selected only by name, not by "full" or "quick".
+const OPTIONAL_TEST_GROUPS = ("baseline",)
 
 selection = get(ENV, "GSN_TEST_GROUPS", haskey(ENV, "GSN_TEST_LEVEL") ? "full" : "")
 if isempty(selection)
     println("Set GSN_TEST_GROUPS=quick, full, list, or a comma-separated group list.")
 elseif selection == "list"
-    println(join(TEST_GROUPS, "\n"))
+    println(join((TEST_GROUPS..., OPTIONAL_TEST_GROUPS...), "\n"))
 else
     selected = selection in ("full", "quick") ? TEST_GROUPS :
         Tuple(String.(strip.(split(selection, ','))))
-    all(group -> group in TEST_GROUPS, selected) ||
+    all(group -> group in TEST_GROUPS || group in OPTIONAL_TEST_GROUPS, selected) ||
         throw(ArgumentError("Unknown test selection: $selection"))
     length(unique(selected)) == length(selected) ||
         throw(ArgumentError("Repeated test group: $selection"))
