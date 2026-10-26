@@ -815,9 +815,13 @@ end
 # horizon_order = 160 put the seed at x = 0.56 for (a, omega) = (0.7, 1.4) and Y
 # was off by 1e-9 at r = 4.7 and 6e-7 at r = 50 (2e-11 and 2e-8 with the seed at
 # 0.3), and at the default order Y of (0.7, 2.5) was off by 1e-8 at r <= 12
-# (2e-10). Complex frequencies keep their seeds: capping loses 3e-8 for s = -1,
-# a = 0.99, omega = 0.5 - 0.5i.
-const _HORIZON_SEED_MAX_X = 0.3
+# (2e-10). Near m Omega_H the seed still jumped between about 0.065 and the cap 0.3
+# from one omega to the next: (2, 2), a = 0.99, omega = 0.80 - 0.87 had B_inc / B_trans
+# off by 1e-11 to 1.9e-10 with the seed at 0.3 (1e-12 at 0.065) against a 128-bit
+# reference, a 1.7e-11 Chebyshev tail over 129 points; with the cap at 0.1 the tail is
+# 1.3e-12 and the largest error 2e-11. Complex frequencies keep their seeds: capping
+# loses 3e-8 for s = -1, a = 0.99, omega = 0.5 - 0.5i.
+const _HORIZON_SEED_MAX_X = 0.1
 
 # Seed point for a horizon Frobenius series with exponent mu: start from the
 # radius allowed by the tail and shrink until max(tail, ODE residual, roundoff)
