@@ -257,18 +257,6 @@ function _cached_eccentric_cheby_sample!(cache::EccentricFluxCache, KG_master::D
     end
 end
 
-function _pow2_refinement_levels(start::Int, stop::Int)
-    start <= stop || return Int[]
-    levels = Int[]
-    n = start
-    while true
-        push!(levels, n)
-        n >= stop && break
-        n = min(2n, stop)
-    end
-    return levels
-end
-
 function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::Int)
     _check_mode_geometry(cache, KG_master)
     return get!(cache.samples, K) do
@@ -278,26 +266,6 @@ function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::
             subsample_inclined_sample(KG_master, K)
         end
     end
-end
-
-function _generic_trapezoidal_context(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    KG = kerr_geo_orbit(a, p, e, x)
-    Frequencies = KG["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    ϒr = Frequencies["ϒr"]
-    ϒθ = Frequencies["ϒθ"]
-    ϒφ = Frequencies["ϒϕ"]
-    omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
-    KG_samp = kerr_geo_generic_sample(KG, N_sample, K_sample)
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, omega; lambda = SH.lambda)
-    Ysamp = s == 2 ? y_sample_p2_isem(Ysol, KG_samp) : y_sample_m2_isem(Ysol, KG_samp)
-    SHsamp = swsh_sample(SH, KG_samp)
-    carter_samp = carter_ingredients_sample(KG_samp, a, m, omega)
-    carter_factor = trapezoidal_1d_integral(carter_samp)
-    return (KG = KG, KG_samp = KG_samp, omega = omega, Γ = Γ, ϒθ = ϒθ,
-            Ysol = Ysol, Ysamp = Ysamp, SH = SH, SHsamp = SHsamp,
-            carter_factor = carter_factor)
 end
 
 function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, k::Int, K_interval::Int64, cache = nothing)
@@ -2348,24 +2316,6 @@ function _diff_matrix_arbitrary_nodes(x::AbstractVector{<:Real})
     return D
 end
 
-function _phase_values_from_derivative(x::Vector{Float64}, gprime_vals::Vector{<:Number}, g0::Number, gπ::Number)
-    n = length(x)
-    gp = convert(Vector{ComplexF64}, gprime_vals)
-    g = Vector{ComplexF64}(undef, n)
-    g[1] = ComplexF64(g0)
-    @inbounds for i in 2:n
-        g[i] = g[i - 1] + 0.5 * (gp[i - 1] + gp[i]) * (x[i] - x[i - 1])
-    end
-    drift = g[end] - ComplexF64(gπ)
-    if drift != 0
-        scale = x[end] == x[1] ? 0.0 : inv(x[end] - x[1])
-        @inbounds for i in 1:n
-            g[i] -= drift * (x[i] - x[1]) * scale
-        end
-    end
-    return g
-end
-
 # Piecewise (local) Levin quadrature: the Chebyshev nodes on [0, π] are sorted ascending and split into short
 # overlapping segments, each with its own differentiation matrix; factors cache the QR solve per phase.
 struct Levin1DLocalSegmentPlan
@@ -2497,23 +2447,6 @@ function _levin_1d_local_segment_factor_batch(rhs::Matrix{ComplexF64}, segment::
         end
     end
     return out
-end
-
-function levin_1d_integral_local(f_vals::Vector{<:Number}, gprime_vals::Vector{<:Number}, g0::Number, gπ::Number; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n = length(f_vals)
-    @assert length(gprime_vals) == n "gprime length must match f ($(length(gprime_vals)) ≠ $n)"
-    n <= 2 && return levin_1d_integral(f_vals, gprime_vals, g0, gπ)
-    plan = _levin_1d_local_plan(n, local_order)
-    x = plan.x
-    f = collect(f_vals[plan.perm])
-    gp = collect(gprime_vals[plan.perm])
-    g = _phase_values_from_derivative(x, gp, g0, gπ)
-    total = zero(ComplexF64)
-    for segment in plan.segments
-        idx = segment.idx
-        total += _levin_1d_local_segment(collect(f[idx]), collect(gp[idx]), g[first(idx)], g[last(idx)], collect(x[idx]), segment.D)
-    end
-    return total
 end
 
 function _cheby_phase_nodes_pi(n::Int)
@@ -2688,11 +2621,6 @@ function _levin_1d_integral_local_phase_factored(f_vals::Vector{<:Number}, facto
         end
     end
     return total
-end
-
-function levin_1d_integral_local_phase_values(f_vals::Vector{<:Number}, g_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    factor = _levin_1d_local_phase_factor_from_values(g_vals; local_order = local_order)
-    return _levin_1d_integral_local_phase_factored(f_vals, factor)
 end
 
 function levin_2d_integral(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_0::Number, g1_π::Number, g2_0::Number, g2_π::Number)
