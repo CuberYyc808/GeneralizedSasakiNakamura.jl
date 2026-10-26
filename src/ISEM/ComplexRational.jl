@@ -1349,6 +1349,8 @@ function _select_infinity_path(
     omega,
     match_x,
     settings,
+    ;
+    angle_offset=0.0,
 )
     best = nothing
     path = nothing
@@ -1356,7 +1358,7 @@ function _select_infinity_path(
     for magnitude in _INFINITY_RHO_MAGNITUDES
         path = _integrate_coordinate_path(
             coefficients.params, omega, magnitude; match_x,
-            initial_path=path)
+            initial_path=path, angle_offset)
         candidate = _infinity_candidate!(
             scratch, coefficients, solutions, kinds, path, settings)
         if isfinite(candidate.score) &&
@@ -3046,6 +3048,8 @@ function _solve_at_match(
     branch::Symbol,
     match_rstar,
     settings,
+    ;
+    infinity_angle_offset=0.0,
 )
     params = coefficients.params
     match_x = _match_x_from_rstar(params, match_rstar)
@@ -3063,7 +3067,7 @@ function _solve_at_match(
                 _select_infinity_path(
                     coefficients, (locals.infinity_in, locals.infinity_out),
                     (:infinity_in, :infinity_out), params.omega, match_x,
-                    settings)
+                    settings; angle_offset=infinity_angle_offset)
             catch exception
                 _principal_mano_suzuki_takasugi_axis(params.omega) || rethrow()
                 message = sprint(showerror, exception)
@@ -3089,7 +3093,8 @@ function _solve_at_match(
                     nothing : settings.horizon_target)
             infinity_seed = _select_infinity_path(
                 coefficients, (locals.infinity_out,), (:infinity_out,),
-                params.omega, match_x, settings)
+                params.omega, match_x, settings;
+                angle_offset=infinity_angle_offset)
         end
     end
 
@@ -3496,6 +3501,28 @@ function _junction_search(coefficients, locals, branch, params, settings,
     return nothing
 end
 
+# Infinity rays from the default junction rotated towards the real r* axis by
+# the horizon Stokes angles, tried when no junction gives a two-ray path (near
+# extremal spin a ray close to the imaginary r* axis can encircle a zero of eta
+# near x = 1 from every junction). The smallest rotation that matches is used.
+# The later consensus, balance and plateau retries re-solve without the
+# rotation and fail, so a rotated match skips that refinement.
+function _infinity_rotation_search(coefficients, locals, branch, params,
+        settings, match_rstar)
+    side = imag(_two_ray_direction(params.omega)) >= 0 ? -1.0 : 1.0
+    for step in 0:_HORIZON_STOKES_MAX_ANGLE_STEPS
+        angle_offset = side * (_HORIZON_STOKES_INITIAL_ANGLE +
+            step * _HORIZON_STOKES_ANGLE_STEP)
+        try
+            return _solve_at_match(coefficients, locals, branch, match_rstar,
+                settings; infinity_angle_offset=angle_offset)
+        catch exception
+            exception isa ErrorException || rethrow()
+        end
+    end
+    return nothing
+end
+
 # Largest burial of each term along the path of a match: the matching basis is
 # propagated back along the target's path (the infinity pair over the infinity
 # then the horizon path for IN, the horizon pair over the horizon then the
@@ -3704,6 +3731,7 @@ function complex_rational_build(
         coefficients, branch, order)
 
     junction_search = false
+    infinity_rotation = false
     initial = try
         _solve_at_match(
             coefficients, locals, branch, initial_match_rstar, settings)
@@ -3712,11 +3740,19 @@ function complex_rational_build(
             sprint(showerror, exception)) || rethrow()
         searched = _junction_search(
             coefficients, locals, branch, params, settings, initial_match_x)
-        searched === nothing && rethrow()
-        junction_search = true
+        if searched === nothing
+            searched = _infinity_rotation_search(coefficients, locals,
+                branch, params, settings, initial_match_rstar)
+            searched === nothing && rethrow()
+            infinity_rotation = true
+        else
+            junction_search = true
+        end
         searched
     end
-    if xm === nothing && !_certified_pair(initial, settings)
+    # The rotation search runs only after the junction search found nothing.
+    if xm === nothing && !infinity_rotation &&
+            !_certified_pair(initial, settings)
         searched = _junction_search(
             coefficients, locals, branch, params, settings, initial_match_x)
         if searched !== nothing
@@ -3725,7 +3761,8 @@ function complex_rational_build(
         end
     end
     selected = initial
-    match_policy = junction_search ? :junction_search :
+    match_policy = infinity_rotation ? :infinity_rotation :
+        junction_search ? :junction_search :
         xm !== nothing ? :explicit_x :
         auto_near_real_match ? :near_real_x07 : :rstar_zero
     retry_seconds = 0.0
