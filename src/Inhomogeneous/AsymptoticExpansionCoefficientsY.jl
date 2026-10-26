@@ -48,8 +48,7 @@ end
 # The complete Bell polynomial B_n is needed to compute the coefficients a_n and d_n
 
 function Complete_Bell_Poly(x_vec::Vector{}; data_type=_DEFAULTDATATYPE)
-    # Compute the complete Bell polynomial B_n(x) for a vector of coefficients x_vec
-    x_vec = ComplexF64.(x_vec)  # Ensure the vector is of type ComplexF64
+    x_vec = ComplexF64.(x_vec)
     n = length(x_vec)
     B_n = data_type(0)
     #=  Use the recurrence relation defined by
@@ -61,8 +60,7 @@ function Complete_Bell_Poly(x_vec::Vector{}; data_type=_DEFAULTDATATYPE)
         return data_type(1)  # B_0(x) = 1.0 + 0.0im
     else
         for i in 0:n-1
-            x_vec_reduced = x_vec[1:n-1-i] # Reduce the vector by removing the last i elements
-            # Compute the binomial coefficient
+            x_vec_reduced = x_vec[1:n-1-i]
             B_n += binomial(n-1, i) * x_vec[i+1] * Complete_Bell_Poly(x_vec_reduced)
         end
         return B_n
