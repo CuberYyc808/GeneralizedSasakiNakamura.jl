@@ -633,6 +633,69 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# Horizon resonances omega_n = (a m - i n kappa) / (2 (1 + kappa)) (omega_n in Float64) against 256-bit references
+# of the arbitrary-precision route (H-005, checked against 384 bits; X at unit GSN transmission, derivatives in r*).
+# UP at n = 1 near the horizon (measured <= 6e-10; (2,1,0.99999) further out is off by 1e-6 at r+ + 0.1 and 7e-4 at
+# r+ + 1, broken). IN at omega_1 (1 + eps): the r-dependence agrees to 8e-15; the normalization carries the binary64
+# error of the detuning delta (~1e-16 absolute, |delta| = 4.2e-12 and 4.2e-8): measured 2.5e-5 and 2.8e-9. Gap-band
+# Teukolsky B_ref/B_inc measured <= 8e-14. At omega_n itself |delta| ~ 5e-16 and the solution is not determined in
+# binary64 (no test).
+# ---------------------------------------------------------------------------------------------------
+@testset "horizon resonances against 256-bit references" begin
+    omega_n(m, a, n) = (a * m - im * n * sqrt((1 - a) * (1 + a))) / (2 * (1 + sqrt((1 - a) * (1 + a))))
+    up = (
+        (2, 0.9999, (0.01, -3.63276799022453778 + 0.581354362689100790im, 0.0103786686794093471 - 0.0346618119101616759im),
+            (0.1, 1.03790456729279401 - 0.887198734643123266im, 0.0471659364413868909 + 0.150918819314937391im),
+            (1.0, 0.615119634553412342 + 0.290615087180781273im, -0.126746257139075530 + 0.437195749372669029im)),
+        (1, 0.99999, (0.01, -12545.2162770539107 - 2195.13401149766332im, 212.904931723327991 + 47.1131922620613537im),
+            (0.1, -115.039306695595386 - 0.285291438081607562im, 11.6668394715227741 + 0.542632802834547623im),
+            (1.0, -2.59508793512665914 + 0.448210782573839617im, 0.511362702501531485 - 0.191933132476044377im)),
+    )
+    for (m, a, points...) in up
+        X = GSN_radial(-2, 2, m, a, omega_n(m, a, 1), UP)
+        for (d, xref, dxref) in points
+            x, dx = X.GSN_solution(rstar_from_r(a, 1 + sqrt((1 - a) * (1 + a)) + d))
+            if m == 1 && d > 0.01
+                @test_broken abs(x - xref) <= 1e-9 * abs(xref)
+            else
+                @test abs(x - xref) <= 1e-9 * abs(xref) && abs(dx - dxref) <= 1e-9 * abs(dxref)
+            end
+        end
+    end
+    near = (
+        (1e-12, 1e-4, (-6.91207029975580597e10 - 9.23327503856882668e9im, -1.02998012188346367e10 - 1.65700335324964666e9im,
+            -1.98836751040750824e11 - 4.91328669470406342e10im, -2.36991703094223137e10 - 1.31259253428315964e10im)),
+        (1e-8, 1e-8, (-6.91343406433954742e6 - 9.23766734126806608e5im, -1.03018521791032865e6 - 1.65771464513704646e5im,
+            -1.98875406954218373e7 - 4.91500872451052349e6im, -2.37035214540378656e6 - 1.31294563406361174e6im)),
+    )
+    for (e, tolerance, refs) in near
+        X = GSN_radial(-2, 2, 2, 0.9, omega_n(2, 0.9, 1) * (1 + e), IN)
+        values = [v for d in (0.01, 0.1) for v in X.GSN_solution(rstar_from_r(0.9, 1 + sqrt(0.19) + d))[1:2]]
+        c = values ./ collect(refs)
+        @test abs(c[1] - 1) <= tolerance
+        @test maximum(abs.(c ./ c[1] .- 1)) <= 1e-13
+    end
+    for (di, ref) in ((1e-11, -0.595824479030130583 - 3.42453348165743154im),
+            (2e-11, -0.595824478442460670 - 3.42453348105229560im), (1e-9, -0.595824420850812775 - 3.42453342174899866im))
+        R = Teukolsky_radial(-2, 2, 2, 0.9, omega_n(2, 0.9, 1) + di * im, IN)
+        @test abs(R.reflection_amplitude / R.incidence_amplitude - ref) <= 1e-12 * abs(ref)
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
+# Near-extremal horizon series factor sum c_n x^n (c_0 = 1), (-2,2,2), a = 1 - 1e-8, omega = 0.4, IN, against the
+# 128-bit arbitrary-precision series (H-002, a = 1 - 10^-8 exactly; 192-bit and order 300/400 checks <= 3e-34; the
+# binary64 a differs by 5e-17, which moves the factor by 1e-14). Measured 8.9e-13, 2.3e-12, 4.4e-12.
+# ---------------------------------------------------------------------------------------------------
+@testset "near-extremal horizon series factor (a = 1 - 1e-8)" begin
+    solution = D.LocalSolutionAtZero.zero_local_solution(D.gsn_coefficients(D.gsn_parameters(-2, 2, 2, 1 - 1e-8, 0.4)), :in, 100)
+    for (x, ref) in ((0.02, 0.999874037706577568 - 0.0161719554464388147im),
+            (0.05, 0.999169493890692650 - 0.0410504713902758653im), (0.1, 0.996471163091532608 - 0.0842473609603206497im))
+        @test abs(evalpoly(x, solution.coefficients) - ref) <= 1e-11 * abs(ref)
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # Angular eigenvalue input error. The SWSH eigenvalue carries a few ulp (8e-16 absolute at a = 0.7, l = 2,
 # omega = 1); the tests fix that floor so that a regression in the angular input is visible.
 # ---------------------------------------------------------------------------------------------------
