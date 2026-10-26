@@ -1496,15 +1496,6 @@ function _with_reflection(route::Route, reflection)
     return typeof(route)(fields...)
 end
 
-# A route of the same mode rebuilt from other ODE coefficients (the Y re-solve) takes the complex-path
-# reflection of `source` instead of tracing the path again: the path value depends on the mode alone, and
-# the GSN reflection scales with the solution scale as the transmission does.
-function _carry_complex_path_reflection(route::Route, source::Route)
-    (source.branch === route.branch && _complex_path_switch(source)) || return _complex_path_reflection(route)
-    _complex_path_switch(route) || return route
-    return _with_reflection(route, source.reflection * (route.solution_scale / source.solution_scale))
-end
-
 function _complex_path_reflection(route::Route)
     _complex_path_switch(route) || return route
     p = route.params

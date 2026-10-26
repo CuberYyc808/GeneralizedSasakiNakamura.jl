@@ -12,11 +12,8 @@ using ..Matching:
     evaluate_route,
     route_state
 using ..Matching: route_plan_of, route_truncations
-import ..Matching
 using ..Iteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
-using ..Matching: _mano_suzuki_takasugi_evaluation_region, match_route
-using ..CoefficientTables: gsn_coefficients
-using ..OrdinaryPointExpansion: DIRECT_AB_KEY
+using ..Matching: _mano_suzuki_takasugi_evaluation_region
 
 include("NearHorizonTeukolsky.jl")
 using .NearHorizonTeukolsky: teukolsky_taylor_chain, teukolsky_taylor_state
@@ -1326,7 +1323,6 @@ end
 # near-horizon solution or a conversion that loses that much just beyond
 # r_+ + kappa (see y_radial_function).
 const NEAR_HORIZON_CHECK_TOL = 1e-7
-const NEAR_HORIZON_REFINE_TOL = 1e-9
 const NEAR_HORIZON_SERIES_CANCELLATION_TOL = 1e-8
 
 # Teukolsky Taylor chain near the horizon (G-005).
@@ -1522,48 +1518,13 @@ function _two_wave_y_solution(route::Route, amps, conversion)
 end
 
 # Wrap a route as a YRadialFunction (s = -2 IN or s = +2 UP), with the GSN
-# amplitudes converted by the Teukolsky factors.
-#
-# Real-frequency s = -2 IN routes whose near-horizon mismatch exceeds
-# NEAR_HORIZON_REFINE_TOL are solved again with the horizon-side ODE
-# coefficients from the closed-form potentials (DIRECT_AB_KEY), and the solution
-# with the smaller mismatch is kept; a mismatch above NEAR_HORIZON_CHECK_TOL
-# warns. Where Y = C11 X + C12 X' cancels strongly the X error of the tables
-# shows up in Y: (l, a, omega) = (3, 0.9, 2.35) had 2e-7 at r_+ + 0.7 (1e-8
-# after the re-solve), (3, 0.95, 2.3) 2e-8 (4e-10). The re-solve is an optional refinement of an already
-# certified solution: a certificate or precision failure in it keeps the first solution (whose mismatch still
-# warns), while the errors of RESOLVE_PROGRAMMING_ERRORS point to a defect and are rethrown.
-const RESOLVE_PROGRAMMING_ERRORS = Union{InterruptException, MethodError, BoundsError, UndefVarError,
-    DimensionMismatch, AssertionError, TypeError, InexactError, KeyError, FieldError, StackOverflowError,
-    OutOfMemoryError}
-
+# amplitudes converted by the Teukolsky factors; a near-horizon mismatch above
+# NEAR_HORIZON_CHECK_TOL warns.
 function y_radial_function(route::Route)
     _check_y_branch(route)
     amps = _route_y_amplitudes(route)
     ysoln, mismatch = _route_y_solution_checked(route, amps)
     p = route.params
-    # With the Teukolsky chain the near-horizon Y no longer takes X, and the mismatch measures the converted Y beyond the
-    # matching point, which the re-solve (now the default closed-form coefficients) would not change.
-    chain = ysoln isa NearHorizonY && ysoln.kind === :chain
-    if !chain && mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
-        refined = try
-            task_local_storage(DIRECT_AB_KEY, true) do
-                # The complex-path reflection of the first route, which this rebuild bypasses.
-                Matching._carry_complex_path_reflection(match_route(gsn_coefficients(p; controls=route.controls),
-                    route.branch; controls=route.controls), route)
-            end
-        catch err
-            err isa RESOLVE_PROGRAMMING_ERRORS && rethrow()
-            nothing
-        end
-        if refined isa Route
-            refined_amps = _route_y_amplitudes(refined)
-            refined_ysoln, refined_mismatch = _route_y_solution_checked(refined, refined_amps)
-            if refined_mismatch < mismatch
-                route, amps, ysoln, mismatch = refined, refined_amps, refined_ysoln, refined_mismatch
-            end
-        end
-    end
     _warn_near_horizon_mismatch(mismatch, p.s, p.m, p.a, p.omega)
     return _y_radial_function(route, amps, ysoln)
 end

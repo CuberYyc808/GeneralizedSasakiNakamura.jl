@@ -1096,14 +1096,12 @@ end
     end
 end
 
-# The re-solve threshold (RadialFunctions.NEAR_HORIZON_REFINE_TOL = 1e-9). (s, l, m, a, omega) = (-2, 2, -1, 0.5, 3.95)
-# had a first-solve mismatch of 2.7e-9 with the ordinary-point tables in x in [0.1, 0.7) and needed the re-solve
-# (3.1e-11 after it). Real binary64 points there now take the closed-form A and B by default, which is what the
-# re-solve switches on (DIRECT_AB_KEY), so the first solve is already below the threshold (7.7e-11) and for such
-# points a re-solve would compute the same route again; it remains for other element types.
-@testset "Y re-solve threshold" begin
+# (s, l, m, a, omega) = (-2, 2, -1, 0.5, 3.95) had a near-horizon mismatch of 2.7e-9 with the ordinary-point tables
+# in x in [0.1, 0.7) and needed a closed-form re-solve (3.1e-11 after it). Real binary64 points there now take the
+# closed-form A and B by default and the near-horizon Y the Teukolsky chain, so the single solve is below 1e-9 (the
+# re-solve was removed as unreachable).
+@testset "Y near-horizon mismatch without re-solve" begin
     RF = D.RadialFunctions
-    @test RF.NEAR_HORIZON_REFINE_TOL == 1e-9
     route = D.radial_route(-2, 2, -1, 0.5, 3.95, :IN)
     first, mismatch = RF._route_y_solution_checked(route, RF._route_y_amplitudes(route))
     @test mismatch < 1e-9
