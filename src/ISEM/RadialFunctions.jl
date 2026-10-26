@@ -18,6 +18,9 @@ using ..Matching: _mano_suzuki_takasugi_evaluation_region, match_route
 using ..CoefficientTables: gsn_coefficients
 using ..OrdinaryPointExpansion: DIRECT_AB_KEY
 
+include("NearHorizonTeukolsky.jl")
+using .NearHorizonTeukolsky: teukolsky_taylor_chain, teukolsky_taylor_state
+
 export compact_kappa, compact_r_plus, compact_r_minus
 export y_from_x, x_from_y
 export r_from_x, x_from_r
@@ -1276,7 +1279,17 @@ function route_y_solution(route::Route; amplitudes=nothing)
         p.lambda,
         amps.trans,
     )
-    return first(near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans))
+    return first(near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans;
+        teukolsky_until=_route_match_r(route), xsoln=gsn_solution_rstar(route)))
+end
+
+# r of the matching point of a real-frequency route (the converted Y uses horizon_in below it).
+function _route_match_r(route::Route)
+    p = route.params
+    (p.omega isa Real && p.a isa Float64) || return nothing
+    kappa = sqrt(1 - p.a^2)
+    x = route.match_x
+    return (1 + kappa - (1 - kappa) * x) / (1 - x)
 end
 
 function _route_y_solution_checked(route::Route, amps)
@@ -1289,7 +1302,8 @@ function _route_y_solution_checked(route::Route, amps)
             p.s, p.m, p.a, p.omega, p.lambda, r),
         gsn_solution_rstar(route),
         p.s, p.m, p.a, p.omega, p.lambda, amps.trans)
-    return near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans)
+    return near_horizon_y(ysoln, p.s, p.m, p.a, p.omega, p.lambda, amps.trans;
+        teukolsky_until=_route_match_r(route), xsoln=gsn_solution_rstar(route))
 end
 
 # Y of s = -2 IN near the horizon from the Teukolsky horizon series,
@@ -1315,7 +1329,40 @@ const NEAR_HORIZON_CHECK_TOL = 1e-7
 const NEAR_HORIZON_REFINE_TOL = 1e-9
 const NEAR_HORIZON_SERIES_CANCELLATION_TOL = 1e-8
 
-function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
+# Teukolsky Taylor chain near the horizon (G-005).
+# What: when `teukolsky_until` (the r of the route's match_x) is given, Y of s = -2 IN at real omega on (r_start, r_check)
+#   comes from Taylor series of the Teukolsky equation itself (NearHorizonTeukolsky), started from the horizon series at
+#   r_start = r_+ + f kappa; below r_start the series as before, from r_check on the converted Y. r_check lies a little
+#   beyond the matching point (x = match_x + 0.05), where the converted Y takes the infinity bases.
+# Why: between the series and the matching point the converted Y = C11 X + C12 X' takes the X of the horizon_in basis,
+#   and the conversion cancels by 1e4 - 4e4: (s, l, m, a, omega) = (-2, 3, 2, 0.9, 2.37) was off by 8e-7 at r = 2 - 3.4
+#   with X off by 4e-10, (-2, 2, 1, 0.9, 1.2595) by 1e-7, (-2, 3, 3, 0.99, 1.6987) by 3e-8 (H-008: 3e-14 - 1e-12 with
+#   the chain). f is the largest of NEAR_HORIZON_TEUKOLSKY_START where the series truncates (SERIES_TAIL_TOL) and cancels
+#   by at most NEAR_HORIZON_TEUKOLSKY_START_CANCELLATION / eps, so that the start value is good to that level and a
+#   change of f between neighbouring omega leaves only a small step: with the gate at 1e-12 the chains from f = 1/2 and
+#   1/4 differed by 4e-11 at the switch of (2, -2, 0.99, 4.65); the gate is 1e-13.
+# Self-check: the chain against the converted Y at r_check, where the two hand over; the difference is the returned
+#   mismatch, warned about above NEAR_HORIZON_CHECK_TOL; the Y is returned either way.
+# When it falls back: only for structural reasons, recorded in the returned NearHorizonY (`kind`): no start point
+#   passes the series test (:no_start), or the chain cannot keep its step-control invariant (:chain_failed). Then Y is
+#   the series below r_+ + kappa and the converted Y above, as without `teukolsky_until`.
+const NEAR_HORIZON_TEUKOLSKY_START = (0.5, 0.25, 0.125, 0.0625, 0.03125)
+const NEAR_HORIZON_TEUKOLSKY_START_CANCELLATION = 1e-13
+const SERIES_TAIL_TOL = 1e-14
+
+# Near-horizon Y with how it was built: kind is :chain, :no_start or :chain_failed; f_start, r_start, r_check and
+# mismatch describe the chain (NaN when there is none).
+struct NearHorizonY{F} <: Function
+    f::F
+    kind::Symbol
+    f_start::Float64
+    r_start::Float64
+    r_check::Float64
+    mismatch::Float64
+end
+(y::NearHorizonY)(r) = y.f(r)
+
+function near_horizon_y(ysoln, s, m, a, omega, lambda, trans; teukolsky_until=nothing, xsoln=nothing)
     (s == -2 && omega isa Real && !iszero(omega) && trans isa Number && isfinite(trans) &&
         !iszero(trans)) || return ysoln, 0.0
     kappa = sqrt(1 - Float64(a)^2)
@@ -1331,28 +1378,81 @@ function near_horizon_y(ysoln, s, m, a, omega, lambda, trans)
         e = trans * exp(-im * phase)
         Y = e * Rin / r^2
         dY = e * (dRin / r^2 - 2Rin / r^3 - im * K / delta * Rin / r^2)
-        return Y, dY, tail, eps(Float64) * cancellation <= NEAR_HORIZON_SERIES_CANCELLATION_TOL
+        return Y, dY, tail, eps(Float64) * cancellation <= NEAR_HORIZON_SERIES_CANCELLATION_TOL, Rin, dRin, cancellation
+    end
+    # X at r for the third entry of the returned tuple, without forming the converted Y again when xsoln is given
+    x_at(r) = xsoln === nothing ? ysoln(r)[3] : xsoln(rstar_from_r(a, r))[1]
+    kind = :not_requested
+    if teukolsky_until isa Float64
+        teukolsky = _near_horizon_teukolsky_y(ysoln, s, m, a, omega, lambda, trans, series_y, x_at, teukolsky_until)
+        teukolsky isa NearHorizonY && return teukolsky, teukolsky.mismatch
+        kind = teukolsky
     end
     r_max = rplus + kappa
     mismatch = 0.0
     for f in (0.5, 1.0)
         S, _, tail, usable = series_y(rplus + f * kappa)
-        tail <= 1e-14 || return ysoln, 0.0
+        tail <= SERIES_TAIL_TOL || return _fallback_y(ysoln, kind), 0.0
         usable || continue
         mismatch = max(mismatch, abs(ysoln(rplus + f * kappa)[1] / S - 1))
     end
-    return (r -> begin
+    return _fallback_y(r -> begin
         rplus < r < r_max || return ysoln(r)
         Y, dY, tail, usable = series_y(r)
-        (tail <= 1e-14 && usable) || return ysoln(r)
-        return (Y, dY, ysoln(r)[3], zero(abs(Y)))
-    end), mismatch
+        (tail <= SERIES_TAIL_TOL && usable) || return ysoln(r)
+        # (Y, Y', X, error estimate): no error estimate here, as for the converted Y
+        return (Y, dY, x_at(r), 0.0)
+    end, kind), mismatch
+end
+
+_fallback_y(f, kind) = kind === :not_requested ? f : NearHorizonY(f, kind, NaN, NaN, NaN, NaN)
+
+# Y from the Teukolsky Taylor chain (see above), or the reason (:no_start, :chain_failed) it is not used.
+# The chain is built once and captured read only, so evaluation is thread safe.
+function _near_horizon_teukolsky_y(ysoln, s, m, a, omega, lambda, trans, series_y, x_at, r_stop::Float64)
+    kappa = sqrt(1 - Float64(a)^2)
+    rplus = 1 + kappa
+    rminus = 1 - kappa
+    f_start = 0.0; r_start = 0.0; Rin = 0.0im; dRin = 0.0im
+    for f in NEAR_HORIZON_TEUKOLSKY_START
+        _, _, tail, _, R, dR, cancellation = series_y(rplus + f * kappa)
+        if tail <= SERIES_TAIL_TOL && eps(Float64) * cancellation <= NEAR_HORIZON_TEUKOLSKY_START_CANCELLATION
+            f_start, r_start, Rin, dRin = f, rplus + f * kappa, R, dR
+            break
+        end
+    end
+    r_stop > r_start > rplus || return :no_start
+    x_check = min((r_stop - rplus) / (r_stop - rminus) + 0.05, 0.95)
+    r_check = (rplus - rminus * x_check) / (1 - x_check)
+    chain = teukolsky_taylor_chain(s, m, Float64(a), Float64(omega), lambda, r_start, Rin, dRin, r_check)
+    chain === nothing && return :chain_failed
+    function chain_y(r)
+        R, dR = teukolsky_taylor_state(chain, r)
+        phase = omega * rstar_from_r(a, r) - a * m / (rplus - rminus) * log((r - rplus) / (r - rminus))
+        delta = r^2 - 2r + a^2
+        K = (r^2 + a^2) * omega - a * m
+        e = trans * exp(-im * phase)
+        return e * R / r^2, e * (dR / r^2 - 2R / r^3 - im * K / delta * R / r^2)
+    end
+    mismatch = abs(chain_y(r_check)[1] / ysoln(r_check)[1] - 1)
+    # The chain serves up to r_check: at the matching point itself the converted Y still takes horizon_in (x <= match_x).
+    f = r -> begin
+        rplus < r < r_check || return ysoln(r)
+        if r <= r_start
+            Y, dY, tail, usable = series_y(r)
+            (tail <= SERIES_TAIL_TOL && usable) && return (Y, dY, x_at(r), 0.0)
+            return ysoln(r)
+        end
+        Y, dY = chain_y(r)
+        return (Y, dY, x_at(r), 0.0)    # (Y, Y', X, error estimate): no error estimate here, as for the converted Y
+    end
+    return NearHorizonY(f, :chain, f_start, r_start, r_check, mismatch)
 end
 
 _warn_near_horizon_mismatch(mismatch, s, m, a, omega) =
-    mismatch <= NEAR_HORIZON_CHECK_TOL || @warn "Y_radial: Y converted from X " *
-        "differs from the Teukolsky horizon series by $(mismatch) near the " *
-        "horizon; Y may be inaccurate." s m a omega maxlog = 20
+    mismatch <= NEAR_HORIZON_CHECK_TOL || @warn "Y_radial: near-horizon self-check: the Teukolsky " *
+        "series or Taylor chain and the Y converted from X differ by $(mismatch); " *
+        "Y may be inaccurate." s m a omega maxlog = 20
 
 # Y of s = -2 IN at real omega > 0 from the two Teukolsky series at infinity, Y = e^{-i psi} (B_inc R_in + B_ref R_out)
 # / r^2, wherever their truncation stays below the conversion's own error, eps (2 omega r)^4 (at least
@@ -1414,6 +1514,9 @@ function _two_wave_y_solution(route::Route, amps, conversion)
         end
     end
     isfinite(r_two) || return conversion
+    # Below the end of the near-horizon Teukolsky chain the chain is the more accurate Y (the two-wave series carries the
+    # error of the matched B_ref: 9e-7 at r = 2 - 3.4 for (l, m, a, omega) = (3, 2, 0.9, 2.37)).
+    conversion isa NearHorizonY && conversion.kind === :chain && (r_two = max(r_two, conversion.r_check))
     return TwoWaveYSolution(a, p.m, w, 1 + kappa, 1 - kappa, ComplexF64(amps.incidence), ComplexF64(amps.reflection),
         cin, cout, r_two, conversion, gsn_solution_rstar(route))
 end
@@ -1439,7 +1542,10 @@ function y_radial_function(route::Route)
     amps = _route_y_amplitudes(route)
     ysoln, mismatch = _route_y_solution_checked(route, amps)
     p = route.params
-    if mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
+    # With the Teukolsky chain the near-horizon Y no longer takes X, and the mismatch measures the converted Y beyond the
+    # matching point, which the re-solve (now the default closed-form coefficients) would not change.
+    chain = ysoln isa NearHorizonY && ysoln.kind === :chain
+    if !chain && mismatch > NEAR_HORIZON_REFINE_TOL && route.branch == :IN && p.omega isa Real
         refined = try
             task_local_storage(DIRECT_AB_KEY, true) do
                 # The complex-path reflection of the first route, which this rebuild bypasses.
