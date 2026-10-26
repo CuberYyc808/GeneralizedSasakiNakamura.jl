@@ -1462,12 +1462,16 @@ end
 # incidence| of the route is small; at high l and low omega the Teukolsky ratio falls below COMPLEX_PATH_RATIO
 # through the conversion factors alone while the GSN ratio is ~1 (2% of the radial solves of the generic flux
 # (0.9, 6, 0.7, 0.5) to l = 7, median omega 0.11). There the matched reflection is good to 1.3e-12 (12 BigFloat
-# checks, against 1e-14 from the path) and the flux is bitwise the same, so the path is taken only where the GSN
-# ratio is also below COMPLEX_PATH_GSN_RATIO; the 60 references above it are good to 3.8e-11 from the matching.
+# checks, against 1e-14 from the path) and the flux is bitwise the same. A fixed gate GSN ratio < 1e-3 kept those
+# but missed (-2, 2, 2, 0.8, 0.8925) IN (H-012): GSN ratio 2.8e-3, B_ref off by 8.3e-10 (Y at r = 50 likewise).
+# The path is therefore taken where the route's own estimate of the reflection error (amplitude_errors: the local
+# basis error, ~6e-13, over the term ratio at the match) exceeds COMPLEX_PATH_LOSS_TARGET; at GSN ratio ~1 the
+# estimate is ~6e-13 and the matched value is kept, and every route of the old gate stays on the path (estimate
+# >= 8e-10 there on a 360-mode sample, s = -2, l = 2 - 10, a = 0 - 0.99, omega = 0.05 - 4, which adds 6 routes).
 const COMPLEX_PATH_RATIO = 1e-6
 const COMPLEX_PATH_WIDE_RATIO = 1e-2
 const COMPLEX_PATH_MAX_HORIZON_EXPONENT = 10
-const COMPLEX_PATH_GSN_RATIO = 1e-3
+const COMPLEX_PATH_LOSS_TARGET = 1e-10
 
 # Whether the route's reflection is taken from the complex path (see _complex_path_reflection).
 function _complex_path_switch(route::Route)
@@ -1483,7 +1487,7 @@ function _complex_path_switch(route::Route)
     incidence = incidence_factor * route.incidence
     reflection = reflection_factor * route.reflection
     return isfinite(incidence) && _complex_path_ratio_small(abs(reflection / incidence), m, a, w) &&
-        abs(route.reflection) < COMPLEX_PATH_GSN_RATIO * abs(route.incidence)
+        amplitude_errors(route)[2] > COMPLEX_PATH_LOSS_TARGET
 end
 
 # u = r_+ k / kappa with k = omega - m Omega_H (Inf at a = 1 for k > 0; the sign of k otherwise).

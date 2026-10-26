@@ -585,14 +585,14 @@ end
     end
 end
 
-# The path is taken only where the matching cancels (GSN ratio below COMPLEX_PATH_GSN_RATIO): at high l and low
-# omega the Teukolsky ratio is below COMPLEX_PATH_RATIO through the conversion factors alone, the GSN ratio is ~1 and
-# the matched reflection is kept (good to 1.2e-12 against 256 bits at (-2, 6, 0, 0.9, 0.06)).
+# The path is taken only where the matching cancels (estimated reflection loss above COMPLEX_PATH_LOSS_TARGET): at
+# high l and low omega the Teukolsky ratio is below COMPLEX_PATH_RATIO through the conversion factors alone, the GSN
+# ratio is ~1 and the matched reflection is kept (good to 1.2e-12 against 256 bits at (-2, 6, 0, 0.9, 0.06)).
 @testset "complex path: not taken where the matching does not cancel" begin
     route = D.Matching.match_route(D.gsn_coefficients(D.gsn_parameters(-2, 6, 0, 0.9, 0.06)), :IN)
     R = Teukolsky_radial(-2, 6, 0, 0.9, 0.06, IN)
     @test abs(R.reflection_amplitude / R.incidence_amplitude) < D.Matching.COMPLEX_PATH_RATIO
-    @test abs(route.reflection / route.incidence) > D.Matching.COMPLEX_PATH_GSN_RATIO
+    @test D.Matching.amplitude_errors(route)[2] < D.Matching.COMPLEX_PATH_LOSS_TARGET
     @test !D.Matching._complex_path_switch(route)
     @test D.Matching._complex_path_reflection(route) === route
 end
