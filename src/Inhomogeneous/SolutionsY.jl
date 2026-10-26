@@ -77,7 +77,6 @@ function Y_solution_in_m2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     odeprob = ODEProblem(GSN_source_eqn_m2, u0, rsspan, p)
     odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol)
 
-    # Get boundary values
     Y_in = odesoln(rsin)[1]
     Yp_in = odesoln(rsin)[2] * (rin^2 + a^2) / (rin^2 - 2 * rin+ a^2)
     Y0_in = Y_ingoing_hor_func(rin)
@@ -85,7 +84,6 @@ function Y_solution_in_m2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     y1 = Yp_in - Yp0_in
     y0 = Y_in - Y0_in - (Yp_in - Yp0_in) * rin
 
-    # Define final callable function
     function Y_inf(rs)
         r = r_from_rstar(a, rs)
         if rs > rsout
@@ -133,7 +131,6 @@ function Y_solution_in_p2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     odeprob = ODEProblem(GSN_source_eqn_p2, u0, rsspan, p)
     odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol)
 
-    # Get boundary values
     Y_in = odesoln(rsin)[1]
     Yp_in = odesoln(rsin)[2] * (rin^2 + a^2) / (rin^2 - 2 * rin+ a^2)
     Y0_in = Y_ingoing_hor_func(rin)
@@ -141,7 +138,6 @@ function Y_solution_in_p2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     y1 = Yp_in - Yp0_in
     y0 = Y_in - Y0_in - (Yp_in - Yp0_in) * rin
 
-    # Define final callable function
     function Y_inf(rs)
         r = r_from_rstar(a, rs)
         if rs > rsout
@@ -190,7 +186,6 @@ function Y_solution_up_m2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     odeprob = ODEProblem(GSN_source_eqn_m2, u0, rsspan, p)
     odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol)
 
-    # Get boundary values
     Y_up = odesoln(rsin)[1]
     Yp_up = odesoln(rsin)[2] * (rin^2 + a^2) / (rin^2 - 2 * rin + a^2)
     Y0_up = Cinc * Y_outgoing_hor_func(rin) + Cref * Y_ingoing_hor_func(rin)
@@ -198,7 +193,6 @@ function Y_solution_up_m2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     y1 = Yp_up - Yp0_up
     y0 = Y_up - Y0_up - (Yp_up - Yp0_up) * rin
 
-    # Define final callable function
     function Y_inf(rs)
         r = r_from_rstar(a, rs)
         if rs > rsout
@@ -247,7 +241,6 @@ function Y_solution_up_p2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     odeprob = ODEProblem(GSN_source_eqn_p2, u0, rsspan, p)
     odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol)
 
-    # Get boundary values
     Y_up = odesoln(rsin)[1]
     Yp_up = odesoln(rsin)[2] * (rin^2 + a^2) / (rin^2 - 2 * rin + a^2)
     Y0_up = Cinc * Y_outgoing_hor_func(rin) + Cref * Y_ingoing_hor_func(rin)
@@ -255,7 +248,6 @@ function Y_solution_up_p2(l::Int, m::Int, a, omega, rsin, rsout, order_inf, orde
     y1 = Yp_up - Yp0_up
     y0 = Y_up - Y0_up - (Yp_up - Yp0_up) * rin
 
-    # Define final callable function
     function Y_inf(rs)
         r = r_from_rstar(a, rs)
         if rs > rsout
