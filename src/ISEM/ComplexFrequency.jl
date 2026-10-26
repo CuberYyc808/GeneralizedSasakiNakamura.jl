@@ -1079,7 +1079,7 @@ function _complex_rational_route(
     small_frequency_expansion=nothing,
     large_frequency_expansion=nothing,
     return_retry_cache::Bool=false,
-    relaxed_rotation::Bool=false,
+    defer_relaxed_rotation::Bool=false,
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
     branch_symbol = _normalize_branch(branch)
@@ -1119,8 +1119,10 @@ function _complex_rational_route(
         N=rational_order,
         tol=requested.tolerance,
         xm=requested.xm,
-        relaxed_rotation,
+        defer_relaxed_rotation,
     )
+    deferred_error = build.deferred_rational_error
+    return_retry_cache || deferred_error === nothing || throw(deferred_error)
     params = complex_parameters(
         s, l, m, af, omegac, build.params.lambda)
     factors = _amplitude_factors(params, branch_symbol)
@@ -1227,7 +1229,8 @@ function _complex_rational_route(
         teukolsky_incidence,
         teukolsky_reflection,
     )
-    return return_retry_cache ? (; route, retry_cache=build.retry_cache) : route
+    return return_retry_cache ?
+        (; route, retry_cache=build.retry_cache, deferred_error) : route
 end
 
 # Trigger and acceptance thresholds of the consensus retries and fallbacks below.
@@ -3846,20 +3849,15 @@ function _check_repaired_p_fallback(route, original, rational_error)
     return route
 end
 
-# Rational build with the relaxed infinity rotation bound, after the default
-# build and the P fallback (`p_route`, or `nothing` for NaN amplitudes) both
-# failed; near-extremal spin can send every infinity ray from every real
-# junction past the inner horizon to |x| ~ 1e32, where the ordinary P/Q
-# coefficients overflow. Used when its amplitude error is below the P split
-# mismatch; `nothing` otherwise.
-function _relaxed_rotation_build(s, l, m, a, omega, branch, tol, p_route)
-    build = try
-        _complex_rational_route(s, l, m, a, omega, branch; tol,
-            return_retry_cache=true, relaxed_rotation=true)
-    catch exception
-        exception isa ErrorException || rethrow()
-        return nothing
-    end
+# Deferred rational build (`build`, or `nothing`) whose infinity rotation match
+# only the relaxed bound accepts, used after the default build failed and the
+# P fallback (`p_route`, or `nothing` for NaN amplitudes) has no usable match;
+# near-extremal spin can send every infinity ray from every real junction past
+# the inner horizon to |x| ~ 1e32, where the ordinary P/Q coefficients
+# overflow. Used when its amplitude error is below the P split mismatch;
+# `nothing` otherwise.
+function _relaxed_rotation_build(build, p_route)
+    build === nothing && return nothing
     metadata = build.route.metadata
     _metadata_value(metadata, :match_policy, missing) ==
         :infinity_rotation_relaxed || return nothing
@@ -3948,6 +3946,10 @@ function _complex_route_impl(
         end
     end
     if backend == :direct_rational
+        # A build whose match only the relaxed rotation bound accepts comes
+        # back with the default build's exception; it is used only after the
+        # P fallback below has no usable match.
+        build_error = nothing
         rational_build = try
             _complex_rational_route(
                 s, l, m, a, omega, branch;
@@ -3961,14 +3963,26 @@ function _complex_route_impl(
                 small_frequency_expansion,
                 large_frequency_expansion,
                 return_retry_cache=true,
+                defer_relaxed_rotation=!pinned_controls,
             )
-        catch error
-            fallback_trigger = _rational_build_fallback_trigger(error)
+        catch exception
+            build_error = exception
+            nothing
+        end
+        deferred_build = nothing
+        if rational_build !== nothing &&
+                rational_build.deferred_error !== nothing
+            deferred_build = rational_build
+            build_error = rational_build.deferred_error
+            rational_build = nothing
+        end
+        if build_error !== nothing
+            fallback_trigger = _rational_build_fallback_trigger(build_error)
             principal_fallback = !pinned_controls &&
                 _principal_small_frequency_expansion_axis(ComplexF64(omega))
             if pinned_controls ||
                     (fallback_trigger === nothing && !principal_fallback)
-                rethrow()
+                throw(build_error)
             end
             fallback_trigger === nothing &&
                 (fallback_trigger = :principal_mst_evaluator_fallback)
@@ -3985,28 +3999,26 @@ function _complex_route_impl(
                 p_failure = p_error
                 nothing
             end
-            # P route without a usable match: retry the rational build with
-            # the relaxed infinity rotation bound. The match then flows into
-            # the rational path below.
+            # P route without a usable match: take the deferred relaxed
+            # rotation build, which then flows into the rational path below.
             off_axis = !_principal_small_frequency_expansion_axis(
                 ComplexF64(omega))
             relaxed = off_axis && _p_route_unmatched(fallback) ?
-                _relaxed_rotation_build(s, l, m, a, omega, branch, tol,
-                    fallback) : nothing
+                _relaxed_rotation_build(deferred_build, fallback) : nothing
             if relaxed !== nothing
-                relaxed
+                rational_build = relaxed
             else
                 p_failure === nothing || (_replay_logs(p_logs); throw(
                     ErrorException(p_failure.msg * " It was the fallback " *
                         "after the two-ray rational build failed: " *
-                        sprint(showerror, error))))
+                        sprint(showerror, build_error))))
                 # Off the negative imaginary axis (whose P consensus below can
                 # still repair the match) an unmatched P result is an error.
                 off_axis && _p_route_unmatched(fallback) &&
-                    throw(_p_unmatched_error(fallback, error))
+                    throw(_p_unmatched_error(fallback, build_error))
                 _replay_logs(p_logs)
                 fallback = _tag_p_build_fallback(
-                    fallback, fallback_trigger, sprint(showerror, error))
+                    fallback, fallback_trigger, sprint(showerror, build_error))
                 p_original = fallback
                 fallback = _principal_small_frequency_expansion_overlay(
                     fallback, fallback.controls)
@@ -4016,7 +4028,7 @@ function _complex_route_impl(
                     fallback, s, l, m, a, omega, branch)
                 fallback = _try_negative_imaginary_axis_side(
                     fallback, s, l, m, a, omega)
-                _check_repaired_p_fallback(fallback, p_original, error)
+                _check_repaired_p_fallback(fallback, p_original, build_error)
                 return _apply_exact_pole_normalization(
                     fallback, pole_normalization)
             end
@@ -4579,7 +4591,21 @@ end
 # Certification fields of the GSN metadata (see ISEM.certificate): a second pass stores certified = false, its
 # estimate and stages in the route metadata; a strict route's estimate is its larger amplitude error (NaN when the
 # estimate cannot be formed).
+# The solution of an infinity rotation match (default or relaxed bound) depends
+# on that match, so its reported error is at least the match error.
 function _complex_route_certificate(route::ComplexRoute)
+    certificate = _complex_amplitude_certificate(route)
+    policy = _metadata_value(route.plan.matching, :policy,
+        _metadata_value(route.metadata, :match_policy, :unknown))
+    policy in (:infinity_rotation, :infinity_rotation_relaxed) ||
+        return certificate
+    match_error = _complex_match_error(route)
+    match_error === missing && return certificate
+    return merge(certificate, (estimated_error=max(
+        certificate.estimated_error, match_error),))
+end
+
+function _complex_amplitude_certificate(route::ComplexRoute)
     _metadata_value(route.metadata, :certified, true) || return (certified=false,
         estimated_error=Float64(_metadata_value(route.metadata, :estimated_error, NaN)),
         uncertified_stages=_metadata_value(route.metadata, :uncertified_stages, ()))

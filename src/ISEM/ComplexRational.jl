@@ -3719,8 +3719,10 @@ horizon and infinity endpoint series are seeded on r* rays on which the local
 phase stays real, propagated to a real junction and matched there. Without
 `xm` the junction starts at r* = 0 (x = 0.7 near the real axis) and may move
 through the junction search, condition and consensus retries and burial
-balancing. `relaxed_rotation=true` relaxes the bound of the infinity rotation
-search. Returns the parameters, controls, coefficients, real-axis
+balancing. With `defer_relaxed_rotation=true` the infinity rotation search uses
+the relaxed bound, a match only that bound accepts is still built, and `deferred_rational_error` carries the exception the
+default build would have thrown (the caller tries its fallback first);
+otherwise it is `nothing`. Returns the parameters, controls, coefficients, real-axis
 evaluator, unit-transmission amplitudes, metadata and a retry cache.
 """
 function complex_rational_build(
@@ -3735,7 +3737,7 @@ function complex_rational_build(
     N=nothing,
     tol=nothing,
     xm=nothing,
-    relaxed_rotation::Bool=false,
+    defer_relaxed_rotation::Bool=false,
 )
     branch in (:IN, :UP) ||
         throw(ArgumentError("complex rational branch must be :IN or :UP."))
@@ -3768,6 +3770,8 @@ function complex_rational_build(
 
     junction_search = false
     infinity_rotation = false
+    relaxed_match = false
+    deferred_rational_error = nothing
     initial = try
         _solve_at_match(
             coefficients, locals, branch, initial_match_rstar, settings)
@@ -3779,11 +3783,17 @@ function complex_rational_build(
         if searched === nothing
             searched = _infinity_rotation_search(coefficients, locals,
                 branch, params, settings, initial_match_rstar;
-                error_max=relaxed_rotation ?
+                error_max=defer_relaxed_rotation ?
                     _INFINITY_ROTATION_RELAXED_ERROR_MAX :
                     _INFINITY_ROTATION_FALLBACK_ERROR_MAX)
             searched === nothing && rethrow()
             infinity_rotation = true
+            # The default bound picks the same candidate whenever it accepts
+            # one, so a match beyond it is one only the relaxed bound accepts.
+            relaxed_match = !_accepted_retry_match(searched, settings) &&
+                max(searched.incidence_error, searched.reflection_error) >
+                    _INFINITY_ROTATION_FALLBACK_ERROR_MAX
+            relaxed_match && (deferred_rational_error = exception)
         else
             junction_search = true
         end
@@ -3800,7 +3810,7 @@ function complex_rational_build(
         end
     end
     selected = initial
-    match_policy = infinity_rotation ? (relaxed_rotation ?
+    match_policy = infinity_rotation ? (relaxed_match ?
         :infinity_rotation_relaxed : :infinity_rotation) :
         junction_search ? :junction_search :
         xm !== nothing ? :explicit_x :
@@ -3971,6 +3981,7 @@ function complex_rational_build(
             initial,
             matching_candidates=matching_consensus.candidate_records,
         ),
+        deferred_rational_error,
     )
 end
 
