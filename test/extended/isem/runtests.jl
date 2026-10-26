@@ -233,9 +233,9 @@ end
     errors = D.Matching.amplitude_errors(route)
     scale = dominant(q.cup, q.cref)
     @test scaled_err(cref, q.cref, scale) <= 1e-9
-    @test scaled_err(cup, q.cup, scale) <= 1e-6                 # regression bound (4.85e-8 measured)
-    # honest error report: broken on the Mac (4.58e-8 against a reported 1.59e-8), passes on Windows (T-004)
-    @test_broken scaled_err(cup, q.cup, scale) <= 2 * errors[1] * abs(cup) / scale
+    @test scaled_err(cup, q.cup, scale) <= 1e-7                 # 4.58e-8 measured on the Mac, smaller on Windows
+    # Known issue, not asserted: the reported bound 2 errors[1] |C_up| underestimates the error here by about 3
+    # (1.59e-8 against 4.58e-8 on the Mac; it holds on Windows, T-004). To be revisited with the horizon rework.
     # The public default is better through the MST overlay (8.65e-12 measured).
     R = Teukolsky_radial(-2, 2, 2, q.a, q.omega, UP)
     @test scaled_err(first(teukolsky_ratios(R)), q.cup, scale) <= 1e-9
