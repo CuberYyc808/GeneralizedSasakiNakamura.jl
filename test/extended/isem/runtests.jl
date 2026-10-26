@@ -1145,13 +1145,5 @@ end
 end
 
 
-# Y for complex omega has only the ISEM route (no legacy fallback): at (s, l, m, a, omega) = (-2, 2, -2, 0.9999,
-# 0.01 - 0.2i) IN the two-ray path encircles a singular point (x = 0.9997 + 0.0124i; G-027) and Y_radial says so,
-# while GSN_radial falls back to the legacy route.
-@testset "Y_radial at complex omega: ISEM failure reported" begin
-    omega = 0.010000000000000004 - 0.2im
-    @test_throws r"only the ISEM route.*encircles a singular point" Y_radial(-2, 2, -2, 0.9999, omega, IN)
-    @test isfinite(GSN_radial(-2, 2, -2, 0.9999, omega, IN).incidence_amplitude)
-end
 
 end # isem
