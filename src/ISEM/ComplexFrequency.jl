@@ -168,6 +168,8 @@ const _RATIONAL_INFINITY_STEP_ERROR =
     "infinity path propagation failed:"
 const _RATIONAL_INFINITY_CERTIFICATE_ERROR =
     "no certified two-ray infinity path;"
+const _P_ROUTE_NAN_AMPLITUDE_ERROR =
+    "P-equation route returned NaN Teukolsky amplitudes"
 
 # Symbol naming the rational build failure that allows the P-equation
 # fallback, or `nothing` for any other error.
@@ -538,6 +540,11 @@ function _complex_p_route(
         ComplexF64(teukolsky.transmission_amplitude)
     raw_teukolsky_incidence = ComplexF64(teukolsky.incidence_amplitude)
     raw_teukolsky_reflection = ComplexF64(teukolsky.reflection_amplitude)
+    any(z -> isnan(real(z)) || isnan(imag(z)), (raw_teukolsky_transmission,
+        raw_teukolsky_incidence, raw_teukolsky_reflection)) && error(
+        _P_ROUTE_NAN_AMPLITUDE_ERROR * " (transmission=" *
+        "$(raw_teukolsky_transmission), incidence=$(raw_teukolsky_incidence)" *
+        ", reflection=$(raw_teukolsky_reflection)).")
 
     raw_gsn_transmission =
         raw_teukolsky_transmission / factors.transmission
@@ -3871,8 +3878,15 @@ function _complex_route_impl(
             end
             fallback_trigger === nothing &&
                 (fallback_trigger = :principal_mst_evaluator_fallback)
-            fallback = _complex_p_route(
-                s, l, m, a, omega, branch; tol)
+            fallback = try
+                _complex_p_route(s, l, m, a, omega, branch; tol)
+            catch p_error
+                p_error isa ErrorException && startswith(
+                    p_error.msg, _P_ROUTE_NAN_AMPLITUDE_ERROR) || rethrow()
+                throw(ErrorException(p_error.msg * " It was the fallback " *
+                    "after the two-ray rational build failed: " *
+                    sprint(showerror, error)))
+            end
             fallback = _tag_p_build_fallback(
                 fallback, fallback_trigger, sprint(showerror, error))
             fallback = _principal_small_frequency_expansion_overlay(

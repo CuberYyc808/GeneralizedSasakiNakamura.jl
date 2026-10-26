@@ -78,6 +78,8 @@ const _HORIZON_STOKES_KAPPA_MAX = 0.05
 const _HORIZON_STOKES_INITIAL_ANGLE = pi / 36
 const _HORIZON_STOKES_ANGLE_STEP = pi / 144
 const _HORIZON_STOKES_MAX_ANGLE_STEPS = 4
+const _INFINITY_ROTATION_MAX_ANGLE_STEPS = 12
+const _INFINITY_ROTATION_FALLBACK_ERROR_MAX = 1.0e-8
 const _HORIZON_STOKES_AGREEMENT_MAX = 2.0e-11
 const _HORIZON_STOKES_SEPARATION_MIN = 1.0e-10
 const _HORIZON_STOKES_SEPARATION_RATIO_MIN = 8.0
@@ -3490,38 +3492,64 @@ function _junction_search(coefficients, locals, branch, params, settings,
             exception isa ErrorException || rethrow()
             continue
         end
-        # A condition number below one means the matching diagnostics
-        # underflowed; such a match is not certified.
-        iszero(candidate.infinity_horizon_winding) &&
-            candidate.matching_condition >= 1 &&
-            eps(Float64) * candidate.matching_condition <=
-                settings.infinity_target &&
-            _certified_pair(candidate, settings) && return candidate
+        _accepted_retry_match(candidate, settings) && return candidate
     end
     return nothing
 end
 
-# Infinity rays from the default junction rotated towards the real r* axis by
-# the horizon Stokes angles, tried when no junction gives a two-ray path (near
-# extremal spin a ray close to the imaginary r* axis can encircle a zero of eta
-# near x = 1 from every junction). The smallest rotation that matches is used.
-# The later consensus, balance and plateau retries re-solve without the
-# rotation and fail, so a rotated match skips that refinement.
+# A retried match free of horizon winding whose conditioning keeps the route's
+# accuracy target and whose pair is certified. A condition number below one
+# means the matching diagnostics underflowed; such a match is not certified.
+@inline function _accepted_retry_match(candidate, settings)
+    return iszero(candidate.infinity_horizon_winding) &&
+        candidate.matching_condition >= 1 &&
+        eps(Float64) * candidate.matching_condition <=
+            settings.infinity_target &&
+        _certified_pair(candidate, settings)
+end
+
+# Infinity rays from the default junction rotated towards the real r* axis in
+# horizon Stokes angle steps up to pi/9, tried when no junction gives a two-ray
+# path (near extremal spin a ray close to the imaginary r* axis can encircle a
+# zero of eta near x = 1 or run into the inner horizon from every junction).
+# The smallest rotation whose match passes the junction search checks is used;
+# without one, the unwound match of smallest amplitude error when that error is
+# at most _INFINITY_ROTATION_FALLBACK_ERROR_MAX (a pair check just above the
+# target can still give accurate amplitudes; uncertified pairs give garbage
+# with large reported errors, which must fail instead). The later
+# consensus, balance and plateau retries re-solve without the rotation, so a
+# rotated match gets only the refinements that succeed without it.
 function _infinity_rotation_search(coefficients, locals, branch, params,
         settings, match_rstar)
     side = imag(_two_ray_direction(params.omega)) >= 0 ? -1.0 : 1.0
-    for step in 0:_HORIZON_STOKES_MAX_ANGLE_STEPS
+    best = nothing
+    for step in 0:_INFINITY_ROTATION_MAX_ANGLE_STEPS
         angle_offset = side * (_HORIZON_STOKES_INITIAL_ANGLE +
             step * _HORIZON_STOKES_ANGLE_STEP)
-        try
-            return _solve_at_match(coefficients, locals, branch, match_rstar,
+        candidate = try
+            _solve_at_match(coefficients, locals, branch, match_rstar,
                 settings; infinity_angle_offset=angle_offset)
         catch exception
             exception isa ErrorException || rethrow()
+            continue
         end
+        _accepted_retry_match(candidate, settings) && return candidate
+        error_bound = max(candidate.incidence_error,
+            candidate.reflection_error)
+        iszero(candidate.infinity_horizon_winding) &&
+            error_bound <= _INFINITY_ROTATION_FALLBACK_ERROR_MAX &&
+            (best === nothing || error_bound < max(best.incidence_error,
+                best.reflection_error)) && (best = candidate)
     end
-    return nothing
+    return best
 end
+
+# Default-junction failures after which the junction and rotation searches run.
+@inline _junction_retry_error(message) =
+    occursin("two-ray coordinate path", message) ||
+    occursin("noninvertible q0 in ISEM GSN ordinary P/Q recurrence",
+        message) ||
+    startswith(message, "infinity path propagation failed:")
 
 # Largest burial of each term along the path of a match: the matching basis is
 # propagated back along the target's path (the infinity pair over the infinity
@@ -3736,7 +3764,7 @@ function complex_rational_build(
         _solve_at_match(
             coefficients, locals, branch, initial_match_rstar, settings)
     catch exception
-        xm === nothing && occursin("two-ray coordinate path",
+        xm === nothing && _junction_retry_error(
             sprint(showerror, exception)) || rethrow()
         searched = _junction_search(
             coefficients, locals, branch, params, settings, initial_match_x)
