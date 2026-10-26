@@ -203,7 +203,9 @@ function _extremal_default_bounds(s, l, m, a, omega)
         lambda = _swsh_eigenvalue(s, l, m, a * omega)
         h = ExtremalRadial.extremal_horizon_start(s, m, a, omega, lambda)
         rsin = h > 0 ? Coordinates.rstar_from_r(a, 1 + h) : -400.0
-        return (rsin, 160.0)
+        # bounds in the working type (BigFloat inputs stay in BigFloat)
+        R = typeof(float(real(omega)))
+        return (R(rsin), R(160))
     end
     damping = abs(imag(omega))
     damping == 0 && return (-80.0, 160.0)

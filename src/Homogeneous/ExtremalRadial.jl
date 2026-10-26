@@ -311,7 +311,9 @@ function extremal_gsn_horizon_state(
     series = extremal_gsn_horizon_coefficients(s, m, a, omega, lambda, branch; order)
     # The expansion is asymptotic (x_n ~ n!/(2 alpha)^n): summed up to its smallest term, whose size is the
     # truncation error.
-    terms = abs.(series.coefficients) .* abs(h) .^ (0:order)
+    # The coefficients overflow at high order for small detuning (n!/(2 alpha)^n); only finite ones are summed.
+    finite_terms = something(findfirst(!isfinite, series.coefficients), order + 2) - 1
+    terms = abs.(view(series.coefficients, 1:finite_terms)) .* abs(h) .^ (0:(finite_terms - 1))
     last_term = argmin(terms)
     value, derivative = _poly_pair(view(series.coefficients, 1:last_term), h)
     prefactor = exp(series.alpha / h) * h^series.gamma
@@ -354,7 +356,7 @@ function _infinity_pair(s, m, a, omega, lambda, r, rs, order, branch)
     derivative = InitialConditions.dfansatz_dr(coefficient, omega, r; order)
     sign = branch === :outgoing ? one(omega) : -one(omega)
     phase = exp(im * sign * omega * rs)
-    q = Kerr.Delta(a, r) / (r^2 + a^2)
+    q = _extremal_q(r)
     return SVector(
         phase * value,
         phase * (q * derivative + im * sign * omega * value),
@@ -406,8 +408,7 @@ function (solution::ExtremalSeriesSolution)(rs)
             value, derivative = _evaluate_polynomial(
                 patch.coefficients, r - patch.center)
             if solution.representation === :gsn
-                q = Kerr.Delta(solution.a, r) / (r^2 + solution.a^2)
-                return SVector(value, q * derivative)
+                return SVector(value, _extremal_q(r) * derivative)
             end
             return solution.transform(r, SVector(value, derivative))
         end
@@ -471,7 +472,7 @@ function _series_propagate(A, B, a, rstart, rend, state;
             end
             step /= 2
         end
-        accepted || error("extremal series patch failed its truncation gate")
+        accepted || error("extremal series patch failed its truncation gate at r = $r (h = $(r - one(r))), last step $step")
         rnext = r + step
         push!(patches, ExtremalSeriesPatch(
             min(r, rnext), max(r, rnext), r, coefficients))
@@ -481,6 +482,29 @@ function _series_propagate(A, B, a, rstart, rend, state;
     return ExtremalSeriesSolution(a, patches, representation, transform)
 end
 
+# Coefficients of the GSN equation in r at |a| = 1, X'' + A X' + B X = 0 with A = F / q - q' / q, B = U / q^2,
+# q = Delta / rho, in the factored form of the horizon expansion: h = r - 1 (exact near the horizon), Delta = h^2,
+# F = h^2 V (V = sF_delta with Delta = 1), U = -(K / rho)^2 + h^2 W (W = sW / rho^2), K = delta + 2 omega h + omega h^2.
+# Delta = r^2 - 2r + 1 cancels as h -> 0 and put a relative error of about eps / h^2 into A and B.
+# q = Delta / rho at |a| = 1 with Delta = (r - 1)^2.
+_extremal_q(r) = (r - 1)^2 / (r^2 + 1)
+
+function _extremal_gsn_a(s, m, a, omega, lambda, r)
+    h = r - 1
+    rho = r^2 + 1
+    V = Potentials.sF_delta(s, m, a, omega, lambda, r, one(h))
+    return rho * V - 2 * (rho - r * h) / (rho * h)
+end
+
+function _extremal_gsn_b(s, m, a, omega, lambda, r)
+    h = r - 1
+    K = (2omega - a * m) + h * (2omega + omega * h)
+    return (h^2 * Potentials.sW(s, m, a, omega, lambda, r) - K^2) / h^4
+end
+
+_extremal_gsn_ab(s, m, a, omega, lambda) = (r -> _extremal_gsn_a(s, m, a, omega, lambda, r),
+    r -> _extremal_gsn_b(s, m, a, omega, lambda, r))
+
 # Series solution of the GSN equation in r (:gsn) or of the Teukolsky equation (:teukolsky, converted
 # back to GSN), started from the horizon state (IN) or the infinity state (UP).
 function _series_solution(s, m, a, omega, lambda, rsin, rsout,
@@ -488,12 +512,9 @@ function _series_solution(s, m, a, omega, lambda, rsin, rsout,
         order, tolerance)
     rin = Coordinates.r_from_rstar(a, rsin)
     rout = Coordinates.r_from_rstar(a, rsout)
-    q(r) = Kerr.Delta(a, r) / (r^2 + a^2)
-    dq(r) = ((2r - 2) * (r^2 + a^2) - 2r * Kerr.Delta(a, r)) /
-        (r^2 + a^2)^2
+    q(r) = _extremal_q(r)
     if representation === :gsn
-        A = r -> Potentials.sF(s, m, a, omega, lambda, r) / q(r) - dq(r) / q(r)
-        B = r -> Potentials.sU(s, m, a, omega, lambda, r) / q(r)^2
+        A, B = _extremal_gsn_ab(s, m, a, omega, lambda)
         initial = boundary === :IN ?
             SVector(horizon_state[1], horizon_state[2] / q(rin)) :
             SVector(infinity_state[1], infinity_state[2] / q(rout))
@@ -805,8 +826,7 @@ function extremal_complex_path_amplitudes(s::Int, m::Int, a, omega, lambda;
     rturn = 1 + oftype(real(alpha), 0.3) * cis(theta / 2)
     rmidc = complex(oftype(real(alpha), rmid))
     rend = _balanced_infinity_endpoint(path_omega, rmidc, rout - rmid)
-    q(r) = Kerr.Delta(a, r) / (r^2 + a^2)
-    dq(r) = ((2r - 2) * (r^2 + a^2) - 2r * Kerr.Delta(a, r)) / (r^2 + a^2)^2
+    q(r) = _extremal_q(r)
     # everything below as a function of omega on the fixed path, with lambda carried to
     # first order along omega
     lam(w) = dlambda === nothing ? lambda : lambda + (w - omega) * dlambda
@@ -817,8 +837,8 @@ function extremal_complex_path_amplitudes(s::Int, m::Int, a, omega, lambda;
             s, m, a, w, lam(w), rin, :ingoing; order=horizon_order, normalization)
         return SVector(horizon[1], horizon[2] / q(rin))
     end
-    Aw(w, r) = Potentials.sF(s, m, a, w, lam(w), r) / q(r) - dq(r) / q(r)
-    Bw(w, r) = Potentials.sU(s, m, a, w, lam(w), r) / q(r)^2
+    Aw(w, r) = _extremal_gsn_a(s, m, a, w, lam(w), r)
+    Bw(w, r) = _extremal_gsn_b(s, m, a, w, lam(w), r)
     A = r -> Aw(omega, r)
     B = r -> Bw(omega, r)
     nodes = [rin, rturn, rmidc, rend]
