@@ -768,7 +768,6 @@ function check_XinXup_sanity(Xin, Xup; tolerance=1e-6)
     is satisfied within a specified tolerance
     =#
 
-    # Check if the modes are the same
     if Xin.mode != Xup.mode
         throw(ArgumentError("The modes of Xin and Xup are different"))
     end
@@ -779,7 +778,6 @@ function check_XinXup_sanity(Xin, Xup; tolerance=1e-6)
     eta_at_rplus = eta(Xin.mode.s, Xin.mode.m, Xin.mode.a, Xin.mode.omega, Xin.mode.lambda, r_plus(Xin.mode.a))
     expected_value = (p*c0)/(Xin.mode.omega*eta_at_rplus)
 
-    # Calculate the actual value
     actual_value = Xin.incidence_amplitude/Xup.incidence_amplitude
 
     if abs(actual_value - expected_value) > tolerance
