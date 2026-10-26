@@ -17,7 +17,7 @@ export ordinary_ab_series!, ordinary_ab_series
 export ordinary_scaled_y_ab_series!
 export shifted_ab!, shifted_infinity_ab!
 export ordinary_point_coeffs!
-export DIRECT_AB_KEY, direct_ab_series!, direct_ab_value
+export direct_ab_series!, direct_ab_value
 export horizon_closed_form_ab_series!
 export endpoint_power_lookup
 export poly_value, poly_pair, poly_triple
@@ -555,9 +555,7 @@ const HORIZON_SHIFT_MAX_X = 0.1
 # Real binary64 points between HORIZON_SHIFT_MAX_X and DIRECT_AB_MAX_X take A and B from direct_ab_series!:
 # there the tables put an error of about 1e-10 into B_inc / B_trans of (2, 2) at a = 0.95, omega = 0.74 - 0.81
 # (near m Omega_H), which scattered between neighbouring omega by 4e-12 (Chebyshev tail over 129 points; 4e-13
-# with the closed form, 3e-12 largest error against a 128-bit reference). DIRECT_AB_KEY (set by the Y self-check
-# re-solve) takes them for every element type.
-const DIRECT_AB_KEY = :GSN_ISEM_DIRECT_AB
+# with the closed form, 3e-12 largest error against a 128-bit reference).
 const DIRECT_AB_MAX_X = 0.7
 
 # r as a truncated series with its powers r^2 ... r^n computed once: the closed-form potentials take
@@ -702,12 +700,11 @@ end
 # the closed-form potentials: horizon_closed_form_ab_series! (horizon coordinate, factored Delta) below
 # HORIZON_SHIFT_MAX_X and direct_ab_series! above. Otherwise: the shift of the horizon rational functions when
 # `metadata.horizon_shift` is set or x0 is a real point below HORIZON_SHIFT_MAX_X, and the shift is accepted; the
-# closed form for real x0 in [HORIZON_SHIFT_MAX_X, DIRECT_AB_MAX_X) when DIRECT_AB_KEY is set; the ordinary-point
-# tables. Complex omega takes the horizon closed form below HORIZON_SHIFT_MAX_X only with `closed_form_march`
-# (near-extremal marches, Iteration). (Below 0.1 the shift instead of the closed form left (2, 2, 0.8, 0.8925) Y off by 3.7e-9 at r = 20 - 50
-# and B_inc / B_trans of (2, 2), a = 0.99, omega = 0.80 - 0.87 off by up to 2.1e-11 with a 1.5e-12 Chebyshev tail
-# over 129 points; 9.9e-12 and 2.5e-13 with the closed form. A horizon-coordinate closed form up to 0.7 put
-# 2e-9 into a = 0.95, omega = 0.74 - 0.81.)
+# ordinary-point tables. Complex omega takes the horizon closed form below HORIZON_SHIFT_MAX_X only with
+# `closed_form_march` (near-extremal marches, Iteration). (Below 0.1 the shift instead of the closed form left
+# (2, 2, 0.8, 0.8925) Y off by 3.7e-9 at r = 20 - 50 and B_inc / B_trans of (2, 2), a = 0.99, omega = 0.80 - 0.87
+# off by up to 2.1e-11 with a 1.5e-12 Chebyshev tail over 129 points; 9.9e-12 and 2.5e-13 with the closed form.
+# A horizon-coordinate closed form up to 0.7 put 2e-9 into a = 0.95, omega = 0.74 - 0.81.)
 function ordinary_ab_series!(
     a_out::AbstractVector{<:Complex},
     b_out::AbstractVector{<:Complex},
@@ -723,8 +720,7 @@ function ordinary_ab_series!(
         return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
-            coefficients.params.omega isa Real &&
-            (eltype(a_out) === ComplexF64 || get(task_local_storage(), DIRECT_AB_KEY, false))
+            coefficients.params.omega isa Real && eltype(a_out) === ComplexF64
         return direct_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
     # The binary64 shift needs binary64 buffers (_shift_source converts to ComplexF64).
