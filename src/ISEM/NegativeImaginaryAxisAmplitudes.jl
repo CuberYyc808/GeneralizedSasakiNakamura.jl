@@ -39,6 +39,9 @@ const _MAX_ABS_IMAG_OMEGA = 2.2
 const _NEGATIVE_IMAGINARY_AXIS_LATERAL_REAL_RATIO_MAX = 1.0e-6
 const _STATE_ANCHOR_X = 0.5
 const _STATE_ANCHOR_MAX_ERROR = 1.0e-10
+# Probe points between the anchor and the original junction where the error
+# estimates of the MST-anchored and the original UP evaluator are compared.
+const _STATE_ANCHOR_SWITCH_PROBES = (0.55, 0.6, 0.65, 0.7, 0.75, 0.8)
 const _REAL_AXIS_ANCHOR_MIN_DEPARTURE = 1.0e-8
 const _STATE_ANCHOR_SUM_TOLERANCE = 1.0e-11
 const _STATE_ANCHOR_RELAXED_TOLERANCE = 1.0e-9
@@ -102,6 +105,64 @@ function _rational_core(evaluator::ScaledEvaluator)
 end
 
 @inline _rational_core(evaluator) = nothing
+
+# UP state evaluator that takes x <= switch_x from the MST-anchored evaluator
+# (walking out from the anchor) and x > switch_x from the original two-ray
+# evaluator: outward from x = _STATE_ANCHOR_X the UP solution is subdominant,
+# so the anchor's error grows there while the original junction stays accurate.
+struct SplitAnchorEvaluator{I,O,P}
+    inner::I
+    outer::O
+    switch_x::Float64
+    params::P
+end
+
+@inline _split_inner(evaluator::SplitAnchorEvaluator, r::Real) =
+    ComplexRational._compact_x(evaluator.params, Float64(r)) <= evaluator.switch_x
+
+function ComplexFrequency._state_at_r(evaluator::SplitAnchorEvaluator, r::Real)
+    return ComplexFrequency._state_at_r(
+        _split_inner(evaluator, r) ? evaluator.inner : evaluator.outer, r)
+end
+
+function (evaluator::SplitAnchorEvaluator)(rstar::Real)
+    r = ComplexRational.r_from_rstar(evaluator.params.a, Float64(rstar))
+    return (_split_inner(evaluator, r) ? evaluator.inner : evaluator.outer)(rstar)
+end
+
+function (evaluator::SplitAnchorEvaluator)(rstars::AbstractVector{<:Real})
+    a = evaluator.params.a
+    inner = [_split_inner(evaluator, ComplexRational.r_from_rstar(a, Float64(rstar)))
+        for rstar in rstars]
+    X = Vector{ComplexF64}(undef, length(rstars))
+    dX = similar(X)
+    error = Vector{Float64}(undef, length(rstars))
+    for (part, mask) in ((evaluator.inner, inner), (evaluator.outer, .!inner))
+        any(mask) || continue
+        values = part(rstars[mask])
+        X[mask] .= values[1]
+        dX[mask] .= values[2]
+        error[mask] .= values[3]
+    end
+    return X, dX, error
+end
+
+# Last probe x below the original junction where the anchored evaluator's error
+# estimate is at most the original one (_STATE_ANCHOR_X when none is).
+function _anchor_switch_x(anchored, original)
+    switch_x = _STATE_ANCHOR_X
+    for x in _STATE_ANCHOR_SWITCH_PROBES
+        x < original.match_x || break
+        estimate(evaluator) = try
+            ComplexRational._state_x(evaluator, x).error
+        catch
+            Inf
+        end
+        estimate(anchored) <= estimate(original) || break
+        switch_x = x
+    end
+    return switch_x
+end
 
 @inline function _pair_error(first, second)
     scale = max(
@@ -949,14 +1010,20 @@ function _state_anchor(
         _STATE_ANCHOR_X,
         ComplexRationalState(anchor.X, anchor.dXdx),
     )
+    switch_x = evaluator.match_x > _STATE_ANCHOR_X ?
+        _anchor_switch_x(anchored, evaluator) : 1.0
     return (
-        evaluator=anchored,
+        evaluator=switch_x < 1 ? SplitAnchorEvaluator(
+            anchored, evaluator, switch_x, evaluator.params) : anchored,
         metadata=(;
             mst_state_anchor_status=:replaced,
             mst_state_anchor_source=source,
             mst_state_anchor_x=_STATE_ANCHOR_X,
             mst_state_anchor_error=anchor.estimated_relerr,
             mst_state_anchor_disagreement=disagreement,
+            # x <= switch_x: walked from the MST anchor at mst_state_anchor_x;
+            # x > switch_x: the original evaluator matched at match_x.
+            mst_state_anchor_switch_x=switch_x,
         ),
     )
 end

@@ -635,9 +635,10 @@ end
 # ---------------------------------------------------------------------------------------------------
 # Horizon resonances omega_n = (a m - i n kappa) / (2 (1 + kappa)) (omega_n in Float64) against 256-bit references
 # of the arbitrary-precision route (H-005, checked against 384 bits; X at unit GSN transmission, derivatives in r*).
-# UP at n = 1 near the horizon (measured <= 6e-10; (2,1,0.99999) further out is off by 1e-6 at r+ + 0.1 and 7e-4 at
-# r+ + 1, broken). IN at omega_1 (1 + eps): the r-dependence agrees to 8e-15; the normalization carries the binary64
-# error of the detuning delta (~1e-16 absolute, |delta| = 4.2e-12 and 4.2e-8): measured 2.5e-5 and 2.8e-9. Gap-band
+# UP at n = 1 (measured <= 6e-10; (2,1,0.99999) at r+ + 0.1 and r+ + 1 was off by 1e-6 and 7e-4 when the whole
+# outer side was walked from the MST anchor at x = 0.5, now 2.5e-13 and 2e-10 with the split anchor evaluator).
+# IN at omega_1 (1 + eps): the r-dependence agrees to 8e-15; the normalization carries the binary64 error of the
+# detuning delta (~1e-16 absolute, |delta| = 4.2e-12 and 4.2e-8): measured 2.5e-5 and 2.8e-9. Gap-band
 # Teukolsky B_ref/B_inc measured <= 8e-14. At omega_n itself |delta| ~ 5e-16 and the solution is not determined in
 # binary64 (no test).
 # ---------------------------------------------------------------------------------------------------
@@ -655,11 +656,7 @@ end
         X = GSN_radial(-2, 2, m, a, omega_n(m, a, 1), UP)
         for (d, xref, dxref) in points
             x, dx = X.GSN_solution(rstar_from_r(a, 1 + sqrt((1 - a) * (1 + a)) + d))
-            if m == 1 && d > 0.01
-                @test_broken abs(x - xref) <= 1e-9 * abs(xref)
-            else
-                @test abs(x - xref) <= 1e-9 * abs(xref) && abs(dx - dxref) <= 1e-9 * abs(dxref)
-            end
+            @test abs(x - xref) <= 1e-9 * abs(xref) && abs(dx - dxref) <= 1e-9 * abs(dxref)
         end
     end
     near = (
