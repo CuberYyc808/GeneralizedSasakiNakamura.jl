@@ -6664,9 +6664,9 @@ function _mano_suzuki_takasugi_nu_offset(
             if candidate.residual <= 32tol && abs(cos(2pi * candidate.nu) - T) <= branch_tolerance
                 # The representation nearest l (nu + integer), when it is a root as well.
                 nearest = candidate.nu + round(l - real(candidate.nu))
-                nearest == candidate.nu && return candidate.nu - l
-                abs(equation(nearest)) / scale <= 32tol && return nearest - l
-                return candidate.nu - l
+                nearest == candidate.nu && return _polish_nu(equation, candidate.nu, scale) - l
+                abs(equation(nearest)) / scale <= 32tol && return _polish_nu(equation, nearest, scale) - l
+                return _polish_nu(equation, candidate.nu, scale) - l
             end
         end
     else
@@ -6902,6 +6902,26 @@ function _nu_derivatives(equation, current, value)
     _finite_complex(derivative) && !iszero(derivative) &&
         push!(result, derivative)
     return result
+end
+
+# At most two Newton steps with a central-difference derivative on an accepted root whose scaled residual is above
+# 2e-14 (the damped refinement stops at its acceptance level): the amplitudes amplify the residual, e.g. the
+# accepted nu of (s, l, m, a, omega) = (-2, 3, 3, 0.9, 1.0 - 0.05i) was 3.8e-13 off the 128-bit root and the
+# direct-route amplitudes 5e-13 off the references. A step is kept only when it lowers |equation|.
+function _polish_nu(equation, nu, scale)
+    current = ComplexF64(nu)
+    value = equation(current)
+    for _ in 1:2
+        abs(value) / scale <= 2.0e-14 && break
+        h = sqrt(eps(Float64)) * max(1.0, abs(current))
+        derivative = (equation(current + h) - equation(current - h)) / (2h)
+        _finite_complex(derivative) && !iszero(derivative) || break
+        candidate = current - value / derivative
+        candidate_value = equation(candidate)
+        abs(candidate_value) < abs(value) || break
+        current, value = candidate, candidate_value
+    end
+    return current
 end
 
 # Damped Newton refinement of `seed`; returns (nu, residual scaled by `scale`).
