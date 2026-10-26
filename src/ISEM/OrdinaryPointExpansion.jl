@@ -698,12 +698,15 @@ function direct_ab_value(params, x)
     return (dgdr * drdx - sF(s, m, a, omega, lambda, r)) / g, -sU(s, m, a, omega, lambda, r) / g^2
 end
 
-# Taylor series of A and B about the ordinary point x0: by shifting the horizon
-# rational functions when `metadata.horizon_shift` is set or x0 is a real point
-# below HORIZON_SHIFT_MAX_X, and the shift is accepted; from the closed-form
-# potentials for real x0 in [HORIZON_SHIFT_MAX_X, DIRECT_AB_MAX_X) at real omega
-# (binary64 buffers, or any when DIRECT_AB_KEY is set); otherwise from the
-# ordinary-point tables.
+# Taylor series of A and B about the ordinary point x0. Real binary64 points below DIRECT_AB_MAX_X at real omega take
+# the closed-form potentials: horizon_closed_form_ab_series! (horizon coordinate, factored Delta) below
+# HORIZON_SHIFT_MAX_X and direct_ab_series! above. Otherwise: the shift of the horizon rational functions when
+# `metadata.horizon_shift` is set or x0 is a real point below HORIZON_SHIFT_MAX_X, and the shift is accepted; the
+# closed form for real x0 in [HORIZON_SHIFT_MAX_X, DIRECT_AB_MAX_X) when DIRECT_AB_KEY is set; the ordinary-point
+# tables. (Below 0.1 the shift instead of the closed form left (2, 2, 0.8, 0.8925) Y off by 3.7e-9 at r = 20 - 50
+# and B_inc / B_trans of (2, 2), a = 0.99, omega = 0.80 - 0.87 off by up to 2.1e-11 with a 1.5e-12 Chebyshev tail
+# over 129 points; 9.9e-12 and 2.5e-13 with the closed form. A horizon-coordinate closed form up to 0.7 put
+# 2e-9 into a = 0.95, omega = 0.74 - 0.81.)
 function ordinary_ab_series!(
     a_out::AbstractVector{<:Complex},
     b_out::AbstractVector{<:Complex},
@@ -713,6 +716,10 @@ function ordinary_ab_series!(
     order::Integer;
     shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
 )
+    if x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X && coefficients.params.omega isa Real &&
+            eltype(a_out) === ComplexF64
+        return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
+    end
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
             coefficients.params.omega isa Real &&
             (eltype(a_out) === ComplexF64 || get(task_local_storage(), DIRECT_AB_KEY, false))
