@@ -23,6 +23,8 @@ export endpoint_power_lookup
 export poly_value, poly_pair, poly_triple
 export series_issue, denom_ok
 
+include("TaylorArena.jl")
+
 const _SERIES_MAG_LIMIT = sqrt(floatmax(Float64))
 const _SERIES_RATIO_LIMIT = inv(sqrt(eps(Float64)))
 const _DENOM_REL_LIMIT = 64eps(Float64)
@@ -584,10 +586,21 @@ end
 # where the tables are off by 1e-12 to 2e-12 (x = 0.2 - 0.4 for s = -2,
 # l = 3, a = 0.9, omega = 2.35), at about 0.1 ms per call.
 function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
+    _arena_eligible(params, x0) || return _direct_ab_series!(a_out, b_out, params, x0,
+        Taylor1(ComplexF64, order + 1), order)
+    return _direct_ab_series!(a_out, b_out, params, x0, _arena_variable(_reset!(_task_arena()), order + 1), order)
+end
+
+# Binary64 parameters and point: the series run in _ArenaSeries (bitwise the Taylor1 values, see TaylorArena.jl).
+_arena_eligible(params, x0) = x0 isa Union{Float64,ComplexF64} && params.a isa Float64 &&
+    params.omega isa Union{Float64,ComplexF64} && params.lambda isa Union{Float64,ComplexF64}
+
+# `t` is the series variable of order `order + 1` (Taylor1 or _ArenaSeries).
+function _direct_ab_series!(a_out, b_out, params, x0, t, order::Integer)
     s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
     kappa = sqrt(1 - a^2)
     rplus, rminus = 1 + kappa, 1 - kappa
-    x = x0 + Taylor1(ComplexF64, order + 1)
+    x = x0 + t
     r = (rplus - rminus * x) / (1 - x)
     delta = r^2 - 2r + a^2
     g = (rplus - rminus) * delta / ((r - rminus)^2 * (r^2 + a^2))
@@ -622,9 +635,16 @@ end
 # K+ = 2 r+ omega - a m without the cancellation of S omega - a m (the complex-rational horizon); returns the
 # numbers of terms.
 function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer; kplus=nothing)
+    t = _arena_eligible(params, x0) && (kplus === nothing || kplus isa ComplexF64) ?
+        _arena_variable(_reset!(_task_arena()), order + 4) : Taylor1(ComplexF64, order + 4)
+    return _horizon_closed_form_ab_series!(a_out, b_out, params, x0, t, order, kplus)
+end
+
+# `t` is the series variable of order `order + 4` (Taylor1 or _ArenaSeries).
+function _horizon_closed_form_ab_series!(a_out, b_out, params, x0, t, order::Integer, kplus)
     s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
     kappa = sqrt((1 - a) * (1 + a))
-    x = x0 + Taylor1(ComplexF64, order + 4)
+    x = x0 + t
     w = 1 - x
     r = (1 + kappa) + 2kappa * x / w
     S = r^2 + a^2
