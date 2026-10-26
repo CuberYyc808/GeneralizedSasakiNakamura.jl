@@ -168,11 +168,13 @@ function zero_log_solution(
     b_power = endpoint_power_lookup(base.B, -2)
     C = eltype(base.coefficients)
     mu = convert(C, base.exponent)
-    companion = Vector{C}(undef, order + 1)
+    # The forcing reads the base series up to x^n: stop where the base series stops.
+    last_order = min(Int(order), base.effective_order)
+    companion = Vector{C}(undef, last_order + 1)
     companion[1] = zero(C)
     a_minus_one = a_power(-1)
     b_minus_two = b_power(-2)
-    @inbounds for n in 1:order
+    @inbounds for n in 1:last_order
         numerator = _horizon_numerator(
             companion, a_power, b_power, mu, n)
         numerator += _horizon_log_forcing(
@@ -195,7 +197,7 @@ function zero_log_solution(
         B=base.B,
         variable=:x,
         requested_order=Int(order),
-        effective_order=Int(order),
+        effective_order=last_order,
         truncation_reason=:threshold_log_companion,
         representation=:threshold_log_frobenius,
         log_exponent=mu,

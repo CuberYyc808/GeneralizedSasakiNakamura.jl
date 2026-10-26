@@ -1121,4 +1121,29 @@ end
     end
 end
 
+# ---------------------------------------------------------------------------------------------------
+# Threshold UP (omega = m Omega_H bitwise, nu_h = 0) at (s, l, m, a) = (-2, 2, 2, 0.9) with N = 560: the horizon
+# base series stops at order 551 (coefficient_too_large), but the logarithmic companion read it up to order 560
+# and threw a BoundsError, so method="ISEM" and "auto" (its legacy fallback too) failed. The companion now stops at 551;
+# the amplitudes agree with the default order to 1e-12.
+# ---------------------------------------------------------------------------------------------------
+@testset "threshold log companion past a truncated base series" begin
+    LZ = D.LocalSolutionAtZero
+    a = 0.9
+    omega = 2a / (2 * (1 + sqrt((1 - a) * (1 + a))))
+    params = D.gsn_parameters(-2, 2, 2, a, omega)
+    @test LZ.is_horizon_threshold(params)
+    coefficients = D.gsn_coefficients(params; controls=D.gsn_controls(params))
+    base = LZ.zero_local_solution(coefficients, :in, 560)
+    @test base.effective_order < 560
+    companion = LZ.zero_log_solution(coefficients, :out, 560)
+    @test companion.effective_order == base.effective_order
+    @test length(companion.coefficients) == base.effective_order + 1
+    @test companion.truncation_reason == :threshold_log_companion
+    high = GSN_radial(-2, 2, 2, a, omega, UP, 1.0, 1000.0; method="ISEM", N=560)
+    default = GSN_radial(-2, 2, 2, a, omega, UP, 1.0, 1000.0; method="ISEM")
+    @test high.incidence_amplitude ≈ default.incidence_amplitude rtol=1e-10
+    @test high.reflection_amplitude ≈ default.reflection_amplitude rtol=1e-10
+end
+
 end # isem
