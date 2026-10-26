@@ -4407,6 +4407,7 @@ function _complex_gsn_wrapper(route::ComplexRoute)
             route.metadata, :mst_anchor_tail, missing),
         derivative_coordinate=:rstar,
         stored_normalization=:unit_gsn_transmission,
+        _complex_route_certificate(route)...,
     )
     mode = getfield(root, :Mode)(p.s, p.l, p.m, p.a, p.omega, p.lambda)
     return getfield(root, :GSNRadialFunction)(
@@ -4426,6 +4427,22 @@ function _complex_gsn_wrapper(route::ComplexRoute)
         getfield(root, :UNIT_GSN_TRANS),
         "ISEM",
     )
+end
+
+# Certification fields of the GSN metadata (see ISEM.certificate): a second pass stores certified = false, its
+# estimate and stages in the route metadata; a strict route's estimate is its larger amplitude error (NaN when the
+# estimate cannot be formed).
+function _complex_route_certificate(route::ComplexRoute)
+    _metadata_value(route.metadata, :certified, true) || return (certified=false,
+        estimated_error=Float64(_metadata_value(route.metadata, :estimated_error, NaN)),
+        uncertified_stages=_metadata_value(route.metadata, :uncertified_stages, ()))
+    error = try
+        maximum(amplitude_errors(route))
+    catch err
+        err isa InterruptException && rethrow()
+        NaN
+    end
+    return (certified=true, estimated_error=Float64(error), uncertified_stages=())
 end
 
 # Wrap a complex route as a GSNRadialFunction (solver label "ISEM").

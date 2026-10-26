@@ -124,7 +124,14 @@ struct Route{P,C,HI,HO,IO,II,B,EB,EP,M}
     endpoint_bridge::EB
     endpoint_plan::EP
     mst_plan::M
+    # Set by a second pass (Certification): certified = false, its combined score and the relaxed stages.
+    certified::Bool
+    estimated_error::Float64
+    uncertified_stages::Tuple{Vararg{Symbol}}
 end
+
+# Routes of the strict computation are certified.
+Route(fields::Vararg{Any,19}) = Route(fields..., true, NaN, ())
 
 """
     ConjugatedRoute

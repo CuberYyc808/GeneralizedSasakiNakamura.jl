@@ -350,7 +350,13 @@ struct InfinitySelection
     requested_order::Int
     out_reason::Symbol
     in_reason::Symbol
+    # False for an endpoint a second pass (Certification) accepted below its target.
+    certified::Bool
 end
+
+InfinitySelection(endpoint_y, out_coeffs, in_coeffs, out_order, in_order, score, variable_scale, requested_order,
+    out_reason, in_reason) = InfinitySelection(endpoint_y, out_coeffs, in_coeffs, out_order, in_order, score,
+    variable_scale, requested_order, out_reason, in_reason, true)
 
 # Thrown when no endpoint coordinate meets the seed target: `endpoint` is
 # :horizon or :infinity, with the target, the best score and coordinate tried,

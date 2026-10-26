@@ -17,6 +17,8 @@ using ..Solutions
 include("TeukolskyTransformation.jl")
 using .TeukolskyTransformation
 
+include("Certification.jl")
+using .Certification: Certification, certificate
 include("Parameters.jl")
 using .Parameters
 include("CoefficientTables.jl")
@@ -505,5 +507,55 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
 end
 
 (y_func::YRadialFunction)(coord) = y_func.Y_scalar_solution(coord)
+
+
+# ISEM.certificate(x) -> (certified, estimated_error, uncertified_stages); see Certification.
+_metadata_certificate(metadata) = metadata isa NamedTuple ?
+    (get(metadata, :certified, true), get(metadata, :estimated_error, NaN), get(metadata, :uncertified_stages, ())) :
+    (true, NaN, ())
+Certification.certificate(route::Route) = _metadata_certificate(RadialFunctions._route_certificate(route))
+Certification.certificate(route::ConjugatedRoute) = Certification.certificate(route.route)
+Certification.certificate(route::ComplexRoute) =
+    _metadata_certificate(ComplexFrequency._complex_route_certificate(route))
+# DOWN/OUT combinations: certified when both fundamental solutions are, the larger estimate, the union of stages.
+function Certification.certificate(f::GeneralizedSasakiNakamura.GSNRadialFunction)
+    metadata = f.numerical_GSN_solution
+    (metadata isa NamedTuple && haskey(metadata, :fundamental_solutions)) ||
+        return _metadata_certificate(metadata)
+    parts = map(Certification.certificate, metadata.fundamental_solutions)
+    return (all(first, parts), maximum(part -> part[2], parts), Tuple(unique(Iterators.flatten(last.(parts)))))
+end
+function Certification.certificate(f::GeneralizedSasakiNakamura.TeukolskyRadialFunction)
+    f.Teukolsky_solution isa Certification.UncertifiedSolution &&
+        return Certification.certificate(f.Teukolsky_solution)
+    f.GSN_solution isa GeneralizedSasakiNakamura.GSNRadialFunction &&
+        return Certification.certificate(f.GSN_solution)
+    return (true, NaN, ())
+end
+Certification.certificate(f::YRadialFunction) = f.Y_solution isa Certification.UncertifiedSolution ?
+    Certification.certificate(f.Y_solution) : (true, missing, ())
+
+
+# Route of a second pass marked uncertified (see Certification); nothing when its amplitudes are not finite.
+function _with_fields(route, replacements::NamedTuple)
+    names = fieldnames(typeof(route))
+    return Base.typename(typeof(route)).wrapper(
+        (haskey(replacements, f) ? replacements[f] : getfield(route, f) for f in names)...)
+end
+function _mark_uncertified(route::Route, records)
+    all(isfinite, (route.incidence, route.reflection, route.solution_scale)) || return nothing
+    return _with_fields(route, (certified=false, estimated_error=Certification.estimated_error(records),
+        uncertified_stages=Certification.stages(records)))
+end
+function _mark_uncertified(route::ConjugatedRoute, records)
+    marked = _mark_uncertified(route.route, records)
+    return marked === nothing ? nothing : ConjugatedRoute(marked, route.params)
+end
+function _mark_uncertified(route::ComplexRoute, records)
+    all(isfinite, (route.transmission, route.incidence, route.reflection)) || return nothing
+    return _with_fields(route, (metadata=merge(route.metadata, (certified=false,
+        estimated_error=Certification.estimated_error(records), uncertified_stages=Certification.stages(records))),))
+end
+_mark_uncertified(route, records) = nothing
 
 end

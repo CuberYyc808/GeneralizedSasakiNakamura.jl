@@ -11,7 +11,7 @@ using ..Matching:
     ScaledBasis,
     evaluate_route,
     route_state
-using ..Matching: route_plan_of, route_truncations
+using ..Matching: Matching, route_plan_of, route_truncations
 using ..Iteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
 using ..Matching: _mano_suzuki_takasugi_evaluation_region
 
@@ -611,6 +611,22 @@ function _unit_state_safe(route::Route)
     return _unit_basis_safe(route, route.endpoint_bridge, limit)
 end
 
+# Certification fields of the GSN metadata (see ISEM.certificate). A strict route's estimated error is its larger
+# amplitude error, the incidence error alone when the reflection is taken from the complex path, and NaN when the
+# estimate cannot be formed.
+function _route_certificate(route::Route)
+    route.certified || return (certified=false, estimated_error=route.estimated_error,
+        uncertified_stages=route.uncertified_stages)
+    error = try
+        incidence, reflection = Matching.amplitude_errors(route)
+        Matching._complex_path_switch(route) ? incidence : max(incidence, reflection)
+    catch err
+        err isa InterruptException && rethrow()
+        NaN
+    end
+    return (certified=true, estimated_error=Float64(error), uncertified_stages=())
+end
+
 # Wrap a route as the package's GSNRadialFunction, with unit GSN transmission when
 # representable and the route diagnostics in the metadata.
 function gsn_radial_function(route::Route)
@@ -675,6 +691,7 @@ function gsn_radial_function(route::Route)
                 route.endpoint_bridge.scale : missing,
         normalization = unit_available ?
             :unit_gsn_transmission : :scaled_gsn_transmission,
+        _route_certificate(route)...,
     )
     return getfield(root, :GSNRadialFunction)(
         _route_mode(route),
