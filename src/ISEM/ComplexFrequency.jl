@@ -1,6 +1,7 @@
 module ComplexFrequency
 
 using Logging: NullLogger, with_logger
+import Logging
 using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
 using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
@@ -1078,6 +1079,7 @@ function _complex_rational_route(
     small_frequency_expansion=nothing,
     large_frequency_expansion=nothing,
     return_retry_cache::Bool=false,
+    relaxed_rotation::Bool=false,
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
     branch_symbol = _normalize_branch(branch)
@@ -1117,6 +1119,7 @@ function _complex_rational_route(
         N=rational_order,
         tol=requested.tolerance,
         xm=requested.xm,
+        relaxed_rotation,
     )
     params = complex_parameters(
         s, l, m, af, omegac, build.params.lambda)
@@ -3777,6 +3780,66 @@ end
 # route on the negative imaginary axis, else the two-ray build followed by the
 # consensus retries, the plateau and negative-imaginary-axis overlays and the pole
 # reciprocal, with the P-equation fallback when the build fails); `:p_equation`.
+# Collects log records so that the P-equation fallback's warnings are
+# replayed only when its result is used.
+struct _RecordingLogger <: Logging.AbstractLogger
+    records::Vector{Any}
+    min_level::Logging.LogLevel
+end
+_RecordingLogger() = _RecordingLogger(Any[],
+    Logging.min_enabled_level(Logging.current_logger()))
+Logging.min_enabled_level(logger::_RecordingLogger) = logger.min_level
+Logging.shouldlog(::_RecordingLogger, args...) = true
+Logging.catch_exceptions(::_RecordingLogger) = false
+Logging.handle_message(logger::_RecordingLogger, args...; kwargs...) =
+    push!(logger.records, (args, kwargs))
+
+function _replay_logs(logger::_RecordingLogger)
+    target = Logging.current_logger()
+    for (args, kwargs) in logger.records
+        level, message, _module, group, id = args[1:5]
+        Logging.min_enabled_level(target) <= level &&
+            Logging.shouldlog(target, level, _module, group, id) &&
+            Logging.handle_message(target, args...; kwargs...)
+    end
+    return nothing
+end
+
+# Above this P-equation split mismatch the P fallback has no usable match.
+const _P_ROUTE_UNMATCHED_MISMATCH = 1.0e-6
+
+# P fallback that returned NaN amplitudes (`nothing`) or a split mismatch above
+# _P_ROUTE_UNMATCHED_MISMATCH.
+function _p_route_unmatched(route)
+    route === nothing && return true
+    mismatch = _metadata_value(route.metadata, :split_mismatch, NaN)
+    return !(mismatch <= _P_ROUTE_UNMATCHED_MISMATCH)
+end
+
+# Rational build with the relaxed infinity rotation bound, after the default
+# build and the P fallback (`p_route`, or `nothing` for NaN amplitudes) both
+# failed; near-extremal spin can send every infinity ray from every real
+# junction past the inner horizon to |x| ~ 1e32, where the ordinary P/Q
+# coefficients overflow. Used when its amplitude error is below the P split
+# mismatch; `nothing` otherwise.
+function _relaxed_rotation_build(s, l, m, a, omega, branch, tol, p_route)
+    build = try
+        _complex_rational_route(s, l, m, a, omega, branch; tol,
+            return_retry_cache=true, relaxed_rotation=true)
+    catch exception
+        exception isa ErrorException || rethrow()
+        return nothing
+    end
+    metadata = build.route.metadata
+    _metadata_value(metadata, :match_policy, missing) ==
+        :infinity_rotation_relaxed || return nothing
+    error_bound = max(_metadata_value(metadata, :incidence_error, Inf),
+        _metadata_value(metadata, :reflection_error, Inf))
+    p_route === nothing && return build
+    p_mismatch = _metadata_value(p_route.metadata, :split_mismatch, NaN)
+    return isnan(p_mismatch) || error_bound < p_mismatch ? build : nothing
+end
+
 function _complex_route_impl(
     s::Int,
     l::Int,
@@ -3878,27 +3941,47 @@ function _complex_route_impl(
             end
             fallback_trigger === nothing &&
                 (fallback_trigger = :principal_mst_evaluator_fallback)
+            p_logs = _RecordingLogger()
+            p_failure = nothing
             fallback = try
-                _complex_p_route(s, l, m, a, omega, branch; tol)
+                with_logger(p_logs) do
+                    _complex_p_route(s, l, m, a, omega, branch; tol)
+                end
             catch p_error
                 p_error isa ErrorException && startswith(
-                    p_error.msg, _P_ROUTE_NAN_AMPLITUDE_ERROR) || rethrow()
-                throw(ErrorException(p_error.msg * " It was the fallback " *
-                    "after the two-ray rational build failed: " *
-                    sprint(showerror, error)))
+                    p_error.msg, _P_ROUTE_NAN_AMPLITUDE_ERROR) ||
+                    (_replay_logs(p_logs); rethrow())
+                p_failure = p_error
+                nothing
             end
-            fallback = _tag_p_build_fallback(
-                fallback, fallback_trigger, sprint(showerror, error))
-            fallback = _principal_small_frequency_expansion_overlay(
-                fallback, fallback.controls)
-            fallback = _try_p_negative_imaginary_axis_build_consensus(
-                fallback, s, l, m, a, omega, branch)
-            fallback = _try_negative_imaginary_axis_partner(
-                fallback, s, l, m, a, omega, branch)
-            fallback = _try_negative_imaginary_axis_side(
-                fallback, s, l, m, a, omega)
-            return _apply_exact_pole_normalization(
-                fallback, pole_normalization)
+            # P route without a usable match: retry the rational build with
+            # the relaxed infinity rotation bound. The match then flows into
+            # the rational path below.
+            relaxed = !_principal_small_frequency_expansion_axis(
+                    ComplexF64(omega)) && _p_route_unmatched(fallback) ?
+                _relaxed_rotation_build(s, l, m, a, omega, branch, tol,
+                    fallback) : nothing
+            if relaxed !== nothing
+                relaxed
+            else
+                _replay_logs(p_logs)
+                p_failure === nothing || throw(
+                    ErrorException(p_failure.msg * " It was the fallback " *
+                        "after the two-ray rational build failed: " *
+                        sprint(showerror, error)))
+                fallback = _tag_p_build_fallback(
+                    fallback, fallback_trigger, sprint(showerror, error))
+                fallback = _principal_small_frequency_expansion_overlay(
+                    fallback, fallback.controls)
+                fallback = _try_p_negative_imaginary_axis_build_consensus(
+                    fallback, s, l, m, a, omega, branch)
+                fallback = _try_negative_imaginary_axis_partner(
+                    fallback, s, l, m, a, omega, branch)
+                fallback = _try_negative_imaginary_axis_side(
+                    fallback, s, l, m, a, omega)
+                return _apply_exact_pole_normalization(
+                    fallback, pole_normalization)
+            end
         end
         rational = _principal_small_frequency_expansion_overlay(
             rational_build.route, rational_build.route.controls)

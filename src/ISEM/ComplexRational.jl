@@ -80,6 +80,9 @@ const _HORIZON_STOKES_ANGLE_STEP = pi / 144
 const _HORIZON_STOKES_MAX_ANGLE_STEPS = 4
 const _INFINITY_ROTATION_MAX_ANGLE_STEPS = 12
 const _INFINITY_ROTATION_FALLBACK_ERROR_MAX = 1.0e-8
+# Bound of the relaxed rotation search, used only after the P-equation fallback
+# failed as well (see _complex_route_impl).
+const _INFINITY_ROTATION_RELAXED_ERROR_MAX = 1.0e-6
 const _HORIZON_STOKES_AGREEMENT_MAX = 2.0e-11
 const _HORIZON_STOKES_SEPARATION_MIN = 1.0e-10
 const _HORIZON_STOKES_SEPARATION_RATIO_MIN = 8.0
@@ -3518,9 +3521,12 @@ end
 # target can still give accurate amplitudes; uncertified pairs give garbage
 # with large reported errors, which must fail instead). The later
 # consensus, balance and plateau retries re-solve without the rotation, so a
-# rotated match gets only the refinements that succeed without it.
+# rotated match gets only the refinements that succeed without it. With
+# `error_max` = _INFINITY_ROTATION_RELAXED_ERROR_MAX the bound is relaxed; the
+# route reports the larger amplitude error.
 function _infinity_rotation_search(coefficients, locals, branch, params,
-        settings, match_rstar)
+        settings, match_rstar;
+        error_max=_INFINITY_ROTATION_FALLBACK_ERROR_MAX)
     side = imag(_two_ray_direction(params.omega)) >= 0 ? -1.0 : 1.0
     best = nothing
     for step in 0:_INFINITY_ROTATION_MAX_ANGLE_STEPS
@@ -3537,7 +3543,7 @@ function _infinity_rotation_search(coefficients, locals, branch, params,
         error_bound = max(candidate.incidence_error,
             candidate.reflection_error)
         iszero(candidate.infinity_horizon_winding) &&
-            error_bound <= _INFINITY_ROTATION_FALLBACK_ERROR_MAX &&
+            error_bound <= error_max &&
             (best === nothing || error_bound < max(best.incidence_error,
                 best.reflection_error)) && (best = candidate)
     end
@@ -3713,7 +3719,8 @@ horizon and infinity endpoint series are seeded on r* rays on which the local
 phase stays real, propagated to a real junction and matched there. Without
 `xm` the junction starts at r* = 0 (x = 0.7 near the real axis) and may move
 through the junction search, condition and consensus retries and burial
-balancing. Returns the parameters, controls, coefficients, real-axis
+balancing. `relaxed_rotation=true` relaxes the bound of the infinity rotation
+search. Returns the parameters, controls, coefficients, real-axis
 evaluator, unit-transmission amplitudes, metadata and a retry cache.
 """
 function complex_rational_build(
@@ -3728,6 +3735,7 @@ function complex_rational_build(
     N=nothing,
     tol=nothing,
     xm=nothing,
+    relaxed_rotation::Bool=false,
 )
     branch in (:IN, :UP) ||
         throw(ArgumentError("complex rational branch must be :IN or :UP."))
@@ -3770,7 +3778,10 @@ function complex_rational_build(
             coefficients, locals, branch, params, settings, initial_match_x)
         if searched === nothing
             searched = _infinity_rotation_search(coefficients, locals,
-                branch, params, settings, initial_match_rstar)
+                branch, params, settings, initial_match_rstar;
+                error_max=relaxed_rotation ?
+                    _INFINITY_ROTATION_RELAXED_ERROR_MAX :
+                    _INFINITY_ROTATION_FALLBACK_ERROR_MAX)
             searched === nothing && rethrow()
             infinity_rotation = true
         else
@@ -3789,7 +3800,8 @@ function complex_rational_build(
         end
     end
     selected = initial
-    match_policy = infinity_rotation ? :infinity_rotation :
+    match_policy = infinity_rotation ? (relaxed_rotation ?
+        :infinity_rotation_relaxed : :infinity_rotation) :
         junction_search ? :junction_search :
         xm !== nothing ? :explicit_x :
         auto_near_real_match ? :near_real_x07 : :rstar_zero
