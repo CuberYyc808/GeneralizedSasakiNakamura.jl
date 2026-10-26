@@ -1375,8 +1375,17 @@ function select_infinity_endpoint(
     end
     if can_escalate && selected.requested_order == order &&
             selected.endpoint_y < _MIN_STEP
-        return _select_infinity_endpoint_order(
-            coefficients, match_x, 32; controls, certificate)
+        # The lower order is already certified: a failure at order 32 keeps it instead of failing the build
+        # (programming errors still propagate). Defensive: no point was found where order 32 throws here
+        # (about 4.8e5 searched calls), so there is no regression test; the warning plan (v2, R1) revisits this.
+        try
+            return _select_infinity_endpoint_order(
+                coefficients, match_x, 32; controls, certificate)
+        catch err
+            err isa Union{MethodError, BoundsError, TypeError, UndefVarError, AssertionError,
+                InterruptException, OutOfMemoryError} && rethrow()
+            return selected
+        end
     end
     return selected
 end
