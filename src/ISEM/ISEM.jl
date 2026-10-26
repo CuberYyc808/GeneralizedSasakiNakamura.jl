@@ -482,11 +482,21 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
     if method == "auto" || method == "ISEM"
         _validate_y_branch(s, boundary_condition)
         branch = boundary_condition == IN ? :IN : :UP
-        route = radial_route(s, l, m, a, omega, branch;
+        build() = y_radial_function(radial_route(s, l, m, a, omega, branch;
             N=N, xm=xm, tol=tol,
             small_frequency_expansion=sfe === nothing ? :auto : sfe,
-            large_frequency_expansion=lfe === nothing ? :auto : lfe)
-        return y_radial_function(route)
+            large_frequency_expansion=lfe === nothing ? :auto : lfe))
+        isreal(omega) && return build()
+        # Complex omega has no legacy route for Y (the ODE routes integrate along a rotated path, Y is taken at real
+        # r): an ISEM failure is reported as such, with its original message.
+        try
+            return build()
+        catch err
+            err isa ErrorException || rethrow()
+            error("Y_radial for complex omega has only the ISEM route, which failed for (s, l, m, a, omega) = " *
+                "($s, $l, $m, $a, $omega): $(err.msg) GSN_radial and Teukolsky_radial fall back to the legacy " *
+                "ODE routes for this mode.")
+        end
     elseif method == "Riccati" || method == "linear"
         return _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition; method=method, tol=tol)
     else
