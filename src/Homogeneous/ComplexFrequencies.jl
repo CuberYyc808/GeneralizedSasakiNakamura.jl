@@ -185,7 +185,10 @@ end
 function solve_X_in_rho(s::Int, m::Int, a, beta, omega, lambda, r_from_rho, sign, rhospan, initial_conditions; dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
     p = (s=s, m=m, a=a, beta=beta, omega=omega, lambda=lambda, sign=sign, r_from_rho=r_from_rho)
 
-    odeprob = ODEProblem(GSN_linear_eqn, initial_conditions, rhospan, p)
+    # p (with the r(rho) closure, which holds an ODESolution) goes into the right-hand side, not into the problem:
+    # SciMLBase scans a problem's parameters for dual numbers, and on Windows that scan of this closure throws
+    # "type does not have a definite number of fields" (T-014). Same right-hand side.
+    odeprob = ODEProblem((u, _, rho) -> GSN_linear_eqn(u, p, rho), initial_conditions, rhospan)
     odesoln = solve(odeprob, odealgo; maxiters=Inf, reltol=reltol, abstol=abstol)
 
     return odesoln
@@ -194,7 +197,10 @@ end
 function solve_Phi_in_rho(s::Int, m::Int, a, beta, omega, lambda, r_from_rho, sign, rhospan, initial_conditions; dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
     p = (s=s, m=m, a=a, beta=beta, omega=omega, lambda=lambda, sign=sign, r_from_rho=r_from_rho)
 
-    odeprob = ODEProblem(GSN_Riccati_eqn, initial_conditions, rhospan, p)
+    # p (with the r(rho) closure, which holds an ODESolution) goes into the right-hand side, not into the problem:
+    # SciMLBase scans a problem's parameters for dual numbers, and on Windows that scan of this closure throws
+    # "type does not have a definite number of fields" (T-014). Same right-hand side.
+    odeprob = ODEProblem((u, _, rho) -> GSN_Riccati_eqn(u, p, rho), initial_conditions, rhospan)
     odesoln = solve(odeprob, odealgo; maxiters=Inf, reltol=reltol, abstol=abstol)
 
     return odesoln
