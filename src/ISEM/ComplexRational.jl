@@ -4248,27 +4248,29 @@ function _state_x(evaluator::ComplexRationalEvaluator, x::Real)
     coefficients = evaluator.coefficients
     target_x = ComplexF64(target)
     walk = evaluator.walks[target > evaluator.match_x ? 2 : 1]
+    # The closure's locals are named apart from the remaining-step loop
+    # below: shared names (x, step) were boxed and made both loops dynamic.
     start = lock(evaluator.walk_lock) do
         k = 1
         while true
-            x = walk.x[k]
-            abs(target_x - x) <= _STEP_SAFETY * min(abs(x), abs(1 - x)) &&
+            xk = walk.x[k]
+            abs(target_x - xk) <= _STEP_SAFETY * min(abs(xk), abs(1 - xk)) &&
                 break
             if k == length(walk.x)
                 walk.patches[k] < _MAX_PATCHES || error(
-                    "$_PATCH_LIMIT_ERROR at x=$x, " *
+                    "$_PATCH_LIMIT_ERROR at x=$xk, " *
                     "target=$target_x.")
-                step = _propagate_step!(
+                walk_step = _propagate_step!(
                     ComplexRationalScratch(coefficients, settings.order),
-                    coefficients, x, walk.state1[k], walk.state2[k],
+                    coefficients, xk, walk.state1[k], walk.state2[k],
                     target_x, settings)
-                push!(walk.x, x + step.h)
-                push!(walk.state1, step.accepted.state1)
-                push!(walk.state2, step.accepted.state2)
+                push!(walk.x, xk + walk_step.h)
+                push!(walk.state1, walk_step.accepted.state1)
+                push!(walk.state2, walk_step.accepted.state2)
                 push!(walk.patches, walk.patches[k] + 1)
                 push!(walk.error, _walk_error_step(walk.error[k], coefficients,
-                    x, walk.state1[k], x + step.h, step.accepted.state1,
-                    step.accepted.score))
+                    xk, walk.state1[k], xk + walk_step.h,
+                    walk_step.accepted.state1, walk_step.accepted.score))
             end
             k += 1
         end
@@ -4277,19 +4279,19 @@ function _state_x(evaluator::ComplexRationalEvaluator, x::Real)
     end
     # The remaining steps, as `_propagate_pair!` takes them.
     scratch = ComplexRationalScratch(coefficients, settings.order)
-    x = start.x
+    xc = start.x
     state1 = start.state1
     state2 = start.state2
     walk_error = start.error
     patches = 0
-    while abs(target_x - x) > 100eps(Float64) * max(1.0, abs(x))
+    while abs(target_x - xc) > 100eps(Float64) * max(1.0, abs(xc))
         patches < _MAX_PATCHES || error(
-            "$_PATCH_LIMIT_ERROR at x=$x, target=$target_x.")
+            "$_PATCH_LIMIT_ERROR at x=$xc, target=$target_x.")
         step = _propagate_step!(
-            scratch, coefficients, x, state1, state2, target_x, settings)
-        walk_error = _walk_error_step(walk_error, coefficients, x, state1,
-            x + step.h, step.accepted.state1, step.accepted.score)
-        x += step.h
+            scratch, coefficients, xc, state1, state2, target_x, settings)
+        walk_error = _walk_error_step(walk_error, coefficients, xc, state1,
+            xc + step.h, step.accepted.state1, step.accepted.score)
+        xc += step.h
         state1 = step.accepted.state1
         state2 = step.accepted.state2
         patches += 1

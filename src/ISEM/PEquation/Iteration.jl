@@ -285,9 +285,11 @@ function iterate_inf_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trun
         push!(rho_list, rho)
         push!(coeffs_list, coeffs_ord)
     end
+    # evaluate_P captures this unassigned copy; capturing the reassigned R0 boxed it.
+    seed_R0 = R0
     function evaluate_P(rho_eval)
         if rho_eval > rho_list[1]
-            if rho_eval >= R0
+            if rho_eval >= seed_R0
                 P0, P0p, P0pp = evaluate_inf_out_rho(rho_eval, s, epsilon, tau, kappa, coeffs_inf, z)
                 err = error_inf_out_rho(rho_eval, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
                 return (P0, P0p, P0pp, err)
