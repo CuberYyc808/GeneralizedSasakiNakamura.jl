@@ -361,7 +361,6 @@ function _nu_seeds(p::GSNParameters)
     push!(seeds, ComplexF64(p.l))
     return seeds
 end
-_nu_seed(p::GSNParameters) = first(_nu_seeds(p))
 
 # MST data and the two infinity branches in GSN unit-transmission normalization. The MST sums are
 # truncated MST_GUARD_BITS below the route tolerance: their Teukolsky states pass through the inverse

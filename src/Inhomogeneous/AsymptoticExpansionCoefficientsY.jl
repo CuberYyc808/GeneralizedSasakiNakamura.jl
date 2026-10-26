@@ -14,30 +14,8 @@ _DEFAULT_infinity_expansion_order = 6
     One can also check that the coefficients are 0 for order=0.
 =#
 
-function a_plus_inf(s::Int, m::Int, a, omega, lambda, order::Int; data_type=_DEFAULTDATATYPE)
-
-    C_plus_inf = outgoing_coefficient_at_inf(s, m, a, omega, lambda, order)
-
-    # The relation between C_plus_inf and a_plus_inf is given by Eq.(F13) of RL2024
-
-    aplus_inf = data_type(C_plus_inf / omega^order)
-
-    return aplus_inf
-end
-
-function a_minus_inf(s::Int, m::Int, a, omega, lambda, order::Int; data_type=_DEFAULTDATATYPE)
-
-    C_minus_inf = ingoing_coefficient_at_inf(s, m, a, omega, lambda, order)
-
-    # The relation between C_minus_inf and a_minus_inf is given by Eq.(F13) of RL2024
-
-    aminus_inf = data_type(C_minus_inf / omega^order)
-
-    return aminus_inf
-end
-
 # All infinity coefficients a_{+/-}(0..order) from one coefficient sequence, so the recurrence of Eq.(F12)
-# of RL2024 is run once for all orders; same relation to C_{+/-} as in a_plus_inf / a_minus_inf.
+# of RL2024 is run once for all orders; a_{+/-}(n) = C_{+/-}(n) / omega^n (Eq.(F13) of RL2024).
 function _a_inf_values(coefficient, s::Int, m::Int, a, omega, lambda, order::Int, data_type)
     C = coefficient_values(coefficient, s, m, a, omega, lambda, order)
     return data_type[data_type(C[ord + 1] / omega^ord) for ord in 0:order]

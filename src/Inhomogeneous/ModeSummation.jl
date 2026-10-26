@@ -51,23 +51,12 @@ end
 
 # Cost heuristic behind tail_levin = :auto: a mode with |n| >= nmin switches to adaptive Levin only when the
 # uniform trapezoid grid it would need has at least 4096 radial points and is at least 8x (eccentric) or, in N*K,
-# 16x (generic) the adaptive-Levin work. The eccentric rule takes that grid per mode from the radial phase rate
-# (uniform_n from _mode_radial_trapezoid_n); the generic n-shell rule keeps 4|n|.
+# 16x (generic) the adaptive-Levin work. Both take that grid per mode from the radial phase rate (uniform_n from
+# _mode_radial_trapezoid_n).
 @inline function _ecc_levin_auto(uniform_n::Int, n::Int, local_n::Int, max_depth::Int, nmin::Int)
     abs(n) >= nmin || return false
     adaptive_n = local_n * 2^min(max_depth, 5)
     return uniform_n >= max(4096, 8adaptive_n)
-end
-
-@inline function _gen_levin_auto(n::Int, N0::Int, K0::Int, Nmax::Int,
-        Kmax::Int, local_n::Int, max_depth::Int, nmin::Int)
-    abs(n) >= nmin || return false
-    uniform_n = _uniform_radial_n(N0, Nmax, n)
-    uniform_k = min(max(4K0, 64), Kmax)
-    adaptive_n = local_n * 2^min(max_depth, 5)
-    adaptive_k = local_n + 1
-    return uniform_n >= 4096 &&
-        uniform_n * uniform_k >= 16adaptive_n * adaptive_k
 end
 
 # Radial trapezoid intervals a mode needs: its radial phase rate (ConvolutionIntegrals._radial_phase_min_sample),
@@ -79,7 +68,7 @@ function _mode_radial_trapezoid_n(KG::Dict, m::Int, n::Int, k::Int, N0::Int, Nma
     return ConvolutionIntegrals._radial_phase_min_sample(KG, ω, m, n, _uniform_radial_n(N0, Nmax, n), typemax(Int))
 end
 
-# Per-mode form of _gen_levin_auto with the radial grid from the phase rate.
+# Whether the generic adaptive Levin path pays off for a mode, with the radial grid from the phase rate.
 @inline function _gen_levin_auto_mode(uniform_n::Int, n::Int, K0::Int, Kmax::Int,
         local_n::Int, max_depth::Int, nmin::Int)
     abs(n) >= nmin || return false
@@ -108,16 +97,6 @@ end
 @inline function _tail_levin_mode_floor(mode_abs_floor::Real, levin_mode_abs_floor::Real)
     levin_mode_abs_floor > 0 && return Float64(levin_mode_abs_floor)
     return Float64(mode_abs_floor)
-end
-
-@inline function _clear_generic_mode_dependent_caches!(cache)
-    # These factors depend on (m,n,k) and should not accumulate across a full
-    # mode summation. The m-grid matrices are large enough that retaining them
-    # across every n-shell can dominate memory; keep only orbit-level samples,
-    # segment geometry, phase bases, and weights.
-    empty!(cache.mcaches)
-    empty!(cache.levin_phase_factors)
-    return nothing
 end
 
 @inline function _positive_m_tail_below(shell_m::Float64, shell_k::Float64, threshold::Float64, tol::Real, m::Int, max_m::Int, mode_abs_floor::Float64, tail_cutoff::Bool)

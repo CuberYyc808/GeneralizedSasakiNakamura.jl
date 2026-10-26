@@ -475,9 +475,6 @@ function _tricomi_U(a::C, b::C, z::C) where {C<:Complex}
     return C(value)
 end
 
-# log of the Pochhammer symbol (x)_n = Gamma(x + n) / Gamma(x) for any integer n.
-_log_pochhammer(x, n::Integer) = loggamma(x + n) - loggamma(x)
-
 # ---------------------------------------------------------------------------------------------
 # UP solution (ST Eq. 155 / BHPT prefacUp, fUp, UpTrans)
 # ---------------------------------------------------------------------------------------------

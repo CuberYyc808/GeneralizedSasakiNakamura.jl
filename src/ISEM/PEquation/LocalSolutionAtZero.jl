@@ -74,8 +74,6 @@ function bn_zero(s, epsilon, tau, kappa, lambda, N)
     return b
 end
 
-const _ZERO_AUTO_TARGET_RADIUS = 0.1
-
 # Radius where the last kept term reaches tol, (tol/|a_N|)^(1/N); the OUT version is capped at 0.6.
 function convergence_radius_an_zero(coeffs, tol = 1e-15)
     N = length(coeffs) - 1

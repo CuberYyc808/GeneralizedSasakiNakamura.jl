@@ -46,7 +46,6 @@ struct _ArenaSeries
     arena::_TaylorArena
 end
 
-_order(a::_ArenaSeries) = a.t.order
 TaylorSeries.getcoeff(a::_ArenaSeries, k::Integer) = a.t[k]
 
 # Independent variable of order `order` (Taylor1(ComplexF64, order)).

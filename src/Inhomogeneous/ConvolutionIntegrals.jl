@@ -269,14 +269,6 @@ function _pow2_refinement_levels(start::Int, stop::Int)
     return levels
 end
 
-function prewarm_eccentric_levin_samples!(cache::EccentricFluxCache, KG_master::Dict; N0::Int, Nmax::Int)
-    for N in _pow2_refinement_levels(N0, Nmax)
-        _cached_eccentric_cheby_sample!(cache, KG_master, N)
-        _levin_1d_local_plan(N, DEFAULT_LEVIN_LOCAL_ORDER)
-    end
-    return cache
-end
-
 function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::Int)
     _check_mode_geometry(cache, KG_master)
     return get!(cache.samples, K) do
@@ -373,50 +365,6 @@ function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Di
     else
         error("Spin weight s must be either 2 or -2.")
     end
-end
-
-function convolution_integral_generic_trapezoidal_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    KG = kerr_geo_orbit(a, p, e, x)
-    Frequencies = KG["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    omega = (m * Frequencies["ϒϕ"] + n * Frequencies["ϒr"] + k * Frequencies["ϒθ"]) / Γ
-    if _skip_radiative_mode(s, a, m, omega)
-        result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        return result
-    end
-    ctx = _generic_trapezoidal_context(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-
-    result = if s == 2
-        inte_in_samp_p2 = integrand_generic_sample_p2(ctx.KG_samp, ctx.Ysamp, ctx.SHsamp, n, k)
-        integral_p2 = trapezoidal_2d_integral(inte_in_samp_p2)
-        hf = horizon_factor(ctx.omega, a, m)
-        Dict(
-            "Amplitude" => integral_p2,
-            "omega" => ctx.omega,
-            "EnergyFlux" => hf * abs2(integral_p2),
-            "AngularMomentumFlux" => hf * m * abs2(integral_p2) / ctx.omega,
-            "CarterConstantFlux" => 2 * hf * abs2(integral_p2) * (ctx.carter_factor + k * ctx.ϒθ) / ctx.omega,
-            "Trajectory" => ctx.KG,
-            "YSolution" => ctx.Ysol,
-            "SWSH" => ctx.SH
-        )
-    elseif s == -2
-        inte_in_samp_m2 = integrand_generic_sample_m2(ctx.KG_samp, ctx.Ysamp, ctx.SHsamp, n, k)
-        integral_m2 = trapezoidal_2d_integral(inte_in_samp_m2)
-        Dict(
-            "Amplitude" => integral_m2,
-            "omega" => ctx.omega,
-            "EnergyFlux" => abs2(integral_m2)/(4.0pi*ctx.omega^2),
-            "AngularMomentumFlux" => m * abs2(integral_m2) / (4.0pi * ctx.omega^3),
-            "CarterConstantFlux" => abs2(integral_m2) * (ctx.carter_factor + k * ctx.ϒθ) / (2.0pi*ctx.omega^3),
-            "Trajectory" => ctx.KG,
-            "YSolution" => ctx.Ysol,
-            "SWSH" => ctx.SH
-        )
-    else
-        error("Spin weight s must be either 2 or -2.")
-    end
-    return result
 end
 
 function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
@@ -1187,22 +1135,6 @@ function _generic_adaptive_segment_amplitude!(cache::GenericM2FluxCache, KG::Dic
     integralpm, integralmm = _generic_adaptive_radial_levin_theta_cc(Fa, Fb, theta_weights, -theta_phase, rfactor_plus, rfactor_minus)
     qr_lo, qr_hi, _, _ = _generic_adaptive_segment_bounds(key)
     return ComplexF64((integralpp + integralpm + integralmp + integralmm) * prefactor * ((qr_hi - qr_lo) / π))
-end
-
-function prewarm_generic_adaptive_levin_segments!(cache::GenericM2FluxCache, KG_master::Dict;
-        local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
-        local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
-        max_depth::Int = 8)
-    nr = local_r_intervals + 1
-    nt = local_theta_intervals + 1
-    for level in 0:max_depth
-        for ib in 0:(2^level - 1)
-            key = GenericAdaptiveLevin2DKey(level, 0, ib, 0)
-            _generic_adaptive_segment_sample!(cache, KG_master, key, nr, nt)
-            _generic_adaptive_theta_weights!(cache, key, nt)
-        end
-    end
-    return cache
 end
 
 # Per-m cache for the generic trapezoidal integrand: the azimuthal phases exp(-i m Δφ) on the radial and polar
@@ -2868,17 +2800,6 @@ function levin_2d_integral(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Num
     return integral_val
 end
 
-function levin_2d_integral_local(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_0::Number, g1_π::Number, g2_0::Number, g2_π::Number; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n, k = size(f_vals)
-    @assert length(g1_prime_vals) == n "g1_prime_vals length must match x-dimension n ($(length(g1_prime_vals)) ≠ $n)"
-    @assert length(g2_prime_vals) == k "g2_prime_vals length must match y-dimension k ($(length(g2_prime_vals)) ≠ $k)"
-    h_vals = Vector{ComplexF64}(undef, n)
-    @inbounds for i in 1:n
-        h_vals[i] = levin_1d_integral_local(collect(@view f_vals[i, :]), collect(g2_prime_vals), g2_0, g2_π; local_order = local_order)
-    end
-    return levin_1d_integral_local(h_vals, collect(g1_prime_vals), g1_0, g1_π; local_order = local_order)
-end
-
 function levin_2d_integral_local_phase(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_vals::Vector{<:Number}, g2_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
     n, k = size(f_vals)
     @assert length(g1_prime_vals) == n "g1_prime_vals length must match x-dimension n ($(length(g1_prime_vals)) ≠ $n)"
@@ -2918,76 +2839,6 @@ function levin_2d_integral_local_phase_batched(f_vals::Matrix{<:Number}, g1_prim
         h_vals .+= _levin_1d_local_segment_batch(rhs, @view(gp2[idx]), g2[first(idx)], g2[last(idx)], segment.D)
     end
     return levin_1d_integral_local_phase(h_vals, collect(g1_prime_vals), collect(g1_vals); local_order = local_order)
-end
-
-function levin_2d_integral_local_phase_pair_batched(f1::Matrix{<:Number}, f2::Matrix{<:Number}, g1_prime_vals1::Vector{<:Number}, g1_prime_vals2::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_vals1::Vector{<:Number}, g1_vals2::Vector{<:Number}, g2_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n, k = size(f1)
-    size(f2) == (n, k) || throw(ArgumentError("paired 2D Levin inputs must have the same size"))
-    plan2 = _levin_1d_local_plan(k, local_order)
-    gp2 = Vector{ComplexF64}(undef, k)
-    g2 = Vector{ComplexF64}(undef, k)
-    @inbounds for i in 1:k
-        src = plan2.perm[i]
-        gp2[i] = g2_prime_vals[src]
-        g2[i] = g2_vals[src]
-    end
-    h1 = zeros(ComplexF64, n)
-    h2 = zeros(ComplexF64, n)
-    for segment in plan2.segments
-        idx = segment.idx
-        rhs = Matrix{ComplexF64}(undef, length(idx), 2n)
-        @inbounds for (ii, jj) in enumerate(idx)
-            srcj = plan2.perm[jj]
-            for row in 1:n
-                rhs[ii, row] = f1[row, srcj]
-                rhs[ii, n + row] = f2[row, srcj]
-            end
-        end
-        vals = _levin_1d_local_segment_batch(rhs, @view(gp2[idx]), g2[first(idx)], g2[last(idx)], segment.D)
-        @inbounds for row in 1:n
-            h1[row] += vals[row]
-            h2[row] += vals[n + row]
-        end
-    end
-    return (
-        levin_1d_integral_local_phase(h1, collect(g1_prime_vals1), collect(g1_vals1); local_order = local_order),
-        levin_1d_integral_local_phase(h2, collect(g1_prime_vals2), collect(g1_vals2); local_order = local_order),
-    )
-end
-
-function levin_2d_integral_local_phase_pair_batched_radial_values(f1::Matrix{<:Number}, f2::Matrix{<:Number}, g2_prime_vals::Vector{<:Number}, g1_vals1::Vector{<:Number}, g1_vals2::Vector{<:Number}, g2_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n, k = size(f1)
-    size(f2) == (n, k) || throw(ArgumentError("paired 2D Levin inputs must have the same size"))
-    plan2 = _levin_1d_local_plan(k, local_order)
-    gp2 = Vector{ComplexF64}(undef, k)
-    g2 = Vector{ComplexF64}(undef, k)
-    @inbounds for i in 1:k
-        src = plan2.perm[i]
-        gp2[i] = g2_prime_vals[src]
-        g2[i] = g2_vals[src]
-    end
-    h1 = zeros(ComplexF64, n)
-    h2 = zeros(ComplexF64, n)
-    for segment in plan2.segments
-        idx = segment.idx
-        rhs = Matrix{ComplexF64}(undef, length(idx), 2n)
-        @inbounds for (ii, jj) in enumerate(idx)
-            srcj = plan2.perm[jj]
-            for row in 1:n
-                rhs[ii, row] = f1[row, srcj]
-                rhs[ii, n + row] = f2[row, srcj]
-            end
-        end
-        vals = _levin_1d_local_segment_batch(rhs, @view(gp2[idx]), g2[first(idx)], g2[last(idx)], segment.D)
-        @inbounds for row in 1:n
-            h1[row] += vals[row]
-            h2[row] += vals[n + row]
-        end
-    end
-    return (
-        levin_1d_integral_local_phase_values(h1, collect(g1_vals1); local_order = local_order),
-        levin_1d_integral_local_phase_values(h2, collect(g1_vals2); local_order = local_order),
-    )
 end
 
 function levin_2d_integral_local_phase_pair_batched_radial_values_factored(f1::Matrix{<:Number}, f2::Matrix{<:Number}, theta_factor::Levin1DLocalPhaseFactor, radial_factor1::Levin1DLocalPhaseFactor, radial_factor2::Levin1DLocalPhaseFactor)
@@ -3876,14 +3727,6 @@ function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, 
     return res
 end
 
-@inline function _eccentric_flux_relerr(flux1, flux2, flux_max, tol)
-    if flux1["EnergyFlux"] == flux2["EnergyFlux"]
-        return 1.0
-    end
-    factor = max(abs(flux2["EnergyFlux"]) / flux_max / tol, 10.0)
-    return factor * abs(flux1["EnergyFlux"] - flux2["EnergyFlux"]) / min(abs(flux1["EnergyFlux"]), abs(flux2["EnergyFlux"]))
-end
-
 function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m, n)
     if s == 2
         S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
@@ -4068,20 +3911,6 @@ function _cached_adaptive_eccentric_segment_bundle!(cache, KG::Dict, local_n::In
     qlo = π * bin / nbin
     qhi = π * (bin + 1) / nbin
     return eccentric_segment_sample_bundle_cheby(KG, qlo, qhi, local_n)
-end
-
-function prewarm_eccentric_adaptive_levin_segments!(cache::EccentricFluxCache, KG_master::Dict;
-        local_n::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
-        max_depth::Int = 8)
-    KG = haskey(KG_master, "Energy") ? KG_master : _kg_from_presampled_master(KG_master)
-    max_depth >= 0 || throw(ArgumentError("max_depth must be nonnegative"))
-    depth_limit = max_depth
-    @inbounds for level in 0:depth_limit
-        for bin in 0:(2^level - 1)
-            _cached_adaptive_eccentric_segment_bundle!(cache, KG, local_n, level, bin)
-        end
-    end
-    return cache
 end
 
 function _adaptive_eccentric_factored_segment(bundle::Dict, Ysamp::Dict, SH, s::Int, a, ω, m::Int, n::Int)

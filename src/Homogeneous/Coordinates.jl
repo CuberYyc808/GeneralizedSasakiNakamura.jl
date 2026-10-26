@@ -2,7 +2,6 @@ module Coordinates
 
 using ..Kerr
 using Roots
-using Interpolations
 
 export rstar_from_r, r_from_rstar
 
@@ -191,11 +190,6 @@ function r_from_rstar(a, rstar)
         # Use Newton method instead; for large rstar, rstar \approx r
         return rp + abs(find_zero((f, x -> sign(x)*((rp + abs(x))^2 + a^2)/Delta(a, rp+abs(x))), rstar, Roots.Newton()))
     end
-end
-
-function build_r_from_rstar_interpolant(a, rsin, rsout; rsstep::Float64=0.01)
-    rsgrid = collect(rsin:rsstep:rsout)
-    return linear_interpolation(rsgrid, (x -> r_from_rstar(a, x)).(rsgrid))
 end
 
 end

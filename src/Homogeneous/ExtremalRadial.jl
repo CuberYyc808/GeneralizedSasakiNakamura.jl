@@ -19,7 +19,6 @@ export extremal_horizon_closed_normalization, extremal_gsn_horizon_coefficients
 export extremal_horizon_start
 export solve_extremal_gsn, extremal_complex_path_amplitudes
 
-const _NORMALIZATION_PRECISION_BITS = 384
 const _NORMALIZATION_SERIES_ORDER = 48
 const _SERIES_ORDER = 28
 
