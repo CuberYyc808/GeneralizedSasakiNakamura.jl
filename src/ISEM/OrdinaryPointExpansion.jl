@@ -24,6 +24,7 @@ export poly_value, poly_pair, poly_triple
 export series_issue, denom_ok
 
 include("TaylorArena.jl")
+include("RationalArena.jl")
 
 const _SERIES_MAG_LIMIT = sqrt(floatmax(Float64))
 const _SERIES_RATIO_LIMIT = inv(sqrt(eps(Float64)))
@@ -591,6 +592,9 @@ end
 function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
     _arena_eligible(params, x0) || return _direct_ab_series!(a_out, b_out, params, x0,
         Taylor1(ComplexF64, order + 1), order)
+    # binary64: the rational form (RationalArena.jl, ~2.5x faster), the Taylor form if it exceeds its fixed sizes
+    terms = _rational_ab_series!(a_out, b_out, params, x0, order)
+    terms === nothing || return terms
     return _direct_ab_series!(a_out, b_out, params, x0, _arena_variable(_reset!(_task_arena()), order + 1), order)
 end
 
