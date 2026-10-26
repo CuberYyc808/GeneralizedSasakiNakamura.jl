@@ -2175,43 +2175,20 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
     return res
 end
 
+# Trapezoidal rules on [0, pi] (1D) and [0, pi]^2 (2D) with uniform grids.
 function trapezoidal_1d_integral(f::Vector{<:Number})
-    # Get grid size: M = number of sampling points (1D)
     M = length(f)
-    M < 2 && return 0.0  # Need at least 2 points for integration
-
-    # Step size: integration range [0, π] for 1D phase (qr or qθ)
-    Δq = π / (M - 1)  # Uniform step between adjacent points
-
-    # --------------------------
-    # Assign weights based on position
-    # --------------------------
-    # Initialize weight vector with all 1.0 (internal points default)
+    M < 2 && return 0.0
+    Δq = π / (M - 1)
     weight = ones(Float64, M)
-    
-    # Edge points (first and last) have weight 0.5 (trapezoidal rule)
-    weight[1] = 0.5    # First point
-    weight[end] = 0.5  # Last point
-    
-    # --------------------------
-    # Compute 1D trapezoidal integral
-    # --------------------------
-    # Element-wise product of function values and weights
-    weighted_f = f .* weight
-    # Sum all weighted values and multiply by step size
-    integral_value = sum(weighted_f) * Δq
-    
-    return integral_value
+    weight[1] = weight[end] = 0.5
+    return sum(f .* weight) * Δq
 end
 
 function trapezoidal_2d_integral(f::Matrix{<:Number})
-    # Get grid size: N×K (N=radial points, K=polar points)
     N, K = size(f)
-    
-    # Calculate step sizes: integration range [0, π] for both qr and qθ
-    Δqr = π / (N - 1)  # Step in radial direction (qr)
-    Δqθ = π / (K - 1)  # Step in polar direction (qθ)
-    
+    Δqr = π / (N - 1)
+    Δqθ = π / (K - 1)
     total = sum(f)
     edge = sum(@view f[1, :]) + sum(@view f[N, :]) + sum(@view f[2:N-1, 1]) + sum(@view f[2:N-1, K])
     corner = f[1, 1] + f[1, K] + f[N, 1] + f[N, K]
