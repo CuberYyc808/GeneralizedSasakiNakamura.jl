@@ -693,10 +693,8 @@ function _gsn_radial_legacy(
         logger = EarlyFilteredLogger(
             (log)->(log.level == Logging.Warn && (sawwarn[] = true); log.level ≥ Logging.Error),
             current_logger())
-        # Compute the SWSH eigenvalue
         lambda = lambda === nothing ? _swsh_eigenvalue(s, l, m, a * omega) :
             lambda
-        # Fill in the mode information
         mode = Mode(s, l, m, a, omega, lambda)
         horizon_scale, horizon_expansion_order = _adaptive_horizon_expansion_order(a, horizon_expansion_order)
         infinity_scale, infinity_expansion_order = _adaptive_infinity_expansion_order(omega, infinity_expansion_order)
@@ -723,7 +721,6 @@ function _gsn_radial_legacy(
                     if !SciMLBase.successful_retcode(Phiinsoln)
                         _warn_solve_failure(method, Phiinsoln.retcode)
                     end
-                    # Then convert to Xin
                     Xinsoln = Solutions.Xsoln_from_Phisoln(Phiinsoln)
                 elseif method == "linear"
                     Phiinsoln = nothing
@@ -804,7 +801,6 @@ function _gsn_radial_legacy(
                     )
                     _warn_complex_solve_failures(
                         method, (Phiinsoln_pos, Phiinsoln_neg))
-                    # Then convert to Xin
                     Xinsoln = Solutions.Xsoln_from_Phisoln(Phiinsoln)
                 elseif method == "linear"
                     Phiinsoln = nothing
@@ -868,7 +864,6 @@ function _gsn_radial_legacy(
                     if !SciMLBase.successful_retcode(Phiupsoln)
                         _warn_solve_failure(method, Phiupsoln.retcode)
                     end
-                    # Then convert to Xup
                     Xupsoln = Solutions.Xsoln_from_Phisoln(Phiupsoln)
                 elseif method == "linear"
                     Phiupsoln = nothing
@@ -949,7 +944,6 @@ function _gsn_radial_legacy(
                     )
                     _warn_complex_solve_failures(
                         method, (Phiupsoln_pos, Phiupsoln_neg))
-                    # Then convert to Xup
                     Xupsoln = Solutions.Xsoln_from_Phisoln(Phiupsoln)
                 elseif method == "linear"
                     Phiupsoln = nothing
@@ -1326,7 +1320,6 @@ function Teukolsky_radial(
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
     end
 
-    # Solve for the GSN solution
     gsn_func = GSN_radial(s, l, m, a, omega, boundary_condition, rsin, rsout;
         horizon_expansion_order, infinity_expansion_order, method, data_type,
         ODE_algorithm, tolerance=requested_tolerance, rsmp, xm, sfe, lfe, N)
@@ -1458,9 +1451,7 @@ function Teukolsky_radial(
             _DEFAULT_rsin, _DEFAULT_rsout;
             method, xm, sfe, lfe, N, tol)
     else
-        # Compute the SWSH eigenvalue
         lambda = spin_weighted_spherical_eigenvalue(s, l, m)
-        # Fill in the mode information
         mode = Mode(s, l, m, a, zero(omega), lambda)
         if boundary_condition == IN
             teuk_func = Solutions.solve_static_Rin(s, l, m, a)
