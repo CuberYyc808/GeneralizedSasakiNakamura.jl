@@ -1,7 +1,7 @@
 module Iteration
 
 using ..CoefficientTables: CoefficientSet
-using ..OrdinaryPointExpansion: direct_ab_value, horizon_closed_form_ab_series!, HORIZON_SHIFT_MAX_X
+using ..OrdinaryPointExpansion: direct_ab_value
 using ..ApparentSingularities: apparent_points, apparent_basis, apparent_jump, next_apparent, APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
 using ..LargeFrequencyExpansion: LargeFrequencyExpansionRouting, large_frequency_expansion_routing, large_frequency_expansion_ab!
@@ -465,12 +465,10 @@ _scratch(coefficients, order, controls) = IterationScratch(
 function _local_ab!(work, coefficients, x, order)
     work.large_frequency_expansion === nothing || return large_frequency_expansion_ab!(
         work.avec, work.bvec, work.large_frequency_expansion, x, order)
-    # Near extremality the march below x = 0.1 takes the closed form in the horizon coordinate (the shift of
-    # the horizon rational functions is rejected there for small kappa); above it, the tables (1e-15 per step).
-    work.closed_form_march && x isa Real && 0 < x < HORIZON_SHIFT_MAX_X &&
-        return horizon_closed_form_ab_series!(work.avec, work.bvec, coefficients.params, x, order)
+    # Near extremality the march below x = 0.1 takes the closed form in the horizon coordinate also at complex
+    # omega (the shift of the horizon rational functions is rejected there for small kappa).
     return ordinary_ab_series!(
-        work.avec, work.bvec, work.pq, coefficients, x, order)
+        work.avec, work.bvec, work.pq, coefficients, x, order; closed_form_march=work.closed_form_march)
 end
 
 # Apparent-point crossing (ApparentSingularities) for a march at current_x towards target_x with the given

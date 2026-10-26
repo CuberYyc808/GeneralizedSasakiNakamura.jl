@@ -703,7 +703,8 @@ end
 # HORIZON_SHIFT_MAX_X and direct_ab_series! above. Otherwise: the shift of the horizon rational functions when
 # `metadata.horizon_shift` is set or x0 is a real point below HORIZON_SHIFT_MAX_X, and the shift is accepted; the
 # closed form for real x0 in [HORIZON_SHIFT_MAX_X, DIRECT_AB_MAX_X) when DIRECT_AB_KEY is set; the ordinary-point
-# tables. (Below 0.1 the shift instead of the closed form left (2, 2, 0.8, 0.8925) Y off by 3.7e-9 at r = 20 - 50
+# tables. Complex omega takes the horizon closed form below HORIZON_SHIFT_MAX_X only with `closed_form_march`
+# (near-extremal marches, Iteration). (Below 0.1 the shift instead of the closed form left (2, 2, 0.8, 0.8925) Y off by 3.7e-9 at r = 20 - 50
 # and B_inc / B_trans of (2, 2), a = 0.99, omega = 0.80 - 0.87 off by up to 2.1e-11 with a 1.5e-12 Chebyshev tail
 # over 129 points; 9.9e-12 and 2.5e-13 with the closed form. A horizon-coordinate closed form up to 0.7 put
 # 2e-9 into a = 0.95, omega = 0.74 - 0.81.)
@@ -715,9 +716,10 @@ function ordinary_ab_series!(
     x0,
     order::Integer;
     shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
+    closed_form_march::Bool=false,
 )
-    if x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X && coefficients.params.omega isa Real &&
-            eltype(a_out) === ComplexF64
+    if x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X && eltype(a_out) === ComplexF64 &&
+            (coefficients.params.omega isa Real || closed_form_march)
         return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
     end
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
