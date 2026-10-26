@@ -2003,12 +2003,17 @@ function _propagate_step!(
         h = initial_h
         plateau_candidate = nothing
         plateau_h = h
-        for _ in 1:32
+        for attempt in 1:32
             candidate = _local_step!(
                 scratch, coefficients, x, state1, state2, h, settings,
                 shifted)
             shifted && candidate.representation ==
                 :ordinary_shift_fallback && break
+            # Non-finite Taylor coefficients do not depend on h: no smaller step can pass.
+            if !_finite_coefficients(scratch, settings.order)
+                rejected += 33 - attempt
+                break
+            end
             if isfinite(candidate.score) && candidate.score < best_score
                 best_score = candidate.score
                 best_candidate = candidate
@@ -2033,6 +2038,28 @@ function _propagate_step!(
         end
         accepted === nothing || break
     end
+    # The Taylor recurrence is linear in the state, but its high-order coefficients scale
+    # like |X| radius^-k and overflow for a large unnormalized state (a solution growing
+    # along the path), leaving no finite candidate at any h; retry with each state scaled
+    # by a power of two, which is exact, and scale the accepted states back.
+    if accepted === nothing && best_candidate === nothing
+        shift1 = _state_power_shift(state1, radius)
+        shift2 = _state_power_shift(state2, radius)
+        if shift1 != 0 || shift2 != 0
+            retry = _propagate_step!(
+                scratch, coefficients, x,
+                _scale_state(state1, shift1), _scale_state(state2, shift2),
+                target_x, settings)
+            accepted = merge(retry.accepted, (;
+                state1=_scale_state(retry.accepted.state1, -shift1),
+                state2=_scale_state(retry.accepted.state2, -shift2)))
+            all(isfinite, (accepted.state1.X, accepted.state1.dXdx,
+                accepted.state2.X, accepted.state2.dXdx)) || error(
+                "complex rational local step overflowed: the propagated state " *
+                "exceeds the binary64 range at x=$x, target=$target_x.")
+            return (; h=retry.h, accepted, rejected=rejected + retry.rejected)
+        end
+    end
     accepted === nothing && error(
         "complex rational local step did not certify; x=$x, " *
         "target=$target_x, best_h=$best_h, best_score=$best_score, " *
@@ -2045,6 +2072,25 @@ function _propagate_step!(
         "coefficient_condition=$(best_candidate === nothing ? Inf : best_candidate.coefficient_condition).")
     return (; h, accepted, rejected)
 end
+
+function _finite_coefficients(scratch, order)
+    @inbounds for index in 1:(order + 1)
+        isfinite(scratch.coeffs1[index]) && isfinite(scratch.coeffs2[index]) ||
+            return false
+    end
+    return true
+end
+
+# Power of two bringing max(|X|, radius |dX/dx|) of a finite nonzero state into [1, 2).
+function _state_power_shift(state, radius)
+    magnitude = max(abs(state.X), radius * abs(state.dXdx))
+    isfinite(magnitude) && magnitude > 0 || return 0
+    return -exponent(magnitude)
+end
+
+_ldexp_complex(z, shift) = complex(ldexp(real(z), shift), ldexp(imag(z), shift))
+_scale_state(state, shift) = iszero(shift) ? state : ComplexRationalState(
+    _ldexp_complex(state.X, shift), _ldexp_complex(state.dXdx, shift))
 
 function _propagate_pair(coefficients, x0, state1, state2, target, settings)
     settings = _local_propagation_settings(settings)
