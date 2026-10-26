@@ -2207,12 +2207,6 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
     return res
 end
 
-function generic_mode_flux(a, p, e, x, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
-    KG = kerr_geo_orbit(a, p, e, x)
-    KG_master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax)
-    return generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
-end
-
 function trapezoidal_1d_integral(f::Vector{<:Number})
     # Get grid size: M = number of sampling points (1D)
     M = length(f)

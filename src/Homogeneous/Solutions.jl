@@ -486,17 +486,6 @@ function scaled_Wronskian_GSN(Xin_soln, Xup_soln, rs, s, m, a, omega, lambda)
     return (Xin*dXupdrs - dXindrs*Xup)/_eta
 end
 
-function scaled_Wronskian_from_Phisolns(Phiin_soln, Phiup_soln, rs, s, m, a, omega, lambda)
-    r = r_from_rstar(a, rs)
-    Xin = exp(1im*Phiin_soln(rs)[1])
-    dXindrs = 1im*exp(1im*Phiinsoln(rs)[1])*Phiinsoln(rs)[2]
-    Xup = exp(1im*Phiup_soln(rs)[1])
-    dXupdrs = 1im*exp(1im*Phiupsoln(rs)[1])*Phiupsoln(rs)[2]
-    _eta = eta(s, m, a, omega, lambda, r)
-
-    return (Xin*dXupdrs - dXindrs*Xup)/_eta
-end
-
 function residual_from_Xsoln(s::Int, m::Int, a, omega, lambda, Xsoln)
     # Compute the second derivative using autodiff instead of finite diff
     X(rs) = Xsoln(rs)[1]
