@@ -20,6 +20,8 @@ Without either selection variable, the runner prints usage and does not load the
 `GSN_TEST_LEVEL` accepts `quick`, `full`, or `extended`. Setting only the level runs all groups.
 `GSN_SOURCE` selects an include-style source checkout; otherwise the installed package is used.
 `GSN_SWSH_PATH` optionally selects a local dependency checkout. No machine-specific path is assumed.
+`GSN_TEST_FLOAT64_ONLY=1` skips the QNM group's explicitly high-precision checks; its
+Float64 coverage and tolerances are unchanged. By default the wide checks also run.
 
 ## Groups
 

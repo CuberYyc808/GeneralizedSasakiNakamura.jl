@@ -9,6 +9,7 @@ include(data_file("qnm_references.jl"))
 
 const Q = GSN.QNM
 const CF = GSN.ConversionFactors
+const QNM_FLOAT64_ONLY = get(ENV, "GSN_TEST_FLOAT64_ONLY", "0") == "1"
 
 "Mirror-branch root through the package's own seeding (src/QNM/ModeObservables.jl _mirror_qnm_root)."
 mirror_root(a, s, l, m, n; convention=:overtone) =
@@ -575,12 +576,14 @@ end
             cf_minimum_iterations=300, cf_maximum_iterations=48000, root_tolerance=5e-10,
             maximum_root_iterations=30, trust_radius=0.2, near_as_role=:none)
         cook56 = 6.435702118014181e-6 - 4.749402227644355im
-        check = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56, options;
-            precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10)
-        @test check.verified
-        moved = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56 + 1e-6im, options;
-            precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10)
-        @test !moved.verified
+        if !QNM_FLOAT64_ONLY
+            check = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56, options;
+                precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10)
+            @test check.verified
+            moved = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56 + 1e-6im, options;
+                precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10)
+            @test !moved.verified
+        end
         # Without wide arithmetic the same check is the Float64 second-layer certificate.
         check64 = Q._near_axis_precision_check(QNMMode(-2, 2, 0, 19), 0.56, cook56, options;
             precision_bits=128, root_tolerance=1e-12, stability_tolerance=1e-10, wide=false)
@@ -590,16 +593,18 @@ end
         @test !moved64.verified
         # The BigFloat position certificate accepts the same root (three consistent derivative stencils and a
         # Newton correction below the stability gate).
-        certified = setprecision(BigFloat, 128) do
-            B = BigFloat
-            Q._polish_frequency_root(QNMMode(-2, 2, 0, 19), B(0.56), Complex{B}(cook56);
-                angular_order=32, sheet_id=:position_test, inversion_index=19, cf_tolerance=B(1e-12),
-                cf_minimum_iterations=600, cf_maximum_iterations=48000, root_tolerance=B(1e-12),
-                maximum_root_iterations=30, trust_radius=B(0.2), position_tolerance=B(1e-10))
+        if !QNM_FLOAT64_ONLY
+            certified = setprecision(BigFloat, 128) do
+                B = BigFloat
+                Q._polish_frequency_root(QNMMode(-2, 2, 0, 19), B(0.56), Complex{B}(cook56);
+                    angular_order=32, sheet_id=:position_test, inversion_index=19, cf_tolerance=B(1e-12),
+                    cf_minimum_iterations=600, cf_maximum_iterations=48000, root_tolerance=B(1e-12),
+                    maximum_root_iterations=30, trust_radius=B(0.2), position_tolerance=B(1e-10))
+            end
+            @test certified.converged && certified.stop_reason == :root_position_tolerance
+            @test certified.position_check.verified
+            @test abs(ComplexF64(certified.omega) - cook56) <= 2e-8
         end
-        @test certified.converged && certified.stop_reason == :root_position_tolerance
-        @test certified.position_check.verified
-        @test abs(ComplexF64(certified.omega) - cook56) <= 2e-8
         # Gaps and missing segments.
         gap = qnm_frequency(QNMMode(-2, 2, 0, 9), 0.35; segment=1)
         @test gap.stop_reason == :negative_imaginary_axis_gap
@@ -627,13 +632,15 @@ end
         seed10 = qnm_frequency(QNMMode(-2, 2, 0, 10), 0.5; segment=1)
         guided = qnm_frequency(QNMMode(-2, 2, 0, 10), 0.5; segment=1, guess=seed10.omega)
         @test guided.provenance.sequence_segment == 1 && guided.provenance.guess_source == :explicit_guess
-        fallback = Q._automatic_precision_fallback(QNMMode(-2, 2, 2, 0), 0.5, 0.4641230259759384 - 0.0856388349880640im;
-            angular_order=32, sheet_id=:unit_fallback, cf_minimum_iterations=300, cf_maximum_iterations=12000,
-            maximum_root_iterations=30, trust_radius=0.2, fallback_precision_bits=128,
-            float64_provenance=NamedTuple(), cf_tolerance=1e-13, root_tolerance=1e-12,
-            stability_tolerance=1e-10, continuation_coordinate=:spin, convention=:overtone,
-            overtone_index=0, inversion_index=0, segment=1)
-        @test fallback.provenance.sequence_segment == 1
+        if !QNM_FLOAT64_ONLY
+            fallback = Q._automatic_precision_fallback(QNMMode(-2, 2, 2, 0), 0.5, 0.4641230259759384 - 0.0856388349880640im;
+                angular_order=32, sheet_id=:unit_fallback, cf_minimum_iterations=300, cf_maximum_iterations=12000,
+                maximum_root_iterations=30, trust_radius=0.2, fallback_precision_bits=128,
+                float64_provenance=NamedTuple(), cf_tolerance=1e-13, root_tolerance=1e-12,
+                stability_tolerance=1e-10, continuation_coordinate=:spin, convention=:overtone,
+                overtone_index=0, inversion_index=0, segment=1)
+            @test fallback.provenance.sequence_segment == 1
+        end
         sequence = qnm_sequence(QNMMode(-2, 2, 0, 10), 0:0.05:0.5)
         @test all(r -> r.omega isa ComplexF64 && r.precision_bits == 53, sequence)
         @test last(sequence).a == 0.4
