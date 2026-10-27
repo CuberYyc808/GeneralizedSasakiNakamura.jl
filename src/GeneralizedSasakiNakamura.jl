@@ -2328,7 +2328,7 @@ export qnm_excitation_factor, qnm, qnm_pair
 export angular_A_to_lambda, lambda_to_angular_A
 
 # Precompile the common calls: Y_radial IN and UP at an ordinary point, at a low (MST) frequency and at a negative
-# frequency, Y_solution, Teukolsky_radial and GSN_radial.
+# frequency, Y_solution, Teukolsky_radial, GSN_radial and a detailed qnm.
 @setup_workload begin
     @compile_workload begin
         for (s, bc) in ((-2, IN), (2, UP)), omega in (0.5, 0.01, -0.5)
@@ -2336,6 +2336,8 @@ export angular_A_to_lambda, lambda_to_angular_A
         end
         Teukolsky_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
         GSN_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
+        # A detailed QNM: frequency, radial observables and excitation factor.
+        qnm(0.68, -2, 2, 2, 0; detailed=true)
     end
 end
 
