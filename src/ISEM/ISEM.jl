@@ -222,6 +222,10 @@ function _conjugate_gsn_radial_function(f::GSNRadialFunction, m::Int, omega)
     )
 end
 
+# Conjugation changes values, not an uncertified solution's error or stages.
+_conjugate_solution_function(f::Certification.UncertifiedSolution) =
+    Certification.UncertifiedSolution(_conjugate_solution_function(f.solution),
+        f.estimated_error, f.stages)
 function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
     mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return YRadialFunction(

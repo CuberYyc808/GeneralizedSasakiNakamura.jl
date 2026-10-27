@@ -4591,18 +4591,28 @@ end
 # Certification fields of the GSN metadata (see ISEM.certificate): a second pass stores certified = false, its
 # estimate and stages in the route metadata; a strict route's estimate is its larger amplitude error (NaN when the
 # estimate cannot be formed).
-# The solution of an infinity rotation match (default or relaxed bound) depends
-# on that match, so its reported error is at least the match error.
+# Every matching strategy contributes to the final error, including a route
+# returned after a relaxed patch limit. This changes only the certificate.
 function _complex_route_certificate(route::ComplexRoute)
     certificate = _complex_amplitude_certificate(route)
-    policy = _metadata_value(route.plan.matching, :policy,
-        _metadata_value(route.metadata, :match_policy, :unknown))
-    policy in (:infinity_rotation, :infinity_rotation_relaxed) ||
-        return certificate
     match_error = _complex_match_error(route)
-    match_error === missing && return certificate
-    return merge(certificate, (estimated_error=max(
-        certificate.estimated_error, match_error),))
+    return _finalize_complex_certificate(certificate, match_error,
+        route.plan.controls.tolerance)
+end
+
+function _finalize_complex_certificate(certificate, match_error, tolerance)
+    estimate = match_error === missing ? certificate.estimated_error :
+        max(certificate.estimated_error, match_error)
+    if !isfinite(estimate) || estimate >= 1e-2
+        error("ISEM complex route has unusable estimated_error=$estimate; " *
+            "a finite estimate below 0.01 is required.")
+    end
+    within_tolerance = estimate <= tolerance
+    if !within_tolerance
+        @warn "ISEM complex result not certified: estimated_error=$estimate exceeds tolerance=$tolerance." maxlog=1
+    end
+    return merge(certificate, (certified=certificate.certified && within_tolerance,
+        estimated_error=estimate))
 end
 
 function _complex_amplitude_certificate(route::ComplexRoute)
@@ -4721,11 +4731,16 @@ end
 
 function y_radial_function(route::ComplexRoute)
     _check_y_branch(route)
+    certificate = _complex_route_certificate(route)
     root = _root_module()
     isem = _isem_module()
     y_type = getfield(isem, :YRadialFunction)
     amps = _y_amplitudes(route)
     y_solution = route_y_solution(route; amplitudes=amps)
+    if !certificate.certified
+        y_solution = getfield(isem, :Certification).UncertifiedSolution(
+            y_solution, certificate.estimated_error, certificate.uncertified_stages)
+    end
     x_state = complex_gsn_solution_rstar(route)
     x_solution = r -> x_state(rstar_from_r(route.params.a, r))[1]
     y_scalar = r -> y_solution(r)[1]

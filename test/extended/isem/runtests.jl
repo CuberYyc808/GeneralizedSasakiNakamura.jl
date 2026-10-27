@@ -47,6 +47,7 @@ include(joinpath(@__DIR__, "near_horizon_cancellation.jl"))
 include(joinpath(@__DIR__, "near_horizon_teukolsky.jl"))
 include(joinpath(@__DIR__, "legacy_fallback.jl"))
 include(joinpath(@__DIR__, "horizon_seed_cap.jl"))
+include(joinpath(@__DIR__, "certificate_semantics.jl"))
 
 # ---------------------------------------------------------------------------------------------------
 # Near the positive imaginary axis, a = 0, omega = eps + 0.3i: a junction that puts the infinity ray through

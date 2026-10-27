@@ -126,7 +126,7 @@ certificate(x) = (true, NaN, ())
 
 # Callable stand-in for a solution function of an uncertified result (Y, and Teukolsky DOWN/OUT, whose
 # solution functions have no route to carry the certificate).
-struct UncertifiedSolution{F}
+struct UncertifiedSolution{F} <: Function
     solution::F
     estimated_error::Float64
     stages::Tuple{Vararg{Symbol}}
