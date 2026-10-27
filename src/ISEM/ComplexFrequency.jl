@@ -3717,7 +3717,24 @@ function _apply_exact_pole_normalization(route::ComplexRoute)
     Base.@nospecialize route
     incidence = zero(route.incidence)
     teukolsky_incidence = zero(route.teukolsky_incidence)
+    # The incidence is set to zero at the root, so its own relative error (the
+    # resolved size of a ~1e-13 amplitude) no longer applies. Its error is the
+    # discarded value or its uncertainty, whichever is larger, in units of the
+    # larger amplitude, as in the pair errors; the reflection error is unchanged.
+    raw_errors = try
+        amplitude_errors(route)
+    catch err
+        err isa InterruptException && rethrow()
+        (NaN, NaN)
+    end
+    scale = max(abs(route.incidence), abs(route.reflection))
+    pole_errors = (Float64(max(raw_errors[1] * abs(route.incidence),
+            abs(route.incidence)) / scale), Float64(raw_errors[2]))
     metadata = merge(route.metadata, (;
+        incidence_error=pole_errors[1],
+        reflection_error=pole_errors[2],
+        pole_amplitude_errors=pole_errors,
+        pole_incidence_error_before=raw_errors[1],
         pole_normalization=:exact_incidence_zero,
         pole_incidence_before=route.incidence,
         pole_teukolsky_incidence_before=route.teukolsky_incidence,
@@ -4845,6 +4862,8 @@ gsn_radial_function(route::ComplexRoute) =
 # their sums where recorded); Inf when neither is recorded.
 function amplitude_errors(route::ComplexRoute)
     metadata = route.metadata
+    pole = _metadata_value(metadata, :pole_amplitude_errors, nothing)
+    pole === nothing || return pole
     if _metadata_value(metadata, :amplitude_backend, nothing) ==
             :complex_mst_analytic
         analytic = max(
