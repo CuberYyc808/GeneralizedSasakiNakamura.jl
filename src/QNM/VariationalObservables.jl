@@ -134,7 +134,11 @@ end
 
 # The detailed result shares precisely the compact GSN calculation. The
 # Teukolsky bridge is analytic, not a second independent radial validation.
-function _qnm_variational_teukolsky(root, gsn; bridge_tolerance=1e-10, kwargs...)
+# The bridge converts the GSN values, so its default target is theirs (the
+# refinement target): near a = 1 the incidence floor ~3e-13 times the
+# conversion's 1/kappa growth reaches a few 1e-10.
+function _qnm_variational_teukolsky(root, gsn; bridge_tolerance=nothing, kwargs...)
+    bridge_tolerance === nothing && (bridge_tolerance = gsn.metadata.step_tolerance)
     a,w = gsn.metadata.evaluation_a,gsn.metadata.evaluation_omega
     s,m = root.mode.s,root.mode.m
     wd = _frequency_dual(w)

@@ -101,12 +101,12 @@ function _estimated_decimal_digits(relative_drift)
 end
 
 # Turn one `LeaverResult` into the public result: validate it with ISEM,
-# compute the excitation factor, and wrap it as QNMResult, QNMEstimate,
-# QNMEndpointResult or QNMFailure (with radial solutions when `detailed`).
+# compute the excitation factor, and wrap it as QNMResult (any status) or
+# QNMExtremal (with radial solutions when `detailed`).
 function _qnm_branch_observables(root, excitation_options;
         input_a=root.a, detailed::Bool=false)
     if !(root.status in (:accepted, :estimated))
-        return QNMFailure((
+        return QNMResult((
             a=input_a,
             mode=root.mode,
             frequency=root.omega,
@@ -126,7 +126,7 @@ function _qnm_branch_observables(root, excitation_options;
     end
     if get(root.provenance, :extremal_endpoint, false) &&
             !get(root.provenance, :simple_pole, true)
-        return QNMEndpointResult((
+        return QNMExtremal((
             a=input_a,
             mode=root.mode,
             frequency=root.omega,
@@ -160,7 +160,7 @@ function _qnm_branch_observables(root, excitation_options;
         ))
     end
     if !get(root.provenance, :gsn_amplitude_limit_implemented, true)
-        return QNMFailure((
+        return QNMResult((
             a=input_a,
             mode=root.mode,
             frequency=root.omega,
@@ -200,7 +200,7 @@ function _qnm_branch_observables(root, excitation_options;
         detailed ? qnm_excitation_factor(root; excitation_options...) :
             _qnm_gsn_excitation_factor(root; excitation_options...)
     catch error
-        return QNMFailure((
+        return QNMResult((
             a=input_a,
             mode=root.mode,
             frequency=root.omega,
@@ -311,10 +311,9 @@ function _qnm_branch_observables(root, excitation_options;
     if status == :failed
         stage = validation.status != :accepted ?
             :ISEM_validation : :excitation_factor
-        return QNMFailure(merge(compact, (stage=stage,)))
+        return QNMResult(merge(compact, (stage=stage,)))
     end
-    ResultType = status == :estimated ? QNMEstimate : QNMResult
-    detailed || return ResultType(compact)
+    detailed || return QNMResult(compact)
 
     solutions = _qnm_radial_solutions(root)
     teukolsky = (
@@ -323,7 +322,7 @@ function _qnm_branch_observables(root, excitation_options;
         excitation_factor=excitation.B_teukolsky,
         normalization=:teukolsky_unit_transmission,
     )
-    return ResultType(merge(compact, (
+    return QNMResult(merge(compact, (
         X=solutions.X,
         Y=solutions.Y,
         R=solutions.R,
@@ -455,10 +454,11 @@ the `ordinary` and `mirror` roots (`convention=:leaver` requires one).
 Use [`qnm_pair`](@ref) only when both branches are required in one result.
 `root_options` and `excitation_options` are optional NamedTuples forwarded to
 `qnm_frequency` and `qnm_excitation_factor`. The no-keyword call uses package
-defaults. The result is a `QNMResult` when every check passes, a
-`QNMEstimate` when the observables are finite but one check misses its target
-(named in `limiting_gate`), a `QNMFailure` when a step fails, and a
-`QNMEndpointResult` for a zero-damping mode at `a = ±1`.
+defaults. The result is a `QNMResult` whose `status` is `:accepted` when every
+check passes, `:estimated` when the observables are finite but one check misses
+its target (named in `limiting_gate`) and `:failed` when a step fails (`stage`
+and `stop_reason` say which); `error` is the estimated relative error. A
+zero-damping mode at `a = ±1` gives a `QNMExtremal`.
 """
 function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
         branch::QNMBranch=ordinary;
@@ -485,9 +485,7 @@ function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
     result = _qnm_branch_observables(
         root, excitation_options; input_a=a, detailed)
     excitation_seconds = (time_ns() - excitation_start) / 1e9
-    ResultType = result isa QNMResult ? QNMResult :
-        result isa QNMEstimate ? QNMEstimate :
-        result isa QNMEndpointResult ? QNMEndpointResult : QNMFailure
+    ResultType = result isa QNMExtremal ? QNMExtremal : QNMResult
     return ResultType(merge(result.data,
         (timing=(frequency_seconds=frequency_seconds,
             excitation_seconds=excitation_seconds,

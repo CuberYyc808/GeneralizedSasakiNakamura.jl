@@ -244,9 +244,9 @@ end
     @test qnm(0.68, -2, 2, 2, 0, "mirror").omega == mirror_mode.omega
     @test qnm(0.68, -2, 2, 2, 0, :ordinary).omega == ordinary_mode.omega
     @test Ordinary === ordinary && Mirror === mirror
-    # Display (9 lines, fixed head and tail).
+    # Display (10 lines, fixed head and tail).
     text = sprint(show, MIME("text/plain"), ordinary_mode)
-    @test length(split(text, '\n')) == 9
+    @test length(split(text, '\n')) == 10
     @test startswith(text, "QuasiNormalMode(\n")
     @test endswith(text, "    formalism = GSN)")
     @test startswith(sprint(show, ordinary_mode), "QNMResult(mode=")
@@ -329,11 +329,11 @@ end
     @test special.omega == -2.0im
     @test !special.provenance.gsn_amplitude_limit_implemented
     as_result = qnm(0.0, -2, 2, 2, 8)
-    @test as_result isa QNMFailure     # no simple-pole residue at the algebraically special frequency
+    @test as_result.status == :failed     # no simple-pole residue at the algebraically special frequency
     @test ismissing(as_result.excitation)
     for (a, m) in ((1.0, 2), (-1.0, -2))
         endpoint = qnm(a, -2, 2, m, 0)
-        @test endpoint isa QNMEndpointResult
+        @test endpoint isa QNMExtremal
         @test ismissing(endpoint.excitation_factor)
         @test ismissing(endpoint.incidence_amplitude)
         @test !endpoint.simple_pole
@@ -342,9 +342,8 @@ end
     damped_extremal = qnm(1.0, -2, 2, -2, 0)
     @test startswith(sprint(show, MIME("text/plain"), damped_extremal), "ExtremalQuasiNormalMode(")
     if at_level(:full)
-        # The full result fails normalization_bridge_gate here; the compact observables are checked.
-        plus = qnm(0.99999, -2, 2, 2, 0; detailed=false)
-        minus = qnm(-0.99999, -2, 2, -2, 0; detailed=false)
+        plus = qnm(0.99999, -2, 2, 2, 0)
+        minus = qnm(-0.99999, -2, 2, -2, 0)
         for result in (plus, minus)
             @test result.status in (:accepted, :estimated)
             @test isfinite(result.excitation_factor)
@@ -359,7 +358,7 @@ end
             if hard.status == :accepted
                 @test isfinite(hard.excitation_factor)
             else
-                @test hard isa Union{QNMFailure, QNMEstimate}
+                @test hard isa QNMResult && hard.status in (:failed, :estimated)
                 @test hard.stop_reason isa Symbol
             end
         end
@@ -498,7 +497,7 @@ end
     @test extremal.status == :failed && extremal.stop_reason == :segment_unsupported_at_extremal
     @test extremal.provenance.sequence_segment == 1
     # Display: segment k > 0 is appended to the parameters line; the line count is unchanged.
-    failure(segment) = QNMFailure((a=0.5, mode=m0, frequency=complex(NaN, NaN), stage=:root,
+    failure(segment) = QNMResult((a=0.5, mode=m0, frequency=complex(NaN, NaN), stage=:root, status=:failed,
         stop_reason=:negative_imaginary_axis_gap, segment=segment))
     text0 = sprint(show, MIME("text/plain"), failure(0))
     text1 = sprint(show, MIME("text/plain"), failure(1))

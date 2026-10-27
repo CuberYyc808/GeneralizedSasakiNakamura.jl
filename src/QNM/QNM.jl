@@ -48,8 +48,8 @@ include("VariationalObservables.jl")
 include("ModeObservables.jl")
 include("ArbitraryPrecisionRoots.jl")
 
-export QNMMode, QNMBranch, QNMResult, QNMEstimate, QNMFailure,
-    QNMEndpointResult,
+export QNMMode, QNMBranch, QNMResult,
+    QNMExtremal,
     QNMPairResult
 export ordinary, mirror, Ordinary, Mirror
 export LeaverResult, ISEMValidationResult, ExcitationFactorResult

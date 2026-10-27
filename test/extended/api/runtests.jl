@@ -15,7 +15,7 @@ include(joinpath(@__DIR__, "..", "common", "helpers.jl"))
         :GSN_pointparticle_mode, :Teukolsky_pointparticle_mode, :Teukolsky_pointparticle_flux,
         :BoundaryCondition, :NormalizationConvention, :Mode, :GSNRadialFunction, :TeukolskyRadialFunction,
         :YRadialFunction, :ISEM, :IN, :UP, :OUT, :DOWN, :UNIT_GSN_TRANS, :UNIT_TEUKOLSKY_TRANS,
-        :QNMMode, :QNMBranch, :QNMResult, :QNMEstimate, :QNMFailure, :QNMEndpointResult, :QNMPairResult,
+        :QNMMode, :QNMBranch, :QNMResult, :QNMExtremal, :QNMPairResult,
         :ordinary, :mirror, :Ordinary, :Mirror, :LeaverResult, :ISEMValidationResult, :ExcitationFactorResult,
         :qnm_frequency, :qnm_sequence, :validate_qnm_with_isem, :qnm_excitation_factor, :qnm, :qnm_pair,
         :angular_A_to_lambda, :lambda_to_angular_A,
@@ -150,14 +150,16 @@ end
 
 @testset "QNM result types and show" begin
     failure = qnm(0.0, -2, 2, 2, 8)
-    @test failure isa QNMFailure
+    @test failure isa QNMResult
     @test failure.status == :failed
-    @test startswith(sprint(show, failure), "QNMFailure(mode=")
-    @test startswith(sprint(show, MIME("text/plain"), failure), "QNMFailure(\n")
+    @test startswith(sprint(show, failure), "QNMResult(mode=")
+    plain = sprint(show, MIME("text/plain"), failure)
+    @test startswith(plain, "QuasiNormalMode(\n")
+    @test occursin("status = failed", plain) && occursin("higher precision", plain)
     @test :stage in propertynames(failure)
     endpoint = qnm(1.0, -2, 2, 2, 0)
-    @test endpoint isa QNMEndpointResult
-    @test startswith(sprint(show, endpoint), "QNMEndpointResult(mode=")
+    @test endpoint isa QNMExtremal
+    @test startswith(sprint(show, endpoint), "QNMExtremal(mode=")
     root = qnm_frequency(QNMMode(-2, 2, 2, 0), 0.3)
     @test root isa LeaverResult
     @test root.convention == :overtone

@@ -94,15 +94,15 @@ amplitudes from `GSN_radial` (the Richardson route; for `a = ±1` see Exact
 extremal spin). That route is accepted when the same incidence and Wronskian
 checks pass and the step drift (the relative change between successive
 Richardson estimates) is at most `1e-7`. When the route that is used misses a
-target, or the root itself has status `:estimated`, `qnm` returns a
-[`QNMEstimate`](@ref) in the cases listed in its docstring and a `QNMFailure`
-otherwise.
+target, or the root itself has status `:estimated`, the result has
+`status = :estimated` in the cases listed in the [`QNMResult`](@ref) docstring
+and `status = :failed` otherwise.
 
 `excitation_options` with `backend=:richardson`, an explicit stencil `h`, a
 `direction_tolerance`, or a custom `radial_solver` or `teukolsky_solver` always
 selects the Richardson route. `backend=:variational` forces the direct route
 and returns its result without fallback. Outside the scope above, or with those
-options, it raises an `ArgumentError`: `qnm` returns it as a `QNMFailure` with
+options, it raises an `ArgumentError`: `qnm` returns it with `status = :failed`,
 `stage = :radial_evaluation` and the text in `error_message` (for a damped root
 at `a = ±1`, `qnm` raises it instead), and `qnm_excitation_factor` raises it.
 `result.excitation.metadata` has the entry `backend = :variational` only for a
@@ -180,8 +180,8 @@ At `a = 0` the pair has merged into `-2i`: `:overtone` and `:complete_spectrum`
 `n = 8` (for `|s| = 2`, `l = 2`, any `m`) and `:complete_spectrum` `n = 9` (for
 `s = -2`, `l = 2`, `|m| = 2`) return exactly `-2i`. `qnm_frequency` reports it
 with `status = :accepted` and
-`stop_reason = :exact_algebraically_special_endpoint`; `qnm` returns a
-`QNMFailure` with `stage = :pole_skipping_endpoint` and
+`stop_reason = :exact_algebraically_special_endpoint`; `qnm` returns
+`status = :failed` with `stage = :pole_skipping_endpoint` and
 `stop_reason = :matsubara_qnm_pole_skipping_no_simple_gsn_residue`, because the
 incidence amplitude has no simple zero at `-2i` and the excitation factor is not
 defined.
@@ -337,7 +337,8 @@ horizon). `Y` is the `IN` solution for `s = -2` and the `UP` solution for
 `s = +2`, and is `missing` for other `s`.
 
 The full result also adds checks: the GSN and Teukolsky normalizations of the
-excitation factor must agree to `1e-10`, and on the Richardson route the
+excitation factor must agree to `1e-10` on the Richardson route and to the
+refinement target (`1e-8`) on the direct route, and on the Richardson route the
 derivative is also taken along imaginary frequency and must agree with the real
 direction to `1e-7`. Its status can therefore be stricter than that of a
 `detailed=false` call.
@@ -392,20 +393,25 @@ part are handled through the mirror mode, so both branches can be polished.
 
 ## Result types
 
-`qnm` returns one of four types:
+`qnm` returns a `QNMResult`, displayed as `QuasiNormalMode(` (at `a = ±1`
+`ExtremalQuasiNormalMode(` with `family = DM`), with
 
-| type | `status` | REPL display | returned when |
-| :--- | :--- | :--- | :--- |
-| `QNMResult` | `:accepted` | `QuasiNormalMode(`; at `a = ±1` `ExtremalQuasiNormalMode(` with `family = DM` | every check passes |
-| `QNMEstimate` | `:estimated` | `QuasiNormalModeEstimate(`; at `a = ±1` `ExtremalQuasiNormalModeEstimate(` with `family = DM` | the values are finite, but a target is missed or the root itself is `:estimated` (below) |
-| `QNMFailure` | `:failed` | `QNMFailure(` | a step fails; `stage` and `stop_reason` say which and why |
-| `QNMEndpointResult` | `:accepted` | `ExtremalQuasiNormalMode(` with `family = ZDM` and `simple_pole = false` | a zero-damping mode at `a = ±1` |
+| `status` | returned when |
+| :--- | :--- |
+| `:accepted` | every check passes |
+| `:estimated` | the values are finite, but a target is missed or the root itself is `:estimated` (below) |
+| `:failed` | a step fails; `stage` and `stop_reason` say which and why |
 
-`DM` stands for damped mode and `ZDM` for zero-damping mode. The cases that give
-a [`QNMEstimate`](@ref) (named in `limiting_gate`), the stages of a
-[`QNMFailure`](@ref) and the meaning of its `omega` are given in their
-docstrings under Reference below; `target_relative_precision` is `1e-7` on the Richardson
-route and `1e-8` on the direct route. A [`QNMEndpointResult`](@ref) has
+and `error`, the estimated relative error; the display gives its range next to
+an estimated or failed status, and for a failed one suggests checking the
+result or using higher precision. A zero-damping
+mode at `a = ±1` gives a `QNMExtremal`, displayed as
+`ExtremalQuasiNormalMode(` with `family = ZDM` and `simple_pole = false`.
+
+`DM` stands for damped mode and `ZDM` for zero-damping mode. The estimated
+cases (named in `limiting_gate`), the failed stages and the meaning of `omega`
+are given in the [`QNMResult`](@ref) docstring under Reference below; `target_relative_precision` is `1e-7` on the Richardson
+route and `1e-8` on the direct route. A [`QNMExtremal`](@ref) has
 `missing` amplitude fields and `X`, `Y`, `R`, because the synchronous frequency
 `ω = m a/2` is a branch point, not a simple pole. The `ordinary` and `mirror`
 fields of a [`QNMPairResult`](@ref) each hold one of these types.
@@ -429,7 +435,7 @@ For `a = 1` or `a = -1` (exact equality; `a = -1` is evaluated as `a = 1` with
    ordinary-branch root with `a*m > 0` whose distance from `m a/2` drops to at
    most `0.7` of its previous value over each of the last two steps (it halves
    with `κ`) is a zero-damping mode, and `qnm` returns the synchronous
-   endpoint `ω = m a/2` as a `QNMEndpointResult`. A root whose distance keeps
+   endpoint `ω = m a/2` as a `QNMExtremal`. A root whose distance keeps
    at least `0.8` of its previous value over both steps, and every other root
    (a mirror root that is polished rather than reflected included), is a damped
    mode (`family = DM`); other ratios leave the family ambiguous. For a damped
@@ -441,14 +447,14 @@ For `a = 1` or `a = -1` (exact equality; `a = -1` is evaluated as `a = 1` with
    it is returned with `status = :estimated` and
    `stop_reason = :extremal_root_off_ladder_branch`,
    `:extremal_family_ambiguous` or the reason the recurrence gives (for example
-   `:extremal_depth_not_stable`), and `qnm` reports it as a `QNMEstimate`, or as
-   a `QNMFailure` if its checks fail. When no angular eigenvalue can be
+   `:extremal_depth_not_stable`), and `qnm` reports it with `status = :estimated`,
+   or `:failed` if its checks fail. When no angular eigenvalue can be
    computed at the recurrence root, the root has status `:failed` and `qnm`
-   returns a `QNMFailure` with `stage = :root`.
+   returns `status = :failed` with `stage = :root`.
 
 If a ladder spin fails for an `|m| = l` co-rotating mode, the synchronous
 endpoint is returned without the distance test. `qnm` still returns a
-`QNMEndpointResult` with `status = :accepted`; such an unverified endpoint is
+`QNMExtremal` with `status = :accepted`; such an unverified endpoint is
 recognized by `stop_reason = :extremal_family_unverified` (and
 `root.status = :estimated`).
 
@@ -472,9 +478,7 @@ exact-extremal frequency.
 QNMMode
 QNMBranch
 QNMResult
-QNMEstimate
-QNMFailure
-QNMEndpointResult
+QNMExtremal
 QNMPairResult
 LeaverResult
 ISEMValidationResult

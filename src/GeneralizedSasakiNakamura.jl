@@ -2327,8 +2327,8 @@ end
 
 include("QNM/QNM.jl")
 using .QNM
-export QNMMode, QNMBranch, QNMResult, QNMEstimate, QNMFailure,
-    QNMEndpointResult,
+export QNMMode, QNMBranch, QNMResult,
+    QNMExtremal,
     QNMPairResult
 export ordinary, mirror, Ordinary, Mirror
 export LeaverResult, ISEMValidationResult, ExcitationFactorResult

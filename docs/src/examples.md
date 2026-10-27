@@ -113,8 +113,9 @@ QuasiNormalMode(
 ```
 
 This `QNMResult` (displayed as `QuasiNormalMode`) passed every accuracy check.
-Otherwise `qnm` returns a `QNMEstimate` or a `QNMFailure`; a zero-damping
-mode at $a = \pm 1$ gives a `QNMEndpointResult` without amplitudes. Check
+Otherwise its `status` is `:estimated` or `:failed`, and `error` gives the
+estimated relative error; a zero-damping
+mode at $a = \pm 1$ gives a `QNMExtremal` without amplitudes. Check
 `.status` before using the values. The fields are
 
 ```julia

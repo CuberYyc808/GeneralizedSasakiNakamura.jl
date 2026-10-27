@@ -52,68 +52,42 @@ const Mirror = mirror
 """
     QNMResult
 
-Result of [`qnm`](@ref) when every check passes. The display shows the main
-observables; all other fields are available as properties.
+Result of [`qnm`](@ref). `status` is `:accepted` when every check passes,
+`:estimated` when the observables are finite but one target is missed
+(`limiting_gate` names it) and `:failed` when a step fails (`stage` names the
+step and `stop_reason` the reason). `error` is the estimated relative error of
+the observables (the refinement drift `achieved_relative_precision`, an
+indicator rather than a bound), `missing` when no observable was computed.
+
+The `limiting_gate` of an estimated result is `:richardson_step_gate` (the
+Richardson step drift of the frequency derivative exceeds its target),
+`:conditioned_root_gate` (the root itself has status `:estimated`) or
+`:scaled_incidence_gate` (a near-extremal or strongly damped root passes only
+the relaxed incidence check `|A_inc/α|/max(1, |ω|) ≤ 1e-8`).
+
+The stages of a failed result are `:root` (the root search failed),
+`:pole_skipping_endpoint` (the frequency `-2i` at `a = 0`, where the excitation
+factor is not defined), `:radial_evaluation` (an error was thrown while
+computing the amplitudes; its text is in `error_message`), `:ISEM_validation`
+(the incidence amplitude did not vanish to `1e-8`, or the Wronskian check
+failed) and `:excitation_factor`. A failed result carries only the fields its
+stage reached; with `stage = :root` a finite `omega` is a diagnostic value of
+the failed root search, not a QNM frequency.
 """
 struct QNMResult{D}
     data::D
 end
 
 """
-    QNMEstimate
-
-Result of [`qnm`](@ref) when the root is accepted or estimated and all
-observables are finite, but one target is missed. `limiting_gate` names the
-case:
-
-- `:richardson_step_gate`: the incidence check passed, but the Richardson step
-  drift of the frequency derivative exceeds its target (`1e-7` by default);
-- `:conditioned_root_gate`: the incidence and Wronskian checks passed, but the
-  root itself has status `:estimated`;
-- `:scaled_incidence_gate` (or `:richardson_step_and_scaled_incidence_gates`
-  when the step drift also exceeds its target): in the compact call, a
-  near-extremal root passes only the relaxed incidence check on the implied
-  root shift, `|A_inc/α|/max(1, |ω|) ≤ 1e-8`;
-- `:scaled_incidence_gate`: in the compact call, a mode with `Im ω < -0.5` has
-  a finite incidence amplitude that does not vanish to `1e-8` at the root.
-
-`achieved_relative_precision` is the step drift that was reached and
-`target_relative_precision` its target; both are indicators, not error bounds.
-The values are usable as estimates.
-"""
-struct QNMEstimate{D}
-    data::D
-end
-
-"""
-    QNMFailure
-
-Result of [`qnm`](@ref) when a step fails; `stage` names the step and
-`stop_reason` the reason. The stages are `:root` (the root search failed),
-`:pole_skipping_endpoint` (the frequency `-2i` at `a = 0`, where the excitation
-factor is not defined), `:radial_evaluation` (an error was thrown while
-computing the amplitudes; its text is in `error_message`), `:ISEM_validation`
-(the incidence amplitude did not vanish to `1e-8`, or the Wronskian check
-failed) and `:excitation_factor`. It carries only the fields its stage reached:
-failures at the `:root`, `:pole_skipping_endpoint` and `:radial_evaluation`
-stages have no amplitude fields. With `stage = :root` a finite `omega` is a
-diagnostic value of the failed root search, not a QNM frequency; at every other
-stage `omega` is the root that was found.
-"""
-struct QNMFailure{D}
-    data::D
-end
-
-"""
-    QNMEndpointResult
+    QNMExtremal
 
 Result of [`qnm`](@ref) for a zero-damping mode (ZDM) at exact extremality,
 `a = ±1`. These co-rotating families end at the synchronous frequency
 `ω = m a/2`, which is a branch point of the Green function rather than a simple
 pole, so the amplitude fields are `missing`. Damped modes (DM) at `a = ±1`
-return a `QNMResult` or `QNMEstimate`, or a `QNMFailure` when a check fails.
+return a `QNMResult`.
 """
-struct QNMEndpointResult{D}
+struct QNMExtremal{D}
     data::D
 end
 
@@ -121,9 +95,8 @@ end
     QNMPairResult
 
 Result of [`qnm_pair`](@ref): both branches of one mode. `ordinary` and
-`mirror` each hold a `QNMResult`, `QNMEstimate`, `QNMFailure` or
-`QNMEndpointResult`. `status` is `:failed` if either branch failed, otherwise
-`:estimated` if either is an estimate, otherwise `:accepted`; `stop_reason` is
+`mirror` each hold a `QNMResult` or `QNMExtremal`. `status` is `:failed` if either branch failed, otherwise
+`:estimated` if either is estimated, otherwise `:accepted`; `stop_reason` is
 `:accepted` or the reason of the first branch that is not accepted, prefixed
 with `ordinary_` or `mirror_`. `a`, `s`, `l`, `m` and `n` repeat the inputs,
 and `metadata` records how the mirror root was obtained.
@@ -132,8 +105,7 @@ struct QNMPairResult{D}
     data::D
 end
 
-for ResultType in (QNMResult, QNMEstimate, QNMFailure, QNMEndpointResult,
-        QNMPairResult)
+for ResultType in (QNMExtremal, QNMPairResult)
     @eval begin
         function Base.getproperty(result::$ResultType, name::Symbol)
             name === :data && return getfield(result, :data)
@@ -145,20 +117,13 @@ for ResultType in (QNMResult, QNMEstimate, QNMFailure, QNMEndpointResult,
     end
 end
 
-function Base.show(io::IO, result::QNMEstimate)
-    print(io, "QNMEstimate(mode=", result.mode,
-        ", frequency=", result.frequency,
-        ", achieved_relative_precision=", result.achieved_relative_precision,
-        ", limiting_gate=", result.limiting_gate, ")")
-end
-
-function Base.show(io::IO, result::QNMEndpointResult)
-    print(io, "QNMEndpointResult(mode=", result.mode,
+function Base.show(io::IO, result::QNMExtremal)
+    print(io, "QNMExtremal(mode=", result.mode,
         ", frequency=", result.frequency,
         ", spectrum_object=", result.spectrum_object, ")")
 end
 
-function Base.show(io::IO, ::MIME"text/plain", result::QNMEndpointResult)
+function Base.show(io::IO, ::MIME"text/plain", result::QNMExtremal)
     println(io, "ExtremalQuasiNormalMode(")
     println(io, "    parameters = (a = ", result.a,
         ", s = ", result.mode.s, ", l = ", result.mode.l,
@@ -171,33 +136,24 @@ function Base.show(io::IO, ::MIME"text/plain", result::QNMEndpointResult)
     print(io, "    formalism = GSN)")
 end
 
-function Base.show(io::IO, result::QNMFailure)
-    print(io, "QNMFailure(mode=", result.mode,
-        ", stage=", result.stage,
-        ", stop_reason=", result.stop_reason, ")")
+function Base.getproperty(result::QNMResult, name::Symbol)
+    name === :data && return getfield(result, :data)
+    data = getfield(result, :data)
+    name === :error && !haskey(data, :error) && return _qnm_error(data)
+    return getproperty(data, name)
 end
 
-function Base.show(io::IO, ::MIME"text/plain", result::QNMFailure)
-    println(io, "QNMFailure(")
-    println(io, "    parameters = (a = ", result.a,
-        ", s = ", result.mode.s, ", l = ", result.mode.l,
-        ", m = ", result.mode.m, ", n = ", result.mode.n,
-        _qnm_segment_suffix(result), ")")
-    println(io, "    stage = ", result.stage)
-    if result.frequency isa Number && isfinite(result.frequency)
-        println(io, "    omega = ", _qnm_summary_number(result.frequency))
-    else
-        println(io, "    omega = unavailable")
-    end
-    println(io, "    status = failed")
-    println(io, "    stop_reason = ", result.stop_reason)
-    print(io, "    formalism = GSN)")
-end
+Base.propertynames(result::QNMResult, private::Bool=false) =
+    (propertynames(getfield(result, :data), private)..., :error)
+
+# The estimated relative error: the refinement drift where it was reached.
+_qnm_error(data) = haskey(data, :achieved_relative_precision) ?
+    data.achieved_relative_precision : missing
 
 function Base.show(io::IO, result::QNMResult)
     print(io, "QNMResult(mode=", result.mode,
         ", frequency=", result.frequency,
-        ", status=", result.status, ")")
+        ", status=", result.status, ", error=", result.error, ")")
 end
 
 _qnm_summary_number(value::Real) = @sprintf("%.17g", value)
@@ -216,10 +172,11 @@ function _qnm_summary_number(value::Complex)
 end
 
 # Exact-extremal (a = +-1) damped modes are labelled as such; zero-damping ones are
-# QNMEndpointResult.
+# QNMExtremal.
 _qnm_extremal(result) = abs(result.a) == 1
 
 function Base.show(io::IO, ::MIME"text/plain", result::QNMResult)
+    _qnm_has_observables(result) || return _qnm_show_partial(io, result)
     println(io, _qnm_extremal(result) ? "ExtremalQuasiNormalMode(" : "QuasiNormalMode(")
     println(io, "    parameters = (a = ", result.a,
         ", s = ", result.mode.s, ", l = ", result.mode.l,
@@ -236,42 +193,23 @@ function Base.show(io::IO, ::MIME"text/plain", result::QNMResult)
     println(io, "    excitation_factor = ",
         _qnm_summary_number(result.excitation_factor))
     _qnm_extremal(result) && println(io, "    family = DM")
+    _qnm_show_status(io, result)
     print(io, "    formalism = GSN)")
 end
 
-function Base.show(io::IO, ::MIME"text/plain", result::QNMEstimate)
-    println(io, _qnm_extremal(result) ?
-        "ExtremalQuasiNormalModeEstimate(" : "QuasiNormalModeEstimate(")
-    println(io, "    parameters = (a = ", result.a,
-        ", s = ", result.mode.s, ", l = ", result.mode.l,
-        ", m = ", result.mode.m, ", n = ", result.mode.n,
-        _qnm_segment_suffix(result), ")")
-    println(io, "    omega = ", _qnm_summary_number(result.frequency))
-    println(io, "    lambda = ", _qnm_summary_number(result.lambda))
-    println(io, "    incidence_amplitude = ",
-        _qnm_summary_number(result.incidence_amplitude))
-    println(io, "    reflection_amplitude = ",
-        _qnm_summary_number(result.reflection_amplitude))
-    println(io, "    incidence_derivative = ",
-        _qnm_summary_number(result.incidence_derivative))
-    println(io, "    excitation_factor = ",
-        _qnm_summary_number(result.excitation_factor))
-    println(io, "    achieved_relative_precision = ",
-        _qnm_summary_number(result.achieved_relative_precision))
-    println(io, "    target_relative_precision = ",
-        _qnm_summary_number(result.target_relative_precision))
-    if result.inferred_root_shift !== missing
-        println(io, "    scaled_incidence_residual = ",
-            _qnm_summary_number(result.scaled_incidence_residual))
-        println(io, "    incidence_target = ",
-            _qnm_summary_number(result.incidence_target))
-        println(io, "    inferred_root_shift = ",
-            _qnm_summary_number(result.inferred_root_shift))
-    end
-    println(io, "    limiting_gate = ", result.limiting_gate)
-    _qnm_extremal(result) && println(io, "    family = DM")
-    println(io, "    status = estimated")
-    print(io, "    formalism = GSN)")
+_qnm_has_observables(result) = :excitation_factor in propertynames(result)
+
+function _qnm_show_status(io, result)
+    error = result.error
+    range = error === missing || !isfinite(error) ? "relative error unknown" :
+        iszero(error) ? "relative error below 1e-16" :
+        string("relative error ~ 1e", floor(Int, log10(error)), " to 1e",
+            floor(Int, log10(error)) + 1)
+    note = result.status === :accepted ? "" :
+        result.status === :estimated ? string(" (", range, ")") :
+        string(" (", range, "; check the result or use higher precision)")
+    println(io, "    status = ", result.status, note)
+    result.status === :accepted || println(io, "    stop_reason = ", result.stop_reason)
 end
 
 function Base.show(io::IO, result::QNMPairResult)
@@ -428,4 +366,21 @@ function Base.showerror(io::IO, error::LentzConvergenceError)
     print(io, "Leaver continued fraction did not converge: estimate=",
         error.error_estimate, ", iterations=", error.iterations,
         ", maximum_iterations=", error.maximum_iterations)
+end
+
+# A failed result that stopped before the observables: its stage and the root.
+function _qnm_show_partial(io, result)
+    println(io, _qnm_extremal(result) ? "ExtremalQuasiNormalMode(" : "QuasiNormalMode(")
+    println(io, "    parameters = (a = ", result.a,
+        ", s = ", result.mode.s, ", l = ", result.mode.l,
+        ", m = ", result.mode.m, ", n = ", result.mode.n,
+        _qnm_segment_suffix(result), ")")
+    if result.frequency isa Number && isfinite(result.frequency)
+        println(io, "    omega = ", _qnm_summary_number(result.frequency))
+    else
+        println(io, "    omega = unavailable")
+    end
+    :stage in propertynames(result) && println(io, "    stage = ", result.stage)
+    _qnm_show_status(io, result)
+    print(io, "    formalism = GSN)")
 end

@@ -181,7 +181,7 @@ using Test
         special = qnm_frequency(QNMMode(-2, 2, 2, 8), 0.0)
         endpoint = qnm(1.0, -2, 2, 2, 0)
         @test special.omega == -2.0im
-        @test endpoint isa QNMEndpointResult
+        @test endpoint isa QNMExtremal
         @test ismissing(endpoint.excitation_factor)
     end
 

@@ -19,11 +19,11 @@ roots = qnm_sequence(spins, s, l, m, n)    # Vector{LeaverResult} along a list o
 
 `ordinary` (the default) is the mode with positive real frequency and `mirror`
 the one with negative real frequency. `convention = :leaver` needs an explicit
-frequency guess. `qnm` returns a `QNMResult` when every check passes, a
-`QNMEstimate` when one accuracy check misses its target, a `QNMFailure` when a
-step fails, and a `QNMEndpointResult`, with `status = :accepted` but no
-amplitudes, for a zero-damping mode at $|a| = 1$; check `status` and the result
-type before using the numbers. The result contains:
+frequency guess. `qnm` returns a `QNMResult` with `status = :accepted` when every check passes,
+`:estimated` when one accuracy check misses its target and `:failed` when a
+step fails, and `error`, the estimated relative error; a zero-damping mode at
+$|a| = 1$ gives a `QNMExtremal`, with `status = :accepted` but no
+amplitudes. Check `status` before using the numbers. The result contains:
 
 | field | meaning |
 | :--- | :--- |
