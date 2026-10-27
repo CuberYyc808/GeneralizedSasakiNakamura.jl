@@ -66,7 +66,8 @@ function _qnm_horizon_jet(s,m,a,w,lambda,r,order)
     if abs(a)==1
         # The normalized ExtremalRadial horizon branch: GSN horizon recurrence and closed-form leading
         # amplitude (no Teukolsky conversion, whose factors cancel at small detuning).
-        state=ExtremalRadial.extremal_gsn_horizon_state(s,m,a,w,lambda,r,:ingoing;order)
+        # Do not compile the extremal Taylor/dual kernel on a subextremal call.
+        state=Base.inferencebarrier(ExtremalRadial.extremal_gsn_horizon_state)(s,m,a,w,lambda,r,:ingoing;order)
         X,V=state[1],state[2]/q
     else
         coeff=_qnm_endpoint_coefficients(AsymptoticExpansionCoefficients.ingoing_coefficient_at_hor,
@@ -94,7 +95,7 @@ function _qnm_horizon_potential_series(s,m,a,w,lambda,dlambda,order)
     r=1+h
     rho=r^2+1
     v=Potentials.sF_delta(s,m,Float64(a),wd,ld,r,one(wd))
-    u=Potentials.sW(s,m,Float64(a),wd,ld,r)/rho^2
+    u=Base.inferencebarrier(Potentials.sW)(s,m,Float64(a),wd,ld,r)/rho^2
     coefficients=(v=ntuple(k->ComplexF64(_primal(T.getcoeff(v,k-1))),order+1),
         dv=ntuple(k->ComplexF64(_tangent(T.getcoeff(v,k-1))),order+1),
         w=ntuple(k->ComplexF64(_primal(T.getcoeff(u,k-1))),order+1),
@@ -171,6 +172,15 @@ function _qnm_tangent_propagate(u,s,m,a,w,lambda,r0,r1,tol; tortoise=false,serie
     return sol.u[end],sol.destats.nf
 end
 
+function _qnm_extremal_wide_jet(s,m,a,w0,lambda0,dlambda,rh,extremal_order,extremal_precision)
+    setprecision(BigFloat,extremal_precision) do
+        wb=_frequency_dual(Complex{BigFloat}(w0))
+        lb=_frequency_dual(Complex{BigFloat}(lambda0),Complex{BigFloat}(dlambda))
+        jet=_qnm_horizon_jet(s,m,BigFloat(a),wb,lb,Complex{BigFloat}(rh),extremal_order)
+        SVector{4,ComplexF64}(jet)
+    end
+end
+
 """
 One frequency: propagate the IN state and its tangent, and the two infinity
 bases and their tangents, then differentiate M*c = y at a fixed matching point.
@@ -194,7 +204,7 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
     rh=if abs(a)==1
         alpha=im*(2w0-m*a)
         # |alpha| / max(extremal_scale, |P_0|): the asymptotic horizon state inside its region of use.
-        p0=ExtremalRadial.extremal_gsn_horizon_coefficients(s,m,a,w0,lambda0,:ingoing;order=0).p0
+        p0=Base.inferencebarrier(ExtremalRadial.extremal_gsn_horizon_coefficients)(s,m,a,w0,lambda0,:ingoing;order=0).p0
         distance=extremal_scale === nothing ? extremal_radius :
             min(extremal_radius,abs(alpha)/max(extremal_scale,abs(p0)))
         1+distance*cis(angle(alpha)-copysign(pi/2,imag(alpha)))
@@ -239,12 +249,9 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
     series=potential_series===:auto ?
         _qnm_horizon_potential_series(s,m,a,w0,lambda0,dlambda,potential_order) : potential_series
     h=if abs(a)==1 && extremal_precision>53
-        setprecision(BigFloat,extremal_precision) do
-            wb=_frequency_dual(Complex{BigFloat}(w0))
-            lb=_frequency_dual(Complex{BigFloat}(lambda0),Complex{BigFloat}(dlambda))
-            jet=_qnm_horizon_jet(s,m,BigFloat(a),wb,lb,Complex{BigFloat}(rh),extremal_order)
-            SVector{4,ComplexF64}(jet)
-        end
+        # Barrier: the BigFloat jet is compiled only when this extremal branch runs.
+        Base.inferencebarrier(_qnm_extremal_wide_jet)(
+            s,m,a,w0,lambda0,dlambda,rh,extremal_order,extremal_precision)::SVector{4,ComplexF64}
     else
         _qnm_horizon_jet(s,m,a,w,lambda,rh,abs(a)==1 ? extremal_order : horizon_order)
     end
