@@ -4602,7 +4602,7 @@ function _complex_match_error(route::ComplexRoute)
     errors = (_metadata_value(route.metadata, :incidence_error, missing),
         _metadata_value(route.metadata, :reflection_error, missing))
     any(ismissing, errors) && return missing
-    return Float64(max(errors...))
+    return Float64(maximum(_certificate_amplitude_errors(route, Float64.(errors))))
 end
 
 # Certification fields of the GSN metadata (see ISEM.certificate): a second pass stores certified = false, its
@@ -4610,6 +4610,19 @@ end
 # estimate cannot be formed).
 # Every matching strategy contributes to the final error, including a route
 # returned after a relaxed patch limit. This changes only the certificate.
+# Amplitude errors for the certificate, in units of the larger amplitude as in
+# the pair errors: near a mode the incidence is small, and its own relative
+# error says only how well its size relative to the reflection is resolved.
+# An exact pole normalization already records them in these units.
+function _certificate_amplitude_errors(route::ComplexRoute, errors)
+    _metadata_value(route.metadata, :pole_normalization, nothing) ===
+        :exact_incidence_zero && return errors
+    amplitudes = (abs(route.incidence), abs(route.reflection))
+    scale = maximum(amplitudes)
+    (isfinite(scale) && scale > 0) || return errors
+    return errors .* (amplitudes ./ scale)
+end
+
 function _complex_route_certificate(route::ComplexRoute)
     certificate = _complex_amplitude_certificate(route)
     match_error = _complex_match_error(route)
@@ -4637,7 +4650,7 @@ function _complex_amplitude_certificate(route::ComplexRoute)
         estimated_error=Float64(_metadata_value(route.metadata, :estimated_error, NaN)),
         uncertified_stages=_metadata_value(route.metadata, :uncertified_stages, ()))
     error = try
-        maximum(amplitude_errors(route))
+        maximum(_certificate_amplitude_errors(route, amplitude_errors(route)))
     catch err
         err isa InterruptException && rethrow()
         NaN
