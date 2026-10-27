@@ -643,6 +643,7 @@ function GSN_radial(
 )
     _check_radial_options(method, xm)
     requested_tolerance = tol === nothing ? tolerance : tol
+    legacy_fallback = false
     if _is_auto_method(method) && !_is_static_frequency(omega) &&
             !ExtremalRadial.is_exact_extremal_spin(a)
         try
@@ -655,15 +656,23 @@ function GSN_radial(
             xm === nothing || rethrow()
             _binary64_inputs(a, omega) || rethrow()
             _warn_low_frequency_fallback(omega)
-            @warn "ISEM failed under method=\"auto\"; falling back to the legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err)
+            legacy_fallback = true
+            @warn "ISEM failed under method=\"auto\"; falling back to the uncertified legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err) maxlog=1
         end
     end
     # Compile the legacy solver only when it is actually requested or needed.
-    return Base.inferencebarrier(_gsn_radial_legacy)(
+    result = Base.inferencebarrier(_gsn_radial_legacy)(
         s, l, m, a, omega, boundary_condition, rsin, rsout;
         horizon_expansion_order, infinity_expansion_order, method, data_type,
         ODE_algorithm, tolerance, tol, rsmp, xm, sfe, lfe,
         N, lambda)
+    legacy_fallback || return result
+    all(isfinite, (result.transmission_amplitude, result.incidence_amplitude,
+        result.reflection_amplitude)) ||
+        error("uncertified legacy fallback produced nonfinite radial amplitudes")
+    return ISEM._with_fields(result, (numerical_GSN_solution=
+        ISEM.Certification.LegacyFallbackSolution(result.numerical_GSN_solution),
+        GSN_solution=ISEM.Certification.LegacyFallbackSolution(result.GSN_solution)))
 end
 
 function _gsn_radial_legacy(

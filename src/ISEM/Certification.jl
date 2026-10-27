@@ -119,6 +119,8 @@ end
 Certification of an ISEM route, GSN or Teukolsky radial function or Y solution. Results the strict computation
 accepted are certified; their estimated error is the route's amplitude error estimate where one exists (`NaN` when
 it cannot be formed, `missing` for Y solutions).
+Automatic legacy fallbacks are uncertified with a `NaN` estimate and the stage
+`:legacy_uncertified`; their numerical solution also exposes `fallback=:legacy_uncertified`.
 """
 certificate(x) = (true, NaN, ())
 
@@ -133,5 +135,19 @@ end
 (solution::UncertifiedSolution)(args...) = solution.solution(args...)
 
 certificate(solution::UncertifiedSolution) = (false, solution.estimated_error, solution.stages)
+
+# Keep the legacy numerical solution callable while carrying the fallback provenance.
+struct LegacyFallbackSolution{F}
+    solution::F
+    fallback::Symbol
+end
+LegacyFallbackSolution(solution) = LegacyFallbackSolution(solution, :legacy_uncertified)
+function (solution::LegacyFallbackSolution)(args...; kwargs...)
+    value = solution.solution(args...; kwargs...)
+    finite = value isa Number ? isfinite(value) : all(isfinite, value)
+    finite || error("uncertified legacy fallback produced nonfinite radial state")
+    return value
+end
+certificate(solution::LegacyFallbackSolution) = (false, NaN, (solution.fallback,))
 
 end

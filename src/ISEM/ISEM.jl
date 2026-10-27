@@ -513,6 +513,7 @@ end
 _metadata_certificate(metadata) = metadata isa NamedTuple ?
     (get(metadata, :certified, true), get(metadata, :estimated_error, NaN), get(metadata, :uncertified_stages, ())) :
     (true, NaN, ())
+_metadata_certificate(metadata::Certification.LegacyFallbackSolution) = Certification.certificate(metadata)
 Certification.certificate(route::Route) = _metadata_certificate(RadialFunctions._route_certificate(route))
 Certification.certificate(route::ConjugatedRoute) = Certification.certificate(route.route)
 Certification.certificate(route::ComplexRoute) =

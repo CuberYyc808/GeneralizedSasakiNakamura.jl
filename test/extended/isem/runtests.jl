@@ -45,6 +45,7 @@ grid_point(id) = only(g for g in GRID_POINTS if g.id == id)
 include(joinpath(@__DIR__, "small_reflection.jl"))
 include(joinpath(@__DIR__, "near_horizon_cancellation.jl"))
 include(joinpath(@__DIR__, "near_horizon_teukolsky.jl"))
+include(joinpath(@__DIR__, "legacy_fallback.jl"))
 include(joinpath(@__DIR__, "horizon_seed_cap.jl"))
 
 # ---------------------------------------------------------------------------------------------------
