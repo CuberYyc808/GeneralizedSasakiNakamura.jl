@@ -411,8 +411,10 @@ end
 
 Compute one QNM in `M=1` units: its frequency, angular eigenvalue, GSN
 incidence and reflection amplitudes, the frequency derivative of the incidence
-amplitude and the GSN excitation factor. The optional sixth positional argument
-is `ordinary` (default) or `mirror`.
+amplitude, the GSN and Teukolsky excitation factors and the callable radial
+solutions `X`, `Y` and `R`. The optional sixth positional argument is
+`ordinary` (default) or `mirror`. Use [`qnm_frequency`](@ref) when only the
+frequency is needed.
 
 For `s = -2, …, 2`, `|s| ≤ l ≤ 15`, `n ≤ 10` and a damped root with nonzero
 real part, the amplitudes and the frequency derivative come from integrating the
@@ -424,15 +426,15 @@ in frequency (at `a = ±1` with the exact-extremal amplitudes described on the
 QNM manual page). Set `excitation_options=(backend=:richardson,)` to always use
 the differences.
 
-Set `detailed=true` to also compute the excitation factor in the Teukolsky
-normalization and the callable radial solutions `X`, `Y` and `R`.
+`detailed=false` skips the Teukolsky excitation factor and the radial
+solutions `X`, `Y` and `R`.
 
 `X(rstar)` evaluates the GSN solution at the tortoise coordinate, while
 `Y(r)` and `R(r)` use the Boyer-Lindquist radius. `X` and `R` are the `IN`
 solutions with unit GSN and unit Teukolsky transmission amplitude. `Y` is the
 `IN` solution for `s = -2`, the `UP` solution for `s = 2`, and `missing` for
 other `s`. The boundary conditions and coordinates of `X`, `Y` and `R` are also
-recorded in the field `solutions` of a `detailed=true` result.
+recorded in the field `solutions` of the result.
 
 For `mirror`, the root is the exact reflection `-conj(ω)` of the ordinary
 `(s, l, -m, n)` root at the same spin, with the angular data recomputed. If that
@@ -467,7 +469,7 @@ function qnm(a, s::Integer, l::Integer, m::Integer, n::Integer,
         segment=0,
         root_options::NamedTuple=NamedTuple(),
         excitation_options::NamedTuple=NamedTuple(),
-        detailed::Bool=false)
+        detailed::Bool=true)
     frequency_start = time_ns()
     root = if branch == ordinary
         _ordinary_qnm_root(
@@ -516,7 +518,7 @@ function qnm_pair(a, s::Integer, l::Integer, m::Integer, n::Integer;
         segment=0,
         root_options::NamedTuple=NamedTuple(),
         excitation_options::NamedTuple=NamedTuple(),
-        detailed::Bool=false)
+        detailed::Bool=true)
     ordinary_root = _ordinary_qnm_root(
         a, s, l, m, n, primary_guess, root_options;
         convention, inversion_index, segment)

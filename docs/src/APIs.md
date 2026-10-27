@@ -14,7 +14,7 @@ root = qnm_frequency(a, s, l, m, n)        # root only: a LeaverResult, no ampli
 roots = qnm_sequence(spins, s, l, m, n)    # Vector{LeaverResult} along a list of spins
 # keywords: convention = :overtone | :complete_spectrum | :leaver, segment = 0 | 1 | :auto,
 #   inversion_index; qnm and qnm_pair also take primary_guess, mirror_guess,
-#   root_options, excitation_options and detailed; qnm_frequency and qnm_sequence take guess
+#   root_options and excitation_options; qnm_frequency and qnm_sequence take guess
 ```
 
 `ordinary` (the default) is the mode with positive real frequency and `mirror`
@@ -35,7 +35,7 @@ type before using the numbers. The result contains:
 | `excitation_factor` | GSN excitation factor $A^{\rm ref}/(2\omega\alpha)$ |
 | `status`, `stop_reason` | `status` is `:accepted`, `:estimated` or `:failed`; `stop_reason` names the outcome |
 
-Set `detailed=true` to also get `result.X(rstar)` and `result.R(r)` (the `IN`
+It also contains `result.X(rstar)` and `result.R(r)` (the `IN`
 solutions), `result.Y(r)` (`IN` for `s = -2`, `UP` for `s = 2`, `missing`
 otherwise) and `result.teukolsky.excitation_factor`, the excitation factor in
 the Teukolsky normalization.

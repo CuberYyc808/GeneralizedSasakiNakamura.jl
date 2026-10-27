@@ -222,7 +222,7 @@ B^{{\rm GSN}}_{\ell m\omega_q}
 {2\omega_q\alpha^{{\rm GSN}}_{\ell m\omega_q}}.
 ```
 
-`ordinary` is the default branch. `mirror` gives the mode with negative real frequency: by default its frequency is the exact reflection $-\bar\omega$ of the ordinary $(s, \ell, -m, n)$ root, and its amplitudes and excitation factor are evaluated at that frequency. Use `detailed=true` only when callable `X`, `Y`, and `R` solutions are needed.
+`ordinary` is the default branch. `mirror` gives the mode with negative real frequency: by default its frequency is the exact reflection $-\bar\omega$ of the ordinary $(s, \ell, -m, n)$ root, and its amplitudes and excitation factor are evaluated at that frequency. The result also holds the callable `X`, `Y`, and `R` solutions (`detailed=false` skips them).
 
 When only the frequency is needed, the same five numbers give the root directly:
 

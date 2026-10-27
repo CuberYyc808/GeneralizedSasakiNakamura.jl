@@ -378,7 +378,7 @@ end
 
 Excitation factor of one QNM in the GSN and the Teukolsky normalization,
 returned by [`qnm_excitation_factor`](@ref) and held in the `excitation` field
-of a `qnm(...; detailed=true)` result. Fields:
+of a `qnm(...)` result. Fields:
 
 - `omega`: the QNM frequency;
 - `alpha`, `alpha_teukolsky`: the frequency derivative of the incidence

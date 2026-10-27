@@ -34,7 +34,7 @@ it from your own starting value. Its amplitudes and frequency derivative are
 evaluated at the mirror frequency, not copied from the ordinary branch.
 
 `qnm` also takes the keywords `convention`, `segment` and `inversion_index` of
-`qnm_frequency` (see Root-only interface) and `detailed`; where `qnm_frequency`
+`qnm_frequency` (see Root-only interface); where `qnm_frequency`
 takes `guess`, `qnm` takes `primary_guess` for the ordinary root and
 `mirror_guess` for the mirror root. [`qnm_pair`](@ref)`(a, s, l, m, n)` computes
 both branches in one [`QNMPairResult`](@ref).
@@ -313,14 +313,14 @@ its starting point is marched from the tabulated root nearest below
 `a = 0.9995` to the requested spin, with the packaged `a = 1` root as the far
 anchor of each prediction, when both tables have the mode.
 
-## Detailed radial solutions
+## Radial solutions
 
-The default call does not construct callable radial functions. Request them,
-together with the excitation factor in the Teukolsky normalization, only when
-they are needed:
+`qnm` also returns the excitation factor in the Teukolsky normalization and
+callable radial functions (use `qnm_frequency` when only the frequency is
+needed; `detailed=false` skips these):
 
 ```julia
-detailed = qnm(0.68, -2, 2, 2, 0; detailed=true)
+detailed = qnm(0.68, -2, 2, 2, 0)
 
 r = 10.0
 rstar = rstar_from_r(0.68, r)
@@ -336,11 +336,11 @@ Teukolsky transmission amplitude ($R \to \Delta^{-s} e^{-ipr_*}$ at the
 horizon). `Y` is the `IN` solution for `s = -2` and the `UP` solution for
 `s = +2`, and is `missing` for other `s`.
 
-`detailed=true` also adds checks: the GSN and Teukolsky normalizations of the
+The full result also adds checks: the GSN and Teukolsky normalizations of the
 excitation factor must agree to `1e-10`, and on the Richardson route the
 derivative is also taken along imaginary frequency and must agree with the real
-direction to `1e-7`. Its status can therefore be stricter than that of the
-compact call.
+direction to `1e-7`. Its status can therefore be stricter than that of a
+`detailed=false` call.
 
 `detailed.teukolsky` holds `reflection_amplitude`, `incidence_derivative` and
 `excitation_factor` in the Teukolsky normalization. With $B^{\mathrm{inc}}$,

@@ -130,14 +130,14 @@ where $A^{{\rm GSN},{\rm inc}}$ and $A^{{\rm GSN},{\rm ref}}$ are the incidence
 and reflection amplitudes of the `IN` GSN solution with unit transmission
 amplitude.
 
-With `detailed=true`, `qnm` also returns the radial solutions at the QNM
+`qnm` also returns the radial solutions at the QNM
 frequency: `X` and `R` are the `IN` solutions with unit GSN and unit Teukolsky
 transmission amplitude, and `Y` is the `IN` solution for $s=-2$ (the `UP`
 solution for $s=+2$, `missing` otherwise). `X` takes $r_*$, while `Y` and `R`
 take $r$:
 
 ```julia
-detailed = qnm(0.68, -2, 2, 2, 0; detailed=true)
+detailed = qnm(0.68, -2, 2, 2, 0)
 r = 10.0
 rstar = rstar_from_r(0.68, r)
 

@@ -167,7 +167,7 @@ B^{{\rm GSN}}_{\ell m\omega_q}
 {2\omega_q\alpha^{{\rm GSN}}_{\ell m\omega_q}},
 ```
 
-where $A^{{\rm GSN},{\rm inc}}$ and $A^{{\rm GSN},{\rm ref}}$ are the amplitudes of the GSN `IN` solution with unit transmission. `qnm` returns them as `incidence_amplitude` and `reflection_amplitude`, so they differ from the Teukolsky-normalized amplitudes printed by `Teukolsky_radial`. At extra cost, `detailed=true` also returns the Teukolsky-normalized excitation factor `result.teukolsky.excitation_factor`, the callable `IN` solutions `result.X(rstar)` and `result.R(r)`, and `result.Y(r)` (`IN` for $s = -2$, `UP` for $s = +2$, `missing` otherwise).
+where $A^{{\rm GSN},{\rm inc}}$ and $A^{{\rm GSN},{\rm ref}}$ are the amplitudes of the GSN `IN` solution with unit transmission. `qnm` returns them as `incidence_amplitude` and `reflection_amplitude`, so they differ from the Teukolsky-normalized amplitudes printed by `Teukolsky_radial`. It also returns the Teukolsky-normalized excitation factor `result.teukolsky.excitation_factor`, the callable `IN` solutions `result.X(rstar)` and `result.R(r)`, and `result.Y(r)` (`IN` for $s = -2$, `UP` for $s = +2$, `missing` otherwise).
 
 See [Quasinormal modes](@ref) for overtone labels, segments and the root-only interface.
 

@@ -149,7 +149,7 @@ end
 # ---------------------------------------------------------------------------------------------------
 @testset "qnm(0.68) against independent observables" begin
     a = 0.68
-    detailed = qnm(a, -2, 2, 2, 0; detailed=true)
+    detailed = qnm(a, -2, 2, 2, 0)
     @test detailed isa QNMResult
     @test detailed.status == :accepted
     @test isapprox(detailed.omega, Q068.omega; atol=1e-12, rtol=0)
@@ -166,7 +166,7 @@ end
     r = 10.0
     @test all(isfinite, (detailed.X(rstar_from_r(a, r)), detailed.Y(r), detailed.R(r)))
     # In the 2iomega convention the mirror factor is -conj(B).
-    mirror_mode = qnm(a, -2, 2, -2, 0, mirror; detailed=true)
+    mirror_mode = qnm(a, -2, 2, -2, 0, mirror)
     @test mirror_mode.status == :accepted
     @test isapprox(mirror_mode.omega, -conj(Q068.omega); atol=1e-12, rtol=0)
     @test isapprox(mirror_mode.teukolsky.excitation_factor, -conj(Q068.excitation_teukolsky / im); rtol=1e-8)
@@ -183,8 +183,8 @@ end
 # Mirror branch at a = 0.68: the (l, m) = (2, 2) mirror root is -conj of the (2, -2) ordinary root, in omega and in the
 # Teukolsky excitation factor.
 @testset "mirror = -conj(ordinary) at a = 0.68" begin
-    ordinary = qnm(0.68, -2, 2, -2, 0; detailed=true)
-    mirrored = qnm(0.68, -2, 2, 2, 0, mirror; detailed=true)
+    ordinary = qnm(0.68, -2, 2, -2, 0)
+    mirrored = qnm(0.68, -2, 2, 2, 0, mirror)
     @test isapprox(mirrored.omega, -conj(ordinary.omega); rtol=1e-8)
     @test isapprox(mirrored.teukolsky.excitation_factor, -conj(ordinary.teukolsky.excitation_factor); rtol=1e-8)
 end
@@ -251,7 +251,7 @@ end
     @test endswith(text, "    formalism = GSN)")
     @test startswith(sprint(show, ordinary_mode), "QNMResult(mode=")
     # Guess-seeded detailed call reproduces the compact frequency.
-    detailed = qnm(0.68, -2, 2, 2, 0; primary_guess=ordinary_mode.omega, detailed=true)
+    detailed = qnm(0.68, -2, 2, 2, 0; primary_guess=ordinary_mode.omega)
     @test detailed.omega ≈ ordinary_mode.omega atol=1e-12
     @test detailed.detailed
     # qnm_pair returns both branches, consistent with the single-branch calls.

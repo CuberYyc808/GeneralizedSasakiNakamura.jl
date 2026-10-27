@@ -182,11 +182,11 @@ end
 # The default 220 excitation factor comes from one variational solve, which has no
 # direction stencil; the Richardson backend keeps its direction gate.
 @testset "detailed QNM normalization bridge" begin
-    detailed = qnm(0.68, -2, 2, 2, 0; detailed=true)
+    detailed = qnm(0.68, -2, 2, 2, 0)
     @test detailed.status == :accepted
     @test detailed.excitation.bridge_residual <= 1e-10
     @test detailed.excitation.step_drift <= 1e-7
-    richardson = qnm(0.68, -2, 2, 2, 0; detailed=true,
+    richardson = qnm(0.68, -2, 2, 2, 0;
         excitation_options=(backend=:richardson,))
     @test richardson.status == :accepted
     @test richardson.excitation.bridge_residual <= 1e-10

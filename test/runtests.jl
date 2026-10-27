@@ -155,7 +155,7 @@ using Test
 
         detailed = qnm(
             0.68, -2, 2, 2, 0;
-            primary_guess=ordinary_mode.omega, detailed=true)
+            primary_guess=ordinary_mode.omega)
         @test detailed.X isa GSNRadialFunction
         @test detailed.Y isa YRadialFunction
         @test detailed.R isa TeukolskyRadialFunction

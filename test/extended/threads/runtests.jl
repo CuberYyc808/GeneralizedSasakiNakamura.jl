@@ -17,7 +17,7 @@ else
     end
     for branch in (ordinary,mirror)
         push!(jobs,()->begin
-            sol=qnm(.68,-2,2,2,0,branch;detailed=true)
+            sol=qnm(.68,-2,2,2,0,branch)
             @test sol.status == :accepted
             (sol.omega,sol.lambda,sol.reflection_amplitude,
                 sol.incidence_derivative,sol.excitation_factor,

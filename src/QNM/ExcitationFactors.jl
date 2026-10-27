@@ -585,7 +585,7 @@ end
 """
     _qnm_richardson_full_excitation_factor(result::LeaverResult; h=nothing, incidence_tolerance=1e-8, direction_tolerance=1e-7, step_tolerance=1e-7, bridge_tolerance=1e-10, wronskian_tolerance=1e-8, radial_solver=GSN_radial, teukolsky_solver=Teukolsky_radial)
 
-Finite-difference route of `qnm_excitation_factor` and of `qnm(...; detailed=true)`,
+Finite-difference route of `qnm_excitation_factor` and of `qnm(...)`,
 used when the direct route (the GSN equation integrated together with its
 frequency derivative at the root) is out of scope or fails its checks (except
 with `backend=:variational`), and always with `backend=:richardson`, an explicit

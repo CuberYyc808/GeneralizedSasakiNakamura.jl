@@ -2337,7 +2337,7 @@ export angular_A_to_lambda, lambda_to_angular_A
         Teukolsky_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
         GSN_radial(-2, 2, 2, 0.7, 0.5, IN)(6.0)
         # A detailed QNM: frequency, radial observables and excitation factor.
-        qnm(0.68, -2, 2, 2, 0; detailed=true)
+        qnm(0.68, -2, 2, 2, 0)
     end
 end
 
