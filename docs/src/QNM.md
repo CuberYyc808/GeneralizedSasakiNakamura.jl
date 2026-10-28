@@ -82,6 +82,22 @@ B^{{\rm GSN}}_{\ell m\omega_q}
 {2\omega_q\alpha^{{\rm GSN}}_{\ell m\omega_q}}.
 ```
 
+`incidence_derivative` is the derivative of the GSN amplitude, not of
+`Y_radial(s, l, m, a, ω, IN).incidence_amplitude`. For `s = -2` that field is the
+Teukolsky incidence amplitude of the same solution,
+$B^{\rm inc} = A^{{\rm GSN},{\rm inc}}/(-4\omega^2)$ (`ConversionFactors.Binc`;
+for `s = +2` with `UP`, $C^{\rm inc}$ via `ConversionFactors.Cinc`). Because
+$A^{{\rm GSN},{\rm inc}}(\omega_q) = 0$, its derivative at the root is
+
+```math
+\left.\frac{\partial B^{\rm inc}_{\ell m\omega}}{\partial\omega}\right|_{\omega=\omega_q}
+= -\frac{\alpha^{{\rm GSN}}_{\ell m\omega_q}}{4\omega_q^2},
+```
+
+for every $\ell$, $m$ and both branches; use this, not $\alpha^{\rm GSN}$, in a
+residue built from `Y_radial` amplitudes. `result.teukolsky.incidence_derivative`
+(`detailed=true`) is yet another normalization, unit Teukolsky transmission.
+
 For `s = -2, …, 2`, `|s| ≤ l ≤ 15`, `n ≤ 10` and a damped root with
 $\operatorname{Re}\omega \neq 0$, the amplitudes and $\alpha$ come from
 integrating the GSN equation together with its frequency derivative along a

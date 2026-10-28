@@ -31,7 +31,7 @@ amplitudes. Check `status` before using the numbers. The result contains:
 | `lambda` | separation constant $\lambda$ of the radial Teukolsky equation, i.e. the spin-weighted spheroidal eigenvalue (the same quantity as `Mode.lambda`) |
 | `incidence_amplitude` | GSN incidence amplitude $A^{\rm inc}$ of the `IN` solution with unit transmission amplitude |
 | `reflection_amplitude` | GSN reflection amplitude $A^{\rm ref}$ of the same solution |
-| `incidence_derivative` | $\alpha = dA^{\rm inc}/d\omega$ at the root |
+| `incidence_derivative` | $\alpha = dA^{\rm inc}/d\omega$ at the root, GSN normalization; the derivative of `Y_radial(..., IN).incidence_amplitude` ($s=-2$) is $-\alpha/(4\omega^2)$ |
 | `excitation_factor` | GSN excitation factor $A^{\rm ref}/(2\omega\alpha)$ |
 | `status`, `stop_reason` | `status` is `:accepted`, `:estimated` or `:failed`; `stop_reason` names the outcome |
 
