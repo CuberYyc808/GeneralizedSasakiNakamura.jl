@@ -1526,10 +1526,14 @@ end
     match_policy = hasproperty(route.metadata, :match_policy) ?
         route.metadata.match_policy : :unknown
     match_policy == :branch_shift_consensus && return false
-    return amplitude_backend in (
+    amplitude_backend in (
         :complex_rational,
         :principal_mst_logscaled,
-    )
+    ) && return true
+    # Any other route whose own amplitude errors are unusable is compared with the analytic amplitudes too.
+    errors = (hasproperty(route.metadata, :incidence_error) ? route.metadata.incidence_error : 0.0,
+        hasproperty(route.metadata, :reflection_error) ? route.metadata.reflection_error : 0.0)
+    return !all(error -> isfinite(error) && error < 1e-2, errors)
 end
 
 @inline function _state_pretrigger(

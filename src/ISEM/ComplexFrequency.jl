@@ -4602,6 +4602,15 @@ function _complex_match_error(route::ComplexRoute)
     errors = (_metadata_value(route.metadata, :incidence_error, missing),
         _metadata_value(route.metadata, :reflection_error, missing))
     any(ismissing, errors) && return missing
+    # When the analytic amplitudes replaced a match whose own amplitude errors are not finite, the match enters only
+    # through the state: its split (Abel) mismatch and the real-axis anchor stand in for the discarded amplitude errors.
+    if !all(isfinite, errors) &&
+            _metadata_value(route.metadata, :amplitude_backend, nothing) == :complex_mst_analytic
+        state = (_metadata_value(route.metadata, :abel_error, missing),
+            _metadata_value(route.metadata, :split_mismatch, missing),
+            _metadata_value(route.metadata, :real_axis_state_anchor_projective_error, missing))
+        any(ismissing, state) || return Float64(maximum(state))
+    end
     return Float64(maximum(_certificate_amplitude_errors(route, Float64.(errors))))
 end
 

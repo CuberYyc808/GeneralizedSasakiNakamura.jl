@@ -152,7 +152,7 @@ Meaning of the keywords:
 
 | keyword | default | meaning |
 | :--- | :--- | :--- |
-| `method` | `"auto"` | `"auto"` tries ISEM (iterative series expansion matching of the GSN equation) first; if ISEM throws and `xm` was not given, it logs a warning and falls back to the ODE methods. `"ISEM"` never falls back. `"linear"` and `"Riccati"` select the ODE methods, which integrate the GSN equation numerically (for `OUT` and `DOWN`, see below) |
+| `method` | `"auto"` | `"auto"` tries ISEM (iterative series expansion matching of the GSN equation) first; if ISEM throws and `xm` was not given, it falls back silently (the result is marked uncertified) to the ODE methods. `"ISEM"` never falls back. `"linear"` and `"Riccati"` select the ODE methods, which integrate the GSN equation numerically (for `OUT` and `DOWN`, see below) |
 | `tol` | `nothing` | tolerance of ISEM (chosen automatically when `nothing`; `1e-14` at real frequency), or `abstol = reltol` of the ODE methods (`1e-12` when `nothing`) |
 | `tolerance` | `nothing` | the same setting as `tol`; `tol` takes precedence when both are given |
 | `xm` | `nothing` | ISEM matching point in $x = (r - r_+)/(r - r_-)$, which is `0` at the horizon and `1` at infinity; `"auto"` and `"ISEM"` require `0 < xm < 1` |
@@ -320,7 +320,7 @@ size relative to the largest of 1, $|A^{\rm ref}|$ and the transmission
 amplitude, as `qnm` does.
 
 Below `|omega| = 1e-8` the ODE methods lose the `UP` solution;
-`method = "auto"` warns when it falls back to them there.
+`method = "auto"` still falls back to them there, silently; check `ISEM.certificate`.
 
 ISEM's small-frequency expansion (used automatically for real $|\omega| \le 0.1$) is not used for
 $\ell \ge 20$ at high angular compression $(\ell + 1/2)/\sqrt{1 - a^2} \ge 100$ when $|\omega| \ge 10^{-3}$: there it

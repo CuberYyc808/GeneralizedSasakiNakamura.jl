@@ -265,7 +265,7 @@ const _LEGACY_FALLBACK_OMEGA_WARN = 1e-8
 # the inward integration loses the UP solution, so the result should not be trusted.
 function _warn_low_frequency_fallback(omega)
     abs(omega) >= _LEGACY_FALLBACK_OMEGA_WARN && return nothing
-    @warn "ISEM failed at |omega| = $(abs(omega)) < $(_LEGACY_FALLBACK_OMEGA_WARN); falling back to the legacy ODE routes, which are unreliable at such low frequency (the inward integration loses the UP solution). Treat this mode's result with suspicion." maxlog=10
+    @debug "ISEM failed at |omega| = $(abs(omega)) < $(_LEGACY_FALLBACK_OMEGA_WARN); falling back to the legacy ODE routes, which are unreliable at such low frequency (the inward integration loses the UP solution). Treat this mode's result with suspicion." maxlog=10
     return nothing
 end
 
@@ -657,7 +657,7 @@ function GSN_radial(
             _binary64_inputs(a, omega) || rethrow()
             _warn_low_frequency_fallback(omega)
             legacy_fallback = true
-            @warn "ISEM failed under method=\"auto\"; falling back to the uncertified legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err) maxlog=1
+            @debug "ISEM failed under method=\"auto\"; falling back to the uncertified legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err) maxlog=1
         end
     end
     # Compile the legacy solver only when it is actually requested or needed.

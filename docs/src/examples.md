@@ -29,7 +29,7 @@ where $d\phi/dr = K/\Delta$, $K = (r^2+a^2)\omega - am$ and
 $\Delta = r^2 - 2r + a^2$. `method = "ISEM"` never falls back to another
 solver. With the default `"auto"`, `GSN_radial` and `Teukolsky_radial` try ISEM
 first and, if ISEM fails and no `xm` was given, fall back to the ODE methods
-with a warning; `Y_radial` never falls back.
+silently (the result is marked uncertified, see `ISEM.certificate`); `Y_radial` never falls back.
 
 ```julia
 using GeneralizedSasakiNakamura
