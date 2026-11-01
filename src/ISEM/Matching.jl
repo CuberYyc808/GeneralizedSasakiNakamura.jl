@@ -1525,8 +1525,16 @@ function _complex_path_reflection(route::Route)
     # solution_scale times the transmission factor (as in RadialFunctions._route_y_amplitudes).
     transmission = route.solution_scale * (route.branch === :IN ?
         ConversionFactors.Btrans(s, m, a, w, lambda) : ConversionFactors.Ctrans(s, m, a, w, lambda))
-    return _with_reflection(route, result.reflection * transmission / reflection_factor)
+    corrected = _with_reflection(route, result.reflection * transmission / reflection_factor)
+    # At high l the path itself fails: (s, l, m, a, omega) = (-2, 80, 80, 0.9, 29.7) gave |B_ref / B_inc| = 1.5e28 against
+    # a matched ratio far below 1, and the mode flux 4e48. A correct reflection leaves the route's incidence error
+    # estimate at the matching level (~1e-12 on the validated cases); that one rose to 3e16 (1e7 - 1e20 at l = 80 - 81,
+    # omega = 29.7 - 31.1). Such a path value is refused and the matched reflection kept.
+    amplitude_errors(corrected)[1] <= COMPLEX_PATH_INCIDENCE_CHECK || return route
+    return corrected
 end
+
+const COMPLEX_PATH_INCIDENCE_CHECK = 1e-6
 
 _complex_path_reflection(route) = route
 
