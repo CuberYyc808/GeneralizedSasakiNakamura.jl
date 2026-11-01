@@ -4033,19 +4033,23 @@ function _y_two_wave_chains(Yf, m::Int, lambda, r_low)
     chain_out === nothing && return nothing
     # Below a turning point (omega^2 under the potential: high l, low omega) the two infinity solutions grow apart from
     # Y and cancel in it ((12, 3, 150): (|Y_in| + |Y_out|) / |Y| = 6e5 at r = 10, 2e29 at r = 2, where the split Y was
-    # off by 3e-7 and 8e16). The chains serve down to the last radius, scanning inward, where that cancellation stays
-    # within TWO_WAVE_CANCELLATION and, at every TWO_WAVE_CHECK_EVERY-th radius, their Y agrees with the route's Y to the
-    # latter's conversion error (max(1e-9, 10 eps (2 omega r)^4), see TwoWaveYSolution); below it the segments take the
-    # direct Y, which is not oscillatory there.
+    # off by 3e-7 and 8e16), and so do the two waves' integrals. The chains serve down to the last radius, scanning
+    # inward, where |Y_in| + |Y_out| stays within TWO_WAVE_CANCELLATION times the largest |Y| of the last
+    # TWO_WAVE_CANCELLATION_WINDOW scanned radii (a sustained growth, not a near-node of Y where two comparable waves
+    # interfere) and, at every TWO_WAVE_CHECK_EVERY-th radius, their Y agrees with the route's Y to the latter's
+    # conversion error (max(1e-9, 10 eps (2 omega r)^4), see TwoWaveYSolution); below it the segments take the direct Y,
+    # which is not oscillatory there.
     A_in, A_out = Yf.incidence, Yf.reflection
     κ = sqrt(1 - a^2)
     rp, rm = 1 + κ, 1 - κ
     r_ok = r_series
+    recent = zeros(TWO_WAVE_CANCELLATION_WINDOW)
     for i in 1:TWO_WAVE_CANCELLATION_SCAN
         r = r_series * (r_low / r_series)^(i / TWO_WAVE_CANCELLATION_SCAN)
         R1, _ = NHT.teukolsky_taylor_state(chain_in, r)
         R2, _ = NHT.teukolsky_taylor_state(chain_out, r)
-        (abs(A_in * R1) + abs(A_out * R2)) <= TWO_WAVE_CANCELLATION * abs(A_in * R1 + A_out * R2) || break
+        recent[mod1(i, TWO_WAVE_CANCELLATION_WINDOW)] = abs(A_in * R1 + A_out * R2) / r^2
+        (abs(A_in * R1) + abs(A_out * R2)) / r^2 <= TWO_WAVE_CANCELLATION * maximum(recent) || break
         if i % TWO_WAVE_CHECK_EVERY == 0
             ψ = ω * rstar_from_r(a, r) - a * m / (rp - rm) * log((r - rp) / (r - rm))
             Ysplit = cis(-ψ) * (A_in * R1 + A_out * R2) / r^2
@@ -4058,6 +4062,7 @@ end
 
 const TWO_WAVE_CANCELLATION = 10.0
 const TWO_WAVE_CANCELLATION_SCAN = 64
+const TWO_WAVE_CANCELLATION_WINDOW = 4
 const TWO_WAVE_CHECK_EVERY = 8
 
 function _y_two_wave(Ysol, s::Int, l::Int, m::Int, a, ω; r_low = nothing)
