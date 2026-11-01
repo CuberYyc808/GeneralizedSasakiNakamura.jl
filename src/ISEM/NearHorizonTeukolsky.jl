@@ -157,10 +157,13 @@ function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64,
     coeffs = ComplexF64[]
     buf = Vector{ComplexF64}(undef, ORDER + 1)
     r0 = r_start; R = ComplexF64(R0); dR = ComplexF64(dR0)
+    h_last = Inf
     while r0 > r_stop
         length(centers) < max_patches || return nothing
         _taylor!(buf, _shift(P2r, r0), _shift(P1r, r0), _shift(P0r, r0), R, dR)
-        h = min(STEP_FRACTION * (r0 - rplus), r0 - r_stop)
+        # the trial step starts from twice the last accepted one: at high omega the steps are far below
+        # STEP_FRACTION (r0 - r_+) and the halvings from there cost more than the patches themselves
+        h = min(2h_last, STEP_FRACTION * (r0 - rplus), r0 - r_stop)
         while true
             v, _ = _horner(buf, 0, -h)
             tail = (abs(buf[ORDER]) * h^(ORDER - 1) + abs(buf[ORDER + 1]) * h^ORDER) / max(abs(v), floatmin(Float64))
@@ -168,15 +171,18 @@ function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64,
             h /= 2
             h >= MIN_STEP_FRACTION * (r0 - rplus) || return nothing
         end
+        h_last = h
         r1 = (r0 - h) - r_stop <= 4eps(r_stop) ? r_stop : r0 - h
         R, dR = _horner(buf, 0, r1 - r0)
         push!(lows, r1); push!(centers, r0); append!(coeffs, buf)
         r0 = r1
     end
     n = length(centers)
-    order = n:-1:1
-    perm = reduce(vcat, ((i - 1) * (ORDER + 1) + 1:i * (ORDER + 1) for i in order); init = Int[])
-    return TeukolskyInwardChain(lows[order], centers[order], coeffs[perm])
+    reversed = similar(coeffs)
+    for i in 1:n
+        copyto!(reversed, (n - i) * (ORDER + 1) + 1, coeffs, (i - 1) * (ORDER + 1) + 1, ORDER + 1)
+    end
+    return TeukolskyInwardChain(reverse(lows), reverse(centers), reversed)
 end
 
 function teukolsky_taylor_state(chain::TeukolskyInwardChain, r::Real)
