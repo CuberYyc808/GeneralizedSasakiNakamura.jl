@@ -755,6 +755,8 @@ function _walk_spawn!(pf::_WalkPrefetch, key::NTuple{4, Int}, params)
         (true, run(key, params))   # the walk's error is returned, not thrown: raised when the walk is asked for
     catch error
         (false, error)
+    finally
+        ConvolutionIntegrals.ISEM.release_task_arenas!()   # the task's ISEM series arenas go to the next task
     end)
     return nothing
 end

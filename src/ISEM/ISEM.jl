@@ -29,6 +29,8 @@ include("ApparentSingularities.jl")
 using .ApparentSingularities
 include("OrdinaryPointExpansion.jl")
 using .OrdinaryPointExpansion
+# a finished task returns its series arenas (TaylorArena.jl) to the pools
+const release_task_arenas! = OrdinaryPointExpansion.release_task_arenas!
 include("LargeFrequencyExpansion.jl")
 using .LargeFrequencyExpansion
 include("NearExtreme.jl")

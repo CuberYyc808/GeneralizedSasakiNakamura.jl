@@ -33,7 +33,29 @@ function _ra_take!(arena::_RationalArena)
     return arena.used
 end
 
-_ra_task_arena() = get!(_RationalArena, task_local_storage(), :GSN_ISEM_RATIONAL_ARENA)::_RationalArena
+# the arena of the current task, from the pool of the arenas of finished tasks as in TaylorArena.jl
+const _RATIONAL_ARENA_POOL = _RationalArena[]
+const _RATIONAL_ARENA_POOL_LOCK = ReentrantLock()
+
+function _ra_task_arena()
+    tls = task_local_storage()
+    arena = get(tls, :GSN_ISEM_RATIONAL_ARENA, nothing)
+    arena === nothing || return arena::_RationalArena
+    arena = lock(_RATIONAL_ARENA_POOL_LOCK) do
+        isempty(_RATIONAL_ARENA_POOL) ? _RationalArena() : pop!(_RATIONAL_ARENA_POOL)
+    end
+    tls[:GSN_ISEM_RATIONAL_ARENA] = arena
+    return arena
+end
+
+function _release_rational_arena!()
+    arena = pop!(task_local_storage(), :GSN_ISEM_RATIONAL_ARENA, nothing)
+    arena === nothing && return nothing
+    lock(_RATIONAL_ARENA_POOL_LOCK) do
+        length(_RATIONAL_ARENA_POOL) < 2 * Threads.nthreads() && push!(_RATIONAL_ARENA_POOL, arena)
+    end
+    return nothing
+end
 
 # Sum of up to _RA_TERMS fractions num[k] / den[k] (indices of polynomials in `arena`).
 struct _RatSum
