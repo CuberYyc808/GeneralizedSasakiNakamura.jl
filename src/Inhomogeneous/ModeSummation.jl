@@ -728,112 +728,287 @@ end
 
 _record_tag(x) = replace(replace(@sprintf("%.16g", x), "." => "p"), "-" => "m")
 
-# Modes computed ahead of a flux summation's walks, up to `parallelism` at a time on the Julia threads of one process.
-# The walks themselves are unchanged: they ask for their modes one by one in the serial order and apply the acceptance
-# (counters, finiteness check, cap tracking), the stopping rules, the sums and the record in that order. A mode asked
-# for with parameters `params` (every summation-dependent input of its computation: max_flux, floors, Levin
-# tolerances and choice) is taken from a task computed ahead only if that task used exactly these parameters, else it is
-# computed now; so each mode equals the serial one. Ahead: the modes `predict(key)` lists (the rest of the current l
-# walk in both directions, then the next |m|), with the parameters `params_for(key, params)` derives from the current
-# request; tasks no longer predicted are dropped (their results unused). A mode's error is raised when it is asked for.
-# Keys are (s, l, m, n, k).
-mutable struct _ModePrefetch{C, A, F, S, N}
-    parallelism::Int
-    lmin::Int
-    lmax::Int
-    depth::Int
-    compute::C        # (key, params) -> mode, pure
-    accept!::A        # (key, mode) -> mode, the serial bookkeeping
-    params_for::F     # (key, params of the request) -> params of a predicted key
-    start_l::S        # (s, m, n, k) -> first l of that walk
-    next_m::N         # (s, m, n, k) -> m of the walk that follows (nothing at the end)
-    same::Function    # equality of two parameter tuples (isequal unless an entry does not change the result)
-    tasks::Dict{NTuple{5, Int}, Tuple{Any, Task}}
-    dropped::Vector{Task}
-    computed::Int     # modes started (used or dropped)
-    used::Int         # modes the walks asked for
+# l walks computed ahead of a flux summation on the Julia threads of one process (mode_parallelism > 1). A walk
+# (s, m, n, k) is the serial l walk of that (m, n, k) in one shell: it evaluates its modes in the serial order with the
+# serial stop rule from the shell's parameters only (no summation state), so it is pure; the summation asks for the
+# walks in its serial order and applies the acceptance (counters, cap tracking), the m, k and n stop rules, the sums
+# and the record to the returned modes in that order, so the result equals the serial one. The walks of a shell are
+# planned from the reach of the previous shell (`_walk_plan!`, with the parameters `params_for` gives, set per shell);
+# a walk asked for that was not planned is computed then, with a few more ahead. A walk's error is raised when it is
+# asked for. Walks no longer wanted are waited for and dropped (`_walk_discard!`, at the end of each shell).
+mutable struct _WalkPrefetch{R}
+    run::R                 # (key, params) -> the walk, a Vector of (l, mode) in walk order; pure
+    params_for::Any        # key -> params, set by the summation per shell (in the serial order of its bookkeeping)
+    tasks::Dict{NTuple{4, Int}, Tuple{Any, Task}}
+    walks::Int             # walks started
+    walks_used::Int        # walks asked for
+    modes::Int             # modes of the finished walks (used or not)
+    modes_used::Int        # modes of the walks asked for
 end
+_WalkPrefetch(run) = _WalkPrefetch(run, nothing, Dict{NTuple{4, Int}, Tuple{Any, Task}}(), 0, 0, 0, 0)
 
-_ModePrefetch(parallelism, lmin, lmax, minimum_consecutive, compute, accept!, params_for, start_l, next_m; same = isequal) =
-    _ModePrefetch(parallelism, lmin, lmax, minimum_consecutive + 2, compute, accept!, params_for, start_l, next_m, same,
-        Dict{NTuple{5, Int}, Tuple{Any, Task}}(), Task[], 0, 0)
-
-function _prefetch_drain!(pf::_ModePrefetch)
-    for (_, task) in values(pf.tasks)
-        fetch(task)   # the worker returns its error instead of throwing, see _prefetch_spawn!
-    end
-    foreach(fetch, pf.dropped)
-    empty!(pf.tasks)
-    empty!(pf.dropped)
-    return nothing
-end
-
-function _prefetch_spawn!(pf::_ModePrefetch, key::NTuple{5, Int}, params)
-    pf.computed += 1
-    compute = pf.compute
-    task = Threads.@spawn try
-        mode = compute(key, params)
-        # the walks read only the mode's scalars: drop the trajectory, radial and angular objects, so that at most
-        # parallelism small results wait in the queue
-        mode isa AbstractDict && foreach(k -> delete!(mode, k), ("Trajectory", "YSolution", "SWSH"))
-        (true, mode)
+function _walk_spawn!(pf::_WalkPrefetch, key::NTuple{4, Int}, params)
+    haskey(pf.tasks, key) && return nothing
+    pf.walks += 1
+    run = pf.run
+    pf.tasks[key] = (params, Threads.@spawn try
+        (true, run(key, params))   # the walk's error is returned, not thrown: raised when the walk is asked for
     catch error
         (false, error)
-    end
-    pf.tasks[key] = (params, task)
+    end)
     return nothing
 end
 
-# the keys computed ahead of a request for `key`: its l walk on (both directions from l), then the following walks
-function _prefetch_predicted(pf::_ModePrefetch, key::NTuple{5, Int})
-    s, l, m, n, k = key
-    keys = NTuple{5, Int}[]
-    lo = max(pf.lmin, abs(m))
-    for d in 1:pf.depth
-        l + d <= pf.lmax && push!(keys, (s, l + d, m, n, k))
-        l - d >= lo && pf.start_l(s, m, n, k) > lo && push!(keys, (s, l - d, m, n, k))
+# Start the walks of `keys` (in that order) that are not running yet.
+function _walk_plan!(pf::_WalkPrefetch, keys)
+    for key in keys
+        haskey(pf.tasks, key) || _walk_spawn!(pf, key, pf.params_for(key))
     end
-    mm = m
-    while length(keys) < 4 * pf.parallelism
-        mm = pf.next_m(s, mm, n, k)
-        (mm === nothing || abs(mm) > pf.lmax) && break
-        l0 = pf.start_l(s, mm, n, k)
-        lo = max(pf.lmin, abs(mm))
-        for d in 0:pf.depth
-            l0 + d <= pf.lmax && push!(keys, (s, l0 + d, mm, n, k))
-            d > 0 && l0 - d >= lo && push!(keys, (s, l0 - d, mm, n, k))
-        end
-    end
-    return keys
+    return nothing
 end
 
-function (pf::_ModePrefetch)(key::NTuple{5, Int}, params)
-    predicted = _prefetch_predicted(pf, key)
-    keep = Set(predicted)
-    push!(keep, key)
-    for k in collect(keys(pf.tasks))
-        k in keep && continue
-        push!(pf.dropped, pf.tasks[k][2])
-        delete!(pf.tasks, k)
-    end
-    entry = get(pf.tasks, key, nothing)
-    if entry === nothing || !pf.same(entry[1], params)
-        entry === nothing || push!(pf.dropped, entry[2])
-        _prefetch_spawn!(pf, key, params)
-    end
-    for k in predicted
-        length(pf.tasks) >= pf.parallelism && break
-        haskey(pf.tasks, k) || _prefetch_spawn!(pf, k, pf.params_for(k, params))
-    end
-    if length(pf.dropped) > pf.parallelism
-        foreach(fetch, pf.dropped)
-        empty!(pf.dropped)
+# The walk `key`: the one computed ahead, else computed now (and the walks `ahead` started).
+function (pf::_WalkPrefetch)(key::NTuple{4, Int}; ahead = ())
+    if !haskey(pf.tasks, key)
+        _walk_spawn!(pf, key, pf.params_for(key))
+        _walk_plan!(pf, ahead)
     end
     ok, value = fetch(pf.tasks[key][2])
     delete!(pf.tasks, key)
-    pf.used += 1
     ok || throw(value)
-    return pf.accept!(key, value)
+    pf.walks_used += 1
+    pf.modes += _walk_length(value)
+    pf.modes_used += _walk_length(value)
+    return value
+end
+
+# Wait for the walks no longer wanted and drop them (a running walk cannot be cancelled).
+function _walk_discard!(pf::_WalkPrefetch)
+    for key in collect(keys(pf.tasks))
+        ok, value = fetch(pf.tasks[key][2])
+        delete!(pf.tasks, key)
+        ok && (pf.modes += _walk_length(value))
+    end
+    return nothing
+end
+
+_walk_length(walk) = walk isa AbstractVector ? length(walk) : length(walk.modes)
+
+# the summation reads only the scalars of a mode computed ahead: drop the trajectory, radial and angular objects
+_strip_mode!(mode) = (mode isa AbstractDict && foreach(k -> delete!(mode, k), ("Trajectory", "YSolution", "SWSH")); mode)
+
+const _PROGRESS_LOCK = ReentrantLock()
+
+# One l walk of the eccentric sum: the modes (s, l, m, n), l = max(2, |m|)..lmax, until minimum_consecutive modes are
+# below the shell cutoff, from the shell's parameters q only (max_flux, use_levin, floor, levin_floor, levin_abs of
+# the modes; branch_floor and threshold of the cutoff: tol times the previous n shell, or, for m = 0, tol times the
+# running m shell when threshold === nothing). Returns the (l, mode) in walk order; `strip` drops the large members
+# of the mode Dicts. A mode's non-finite flux is the error of the walk.
+function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimum_consecutive::Int, tol::Float64, strip::Bool)
+    factors = Dict{Any, Any}()
+    modes = Tuple{Int, Any}[]
+    running = 0.0
+    below = 0
+    for l in max(2, abs(m)):lmax
+        mode = compute(s, l, m, n, q, factors)
+        ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
+        strip && _strip_mode!(mode)
+        push!(modes, (l, mode))
+        E = mode["EnergyFlux"]
+        running += 2 * E
+        base = q.threshold === nothing ? tol * abs(running) : q.threshold
+        below = abs(E) <= _mode_cutoff_threshold(base, q.branch_floor) ? below + 1 : 0
+        below >= minimum_consecutive && break
+    end
+    return modes
+end
+
+# The n >= 1 shells of one boundary of the eccentric sum (s = -2: infinity, 2: horizon), after its n = 0 shell: the
+# m = 0, m = 1, 2, .. and m = -1, -2, .. l walks of each shell, the m and n stop rules, the shell lists and the totals.
+# The l walks depend on the shell's parameters only: with `prefetch` they are computed ahead, planned from the m reach
+# of the previous shell. The two boundaries may run on different tasks: everything mutable here is local or owned by
+# this boundary (ctx). Returns (total energy, angular momentum, Carter constant, n_reached, last shell, modes).
+function _eccentric_branch_shells!(s::Int, ctx, prefetch)
+    (; lmax, nmax, minimum_consecutive, n_stop_run, radial_over_azimuthal, high_e, e, tol, model, p0, mode_abs_floor,
+        n0_reach, energy_list, angular_list, carter_list, n_list, floor_ref, levin_abs_ref, run) = ctx
+    total_energy, total_angular, total_carter = ctx.totals
+    shell_n_energy_last = ctx.shell_n_energy_last
+    boundary = s == -2 ? "I" : "H"
+    total_modes = 0
+    n_reached = nothing
+    last_shell = (0.0, 0.0, 0.0)
+    below_count_n = 0
+    prev_peak_m_pos = 1
+    prev_peak_m_neg = 1
+    # |m| reached by the previous n shell's walks; an m shell counts toward the stop only past MWALK_REACH_FRACTION of it
+    prev_reach_pos = n0_reach
+    prev_reach_neg = n0_reach
+    params_for = nothing
+    # the walk of (m, n), computed ahead or now; a walk beyond the plan starts the next two of its direction
+    take = m -> begin
+        key = (s, m, n_current[], 0)
+        prefetch === nothing && return run(key, params_for(key))
+        step = m >= 0 ? 1 : -1
+        return prefetch(key; ahead = [(s, mm, n_current[], 0) for mm in (m + step):step:(m + 2step) if abs(mm) <= lmax])
+    end
+    n_current = Ref(0)
+    for n in 1:nmax
+        n_current[] = n
+        m_omega_zero = -n * radial_over_azimuthal
+        omega_zero_gate = !high_e || abs(m_omega_zero) < lmax
+        E_estimate = _fit_shell_estimate(model, n_list, energy_list, n, p0, abs(shell_n_energy_last))
+        mode_floor, levin_floor, levin_abs = ctx.shell_parameters(s)
+        branch_floor = floor_ref[]
+        base_threshold = tol * abs(shell_n_energy_last)
+        layer_threshold = _mode_cutoff_threshold(base_threshold, branch_floor)
+        shell_q = (max_flux = 2 * E_estimate, floor = mode_floor, levin_floor = levin_floor, levin_abs = levin_abs, branch_floor = branch_floor)
+        # the Levin choice of (s, m, n) carries the serial bookkeeping: asked in the serial m order (m = 0, 1, .., -1, ..)
+        params_for = key -> (; shell_q..., use_levin = ctx.use_levin(s, key[2], n), threshold = key[2] == 0 ? nothing : base_threshold)
+        if prefetch !== nothing
+            prefetch.params_for = params_for
+            _walk_plan!(prefetch, [(s, 0, n, 0); [(s, m, n, 0) for m in 1:min(lmax, prev_reach_pos + 1)];
+                [(s, -m, n, 0) for m in 1:min(lmax, prev_reach_neg + 1)]])
+        end
+        shell_n_energy = 0.0
+        shell_n_angular = 0.0
+        shell_n_carter = 0.0
+        below_count_m = 0
+
+        shell_m_energy = 0.0
+        shell_m_angular = 0.0
+        shell_m_carter = 0.0
+        for (l, mode) in take(0)
+            mode = ctx.accept!(s, l, 0, n, mode)
+            ctx.record!(boundary, n, 0, l, mode)
+            shell_m_energy += 2 * mode["EnergyFlux"]
+            shell_m_angular += 2 * mode["AngularMomentumFlux"]
+            shell_m_carter += 2 * mode["CarterConstantFlux"]
+            total_modes += 2
+        end
+
+        shell_n_energy += shell_m_energy
+        shell_n_angular += shell_m_angular
+        shell_n_carter += shell_m_carter
+
+        Max_flux = 0.0
+        Max_m = 1
+        reach_pos = 0
+        reach_neg = 0
+        last_big_pos = 0
+        last_big_neg = 0
+        for m in 1:lmax
+            reach_pos = m
+            shell_m_energy = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            for (l, mode) in take(m)
+                mode = ctx.accept!(s, l, m, n, mode)
+                ctx.record!(boundary, n, m, l, mode)
+                shell_m_energy += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+                if abs(mode["EnergyFlux"]) > Max_flux
+                    Max_flux = abs(mode["EnergyFlux"])
+                    Max_m = m
+                end
+            end
+
+            shell_n_energy += shell_m_energy
+            shell_n_angular += shell_m_angular
+            shell_n_carter += shell_m_carter
+
+            abs(shell_m_energy) > layer_threshold && (last_big_pos = abs(m))
+            # Near the ISSO Ups_r << Ups_phi and the n shells of even a nearly circular orbit peak at large m (at
+            # (a, p, e) = (0.932, 2.095, 0.009) the n = 6 shell sits at m = l = 15..27 while m <= 2 are tiny, and the walk
+            # dropped 4e-6 of E_inf there); a shell counts toward the stop only past the peak m of the previous n shell.
+            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_energy) <= layer_threshold) && (abs(shell_n_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_energy_last)) &&
+                (m >= max(prev_peak_m_pos, floor(Int, MWALK_REACH_FRACTION * prev_reach_pos))) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+
+        below_count_m = 0
+        Max_flux_neg = 0.0
+        Max_m_neg = 1
+        for m in -1:-1:-lmax
+            reach_neg = -m
+            shell_m_energy = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            for (l, mode) in take(m)
+                mode = ctx.accept!(s, l, m, n, mode)
+                ctx.record!(boundary, n, m, l, mode)
+                shell_m_energy += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+                if abs(mode["EnergyFlux"]) > Max_flux_neg
+                    Max_flux_neg = abs(mode["EnergyFlux"])
+                    Max_m_neg = abs(m)
+                end
+            end
+
+            shell_n_energy += shell_m_energy
+            shell_n_angular += shell_m_angular
+            shell_n_carter += shell_m_carter
+
+            abs(shell_m_energy) > layer_threshold && (last_big_neg = abs(m))
+            # As in the positive branch, the streak only counts once the n shell holds a fair part of the previous one:
+            # for retrograde orbits (x = -1) the negative m carry the flux, and at high n it sits at |m| ~ 5..10, past
+            # m = -1, -2, which are tiny (at (a, p, e) = (0.525, 9.52, 0.531) the walk stopped there for n = 22, 25,
+            # 27.., dropping 7.6e-4 of E_inf).
+            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_energy) <= layer_threshold) && (abs(m) >= max(Max_m, prev_peak_m_neg, floor(Int, MWALK_REACH_FRACTION * prev_reach_neg))) &&
+                (abs(shell_n_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_energy_last)) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+        prefetch === nothing || _walk_discard!(prefetch)
+        shell_n_energy_last = shell_n_energy
+        prev_peak_m_pos = Max_m
+        prev_peak_m_neg = Max_m_neg
+        prev_reach_pos = high_e ? min(lmax, last_big_pos + minimum_consecutive) : reach_pos
+        prev_reach_neg = high_e ? min(lmax, last_big_neg + minimum_consecutive) : reach_neg
+
+        push!(energy_list, shell_n_energy)
+        push!(n_list, n)
+        push!(angular_list, shell_n_angular); push!(carter_list, shell_n_carter)
+        ctx.log_shell(s == -2 ? "infinity" : "horizon", n, shell_n_energy, shell_n_angular, shell_n_carter, total_modes)
+        last_shell = (shell_n_energy, shell_n_angular, shell_n_carter)
+        total_energy += shell_n_energy
+        total_angular += shell_n_angular
+        total_carter += shell_n_carter
+        floor_ref[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
+        levin_abs_ref[] = LEVIN_ABS_FRACTION * tol * abs(total_energy)
+        n_threshold = _mode_cutoff_threshold(tol * abs(total_energy), floor_ref[])
+        below_count_n = abs(shell_n_energy) <= n_threshold ? below_count_n + 1 : 0
+        if below_count_n >= n_stop_run
+            n_reached = n
+            break
+        end
+    end
+    return (total_energy, total_angular, total_carter, n_reached, last_shell, total_modes)
+end
+
+# The two boundaries' shell walks on two tasks (mode_parallelism > 1 without a record), else one after the other;
+# returns (infinity result, horizon result). An error of either is raised as such once both are finished.
+function _run_boundaries(f_inf, f_hor, concurrent::Bool)
+    concurrent || return (f_inf(), f_hor())
+    inf_task = Threads.@spawn f_inf()
+    hor = try
+        f_hor()
+    catch
+        try; wait(inf_task); catch; end   # the other boundary's walks cannot be cancelled: let it finish
+        rethrow()
+    end
+    inf = try
+        fetch(inf_task)
+    catch error
+        error isa TaskFailedException ? throw(error.task.result) : rethrow()
+    end
+    return (inf, hor)
 end
 
 function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false)
@@ -901,12 +1076,14 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     # progress = true: one line per finished n shell on stdout (the number of shells is not known in advance)
     t_start = time()
     shells_done = Ref(0)
-    log_shell = (branch, n, E, L, Q) -> begin
+    log_shell = (branch, n, E, L, Q, modes) -> begin
         progress || return nothing
-        shells_done[] += 1
-        @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d nmax=%d branch=%s n=%d E=%.6e L=%.6e Q=%.6e modes=%d shells_done=%d elapsed=%.1fs\n",
-            a, p, e, x, lmax, nmax, branch, n, E, L, Q, total_modes, shells_done[], time() - t_start)
-        flush(stdout)
+        lock(_PROGRESS_LOCK) do
+            shells_done[] += 1
+            @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d nmax=%d branch=%s n=%d E=%.6e L=%.6e Q=%.6e modes=%d shells_done=%d elapsed=%.1fs\n",
+                a, p, e, x, lmax, nmax, branch, n, E, L, Q, modes, shells_done[], time() - t_start)
+            flush(stdout)
+        end
         return nothing
     end
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
@@ -949,8 +1126,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     failed_modes = [0, 0]
     near_static_zero = [0, 0]
     # One mode from the shell's parameters (no summation state is read or written here, so modes of one shell can be
-    # computed concurrently), and its acceptance (the counters), which the summation applies in its own order.
-    ecc_compute = (s, l, m, n, max_flux, use_levin, floor, levin_floor, levin_abs) -> begin
+    # computed concurrently) and `factors`, the phase factorizations shared by its l walk (see _eccentric_l_walk), and
+    # its acceptance (the counters), which the summation applies in its own order.
+    ecc_compute = (s, l, m, n, max_flux, use_levin, floor, levin_floor, levin_abs, factors) -> begin
         ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"]
         mode = if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
             res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
@@ -959,6 +1137,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         else
         let; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
+                mode_cache.walk_factors = factors
                 ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, levin_floor), energy_abs_tol = levin_abs, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
         else
@@ -984,38 +1163,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     end
     shell_parameters = s -> (MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s), branch_levin_floor(s),
         s == -2 ? branch_levin_abs_inf[] : branch_levin_abs_hor[])
-    ecc_serial = (s, l, m, n, max_flux, tail_values) -> begin
-        use_levin = use_eccentric_tail_levin(s, m, n)
-        ecc_accept!(s, l, m, n, ecc_compute(s, l, m, n, max_flux, use_levin, shell_parameters(s)...))
-    end
-    prefetch = nothing
-    if mode_parallelism > 1
-        # use_eccentric_tail_levin without its bookkeeping, for modes computed ahead of the walk
-        levin_decision = (s, m, n) -> begin
-            branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
-            _tail_enabled(branch_policy) && fast || return false
-            active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
-            branch_policy === true && active[] && return true
-            _use_levin_tail(n; nmin = levin_nmin) || return false
-            return branch_policy === true || _ecc_levin_auto(_mode_radial_trapezoid_n(KG_sample, m, n, 0, N, Nmax), n,
-                adaptive_local_n, levin_max_depth, levin_nmin)
-        end
-        decisions = Dict{NTuple{3, Int}, Bool}()
-        prefetch = _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
-            (key, q) -> ecc_compute(key[1], key[2], key[3], key[4], q[1], q[5], q[2], q[3], q[4]),
-            (key, mode) -> ecc_accept!(key[1], key[2], key[3], key[4], mode),
-            (key, q) -> begin
-                length(decisions) > 4096 && empty!(decisions)   # one scan of the master grid per (s, m, n)
-                (q[1], q[2], q[3], q[4], get!(() -> levin_decision(key[1], key[3], key[4]), decisions, (key[1], key[3], key[4])))
-            end,
-            (s, m, n, k) -> max(2, abs(m)),
-            (s, m, n, k) -> m >= 0 ? m + 1 : m - 1)
-    end
-    ecc_eval = prefetch === nothing ? ecc_serial : (s, l, m, n, max_flux, tail_values) -> begin
-        # the serial order of the Levin bookkeeping, then the mode with exactly the serial parameters
-        use_levin = use_eccentric_tail_levin(s, m, n)
-        prefetch((s, l, m, n, 0), (max_flux, shell_parameters(s)..., use_levin))
-    end
+    ecc_compute_q = (s, l, m, n, q, factors) -> ecc_compute(s, l, m, n, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_abs, factors)
+    pf_inf = nothing   # the walk prefetches of the two boundaries (mode_parallelism > 1), set below, drained in finally
+    pf_hor = nothing
 
     try
         if record
@@ -1114,8 +1264,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     push!(n_list_hor, 0)
     push!(Angular_flux_inf, shell_n_infinity_angular); push!(Carter_flux_inf, shell_n_infinity_carter)
     push!(Angular_flux_hor, shell_n_horizon_angular); push!(Carter_flux_hor, shell_n_horizon_carter)
-    log_shell("infinity", 0, shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
-    log_shell("horizon", 0, shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
+    log_shell("infinity", 0, shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter, total_modes)
+    log_shell("horizon", 0, shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter, total_modes)
     total_infinity_energy += shell_n_infinity_energy
     total_infinity_angular += shell_n_infinity_angular
     total_infinity_carter += shell_n_infinity_carter
@@ -1127,315 +1277,29 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     branch_levin_abs_inf[] = LEVIN_ABS_FRACTION * tol * abs(total_infinity_energy)
     branch_levin_abs_hor[] = LEVIN_ABS_FRACTION * tol * abs(total_horizon_energy)
 
-    prev_peak_m_pos = 1
-    prev_peak_m_neg = 1
-    # |m| reached by the previous n shell's walks; an m shell counts toward the stop only past MWALK_REACH_FRACTION of it
-    prev_reach_pos = n0_reach_inf
-    prev_reach_neg = n0_reach_inf
-    for n in 1:nmax
-        m_omega_zero = -n * radial_over_azimuthal
-        omega_zero_gate = !rules.high_e || abs(m_omega_zero) < lmax
-        E_estimate_inf = _fit_shell_estimate(model, n_list_inf, Energy_flux_inf, n, p0, abs(shell_n_infinity_energy_last))
-        shell_n_infinity_energy = 0.0
-        shell_n_infinity_angular = 0.0
-        shell_n_infinity_carter = 0.0
-        below_count_m = 0
-
-        shell_m_infinity_energy = 0.0
-        shell_m_infinity_angular = 0.0
-        shell_m_infinity_carter = 0.0
-        below_count_l = 0
-
-        for l in 2:lmax
-            mode = ecc_eval(-2, l, 0, n, 2 * E_estimate_inf, Energy_flux_inf)
-            _record_current_mode!(record_h5, record, "I", n, 0, l, mode_index, mode, N)
-            shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-            shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-            shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_infinity_energy), branch_mode_floor_inf[])
-            below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-            if below_count_l >= minimum_consecutive
-                break
-            end
-        end
-
-        shell_n_infinity_energy += shell_m_infinity_energy
-        shell_n_infinity_angular += shell_m_infinity_angular
-        shell_n_infinity_carter += shell_m_infinity_carter
-
-        Max_flux = 0.0
-        Max_m = 1
-        reach_pos = 0
-        reach_neg = 0
-        last_big_pos = 0
-        last_big_neg = 0
-        for m in 1:lmax
-            reach_pos = m
-            lmin = max(2, abs(m))
-            shell_m_infinity_energy = 0.0
-            shell_m_infinity_angular = 0.0
-            shell_m_infinity_carter = 0.0
-            below_count_l = 0
-
-            for l in lmin:lmax
-                mode = ecc_eval(-2, l, m, n, 2 * E_estimate_inf, Energy_flux_inf)
-                _record_current_mode!(record_h5, record, "I", n, m, l, mode_index, mode, N)
-                shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-                shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                if abs(mode["EnergyFlux"]) > Max_flux
-                    Max_flux = abs(mode["EnergyFlux"])
-                    Max_m = m
-                end
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-                below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-                if below_count_l >= minimum_consecutive
-                    break
-                end
-            end
-
-            shell_n_infinity_energy += shell_m_infinity_energy
-            shell_n_infinity_angular += shell_m_infinity_angular
-            shell_n_infinity_carter += shell_m_infinity_carter
-
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-            abs(shell_m_infinity_energy) > layer_threshold && (last_big_pos = abs(m))
-            # Near the ISSO Ups_r << Ups_phi and the n shells of even a nearly circular orbit peak at large m (at
-            # (a, p, e) = (0.932, 2.095, 0.009) the n = 6 shell sits at m = l = 15..27 while m <= 2 are tiny, and the walk
-            # dropped 4e-6 of E_inf there); a shell counts toward the stop only past the peak m of the previous n shell.
-            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) &&
-                (m >= max(prev_peak_m_pos, floor(Int, MWALK_REACH_FRACTION * prev_reach_pos))) ? below_count_m + 1 : 0
-            if below_count_m >= minimum_consecutive
-                break
-            end
-        end
-
-        below_count_m = 0
-        Max_flux_neg = 0.0
-        Max_m_neg = 1
-        for m in -1:-1:-lmax
-            reach_neg = -m
-            lmin = max(2, abs(m))
-            shell_m_infinity_energy = 0.0
-            shell_m_infinity_angular = 0.0
-            shell_m_infinity_carter = 0.0
-            below_count_l = 0
-
-            for l in lmin:lmax
-                mode = ecc_eval(-2, l, m, n, 2 * E_estimate_inf, Energy_flux_inf)
-                _record_current_mode!(record_h5, record, "I", n, m, l, mode_index, mode, N)
-                shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-                shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                if abs(mode["EnergyFlux"]) > Max_flux_neg
-                    Max_flux_neg = abs(mode["EnergyFlux"])
-                    Max_m_neg = abs(m)
-                end
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-                below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-                if below_count_l >= minimum_consecutive
-                    break
-                end
-            end
-
-            shell_n_infinity_energy += shell_m_infinity_energy
-            shell_n_infinity_angular += shell_m_infinity_angular
-            shell_n_infinity_carter += shell_m_infinity_carter
-
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy_last), branch_mode_floor_inf[])
-            abs(shell_m_infinity_energy) > layer_threshold && (last_big_neg = abs(m))
-            # As in the positive branch, the streak only counts once the n shell holds a fair part of the previous one:
-            # for retrograde orbits (x = -1) the negative m carry the flux, and at high n it sits at |m| ~ 5..10, past
-            # m = -1, -2, which are tiny (at (a, p, e) = (0.525, 9.52, 0.531) the walk stopped there for n = 22, 25,
-            # 27.., dropping 7.6e-4 of E_inf).
-            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(m) >= max(Max_m, prev_peak_m_neg, floor(Int, MWALK_REACH_FRACTION * prev_reach_neg))) &&
-                (abs(shell_n_infinity_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_infinity_energy_last)) ? below_count_m + 1 : 0
-            if below_count_m >= minimum_consecutive
-                break
-            end
-        end
-        shell_n_infinity_energy_last = shell_n_infinity_energy
-        prev_peak_m_pos = Max_m
-        prev_peak_m_neg = Max_m_neg
-        prev_reach_pos = rules.high_e ? min(lmax, last_big_pos + minimum_consecutive) : reach_pos
-        prev_reach_neg = rules.high_e ? min(lmax, last_big_neg + minimum_consecutive) : reach_neg
-
-        push!(Energy_flux_inf, shell_n_infinity_energy)
-        push!(n_list_inf, n)
-        push!(Angular_flux_inf, shell_n_infinity_angular); push!(Carter_flux_inf, shell_n_infinity_carter)
-        log_shell("infinity", n, shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
-        last_shell_inf = (shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
-        total_infinity_energy += shell_n_infinity_energy
-        total_infinity_angular += shell_n_infinity_angular
-        total_infinity_carter += shell_n_infinity_carter
-        branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_infinity_energy, tol, mode_abs_floor)
-        branch_levin_abs_inf[] = LEVIN_ABS_FRACTION * tol * abs(total_infinity_energy)
-        n_threshold = _mode_cutoff_threshold(tol * abs(total_infinity_energy), branch_mode_floor_inf[])
-        below_count_n = abs(shell_n_infinity_energy) <= n_threshold ? below_count_n + 1 : 0
-        if below_count_n >= n_stop_run
-            n_reached_inf = n
-            break
-        end
-    end
-
-    below_count_n = 0
-    prev_peak_m_pos = 1
-    prev_peak_m_neg = 1
-    prev_reach_pos = n0_reach_hor
-    prev_reach_neg = n0_reach_hor
-    for n in 1:nmax
-        m_omega_zero = -n * radial_over_azimuthal
-        omega_zero_gate = !rules.high_e || abs(m_omega_zero) < lmax
-        E_estimate_hor = _fit_shell_estimate(model, n_list_hor, Energy_flux_hor, n, p0, abs(shell_n_horizon_energy_last))
-        shell_n_horizon_energy = 0.0
-        shell_n_horizon_angular = 0.0
-        shell_n_horizon_carter = 0.0
-        below_count_m = 0
-
-        shell_m_horizon_energy = 0.0
-        shell_m_horizon_angular = 0.0
-        shell_m_horizon_carter = 0.0
-        below_count_l = 0
-
-        for l in 2:lmax
-            mode = ecc_eval(2, l, 0, n, 2 * E_estimate_hor, Energy_flux_hor)
-            _record_current_mode!(record_h5, record, "H", n, 0, l, mode_index, mode, N)
-            shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-            shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-            shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_horizon_energy), branch_mode_floor_hor[])
-            below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-            if below_count_l >= minimum_consecutive
-                break
-            end
-        end
-
-        shell_n_horizon_energy += shell_m_horizon_energy
-        shell_n_horizon_angular += shell_m_horizon_angular
-        shell_n_horizon_carter += shell_m_horizon_carter
-
-        Max_flux = 0.0
-        Max_m = 1
-        reach_pos = 0
-        reach_neg = 0
-        last_big_pos = 0
-        last_big_neg = 0
-        for m in 1:lmax
-            reach_pos = m
-            lmin = max(2, abs(m))
-            shell_m_horizon_energy = 0.0
-            shell_m_horizon_angular = 0.0
-            shell_m_horizon_carter = 0.0
-            below_count_l = 0
-
-            for l in lmin:lmax
-                mode = ecc_eval(2, l, m, n, 2 * E_estimate_hor, Energy_flux_hor)
-                _record_current_mode!(record_h5, record, "H", n, m, l, mode_index, mode, N)
-                shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-                shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                if abs(mode["EnergyFlux"]) > Max_flux
-                    Max_flux = abs(mode["EnergyFlux"])
-                    Max_m = m
-                end
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-                below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-                if below_count_l >= minimum_consecutive
-                    break
-                end
-            end
-
-            shell_n_horizon_energy += shell_m_horizon_energy
-            shell_n_horizon_angular += shell_m_horizon_angular
-            shell_n_horizon_carter += shell_m_horizon_carter
-
-            # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-            abs(shell_m_horizon_energy) > layer_threshold && (last_big_pos = abs(m))
-            # Near the ISSO Ups_r << Ups_phi and the n shells of even a nearly circular orbit peak at large m (at
-            # (a, p, e) = (0.932, 2.095, 0.009) the n = 6 shell sits at m = l = 15..27 while m <= 2 are tiny, and the walk
-            # dropped 4e-6 of E_inf there); a shell counts toward the stop only past the peak m of the previous n shell.
-            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) &&
-                (m >= max(prev_peak_m_pos, floor(Int, MWALK_REACH_FRACTION * prev_reach_pos))) ? below_count_m + 1 : 0
-            if below_count_m >= minimum_consecutive
-
-                break
-            end
-        end
-
-        below_count_m = 0
-        Max_flux_neg = 0.0
-        Max_m_neg = 1
-        for m in -1:-1:-lmax
-            reach_neg = -m
-            lmin = max(2, abs(m))
-            shell_m_horizon_energy = 0.0
-            shell_m_horizon_angular = 0.0
-            shell_m_horizon_carter = 0.0
-            below_count_l = 0
-
-            for l in lmin:lmax
-                mode = ecc_eval(2, l, m, n, 2 * E_estimate_hor, Energy_flux_hor)
-                _record_current_mode!(record_h5, record, "H", n, m, l, mode_index, mode, N)
-                shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-                shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                if abs(mode["EnergyFlux"]) > Max_flux_neg
-                    Max_flux_neg = abs(mode["EnergyFlux"])
-                    Max_m_neg = abs(m)
-                end
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-                below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-                if below_count_l >= minimum_consecutive
-                    break
-                end
-            end
-
-            shell_n_horizon_energy += shell_m_horizon_energy
-            shell_n_horizon_angular += shell_m_horizon_angular
-            shell_n_horizon_carter += shell_m_horizon_carter
-
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy_last), branch_mode_floor_hor[])
-            abs(shell_m_horizon_energy) > layer_threshold && (last_big_neg = abs(m))
-            # As in the positive branch, the streak only counts once the n shell holds a fair part of the previous one:
-            # for retrograde orbits (x = -1) the negative m carry the flux, and at high n it sits at |m| ~ 5..10, past
-            # m = -1, -2, which are tiny (at (a, p, e) = (0.525, 9.52, 0.531) the walk stopped there for n = 22, 25,
-            # 27.., dropping 7.6e-4 of E_inf).
-            below_count_m = !(omega_zero_gate && _before_omega_zero(m, m_omega_zero)) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(m) >= max(Max_m, prev_peak_m_neg, floor(Int, MWALK_REACH_FRACTION * prev_reach_neg))) &&
-                (abs(shell_n_horizon_energy) > min(0.1, exp(1 - 1 / e)) * abs(shell_n_horizon_energy_last)) ? below_count_m + 1 : 0
-            if below_count_m >= minimum_consecutive
-                break
-            end
-        end
-        shell_n_horizon_energy_last = shell_n_horizon_energy
-        prev_peak_m_pos = Max_m
-        prev_peak_m_neg = Max_m_neg
-        prev_reach_pos = rules.high_e ? min(lmax, last_big_pos + minimum_consecutive) : reach_pos
-        prev_reach_neg = rules.high_e ? min(lmax, last_big_neg + minimum_consecutive) : reach_neg
-
-        push!(Energy_flux_hor, shell_n_horizon_energy)
-        push!(n_list_hor, n)
-        push!(Angular_flux_hor, shell_n_horizon_angular); push!(Carter_flux_hor, shell_n_horizon_carter)
-        log_shell("horizon", n, shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
-        last_shell_hor = (shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
-        total_horizon_energy += shell_n_horizon_energy
-        total_horizon_angular += shell_n_horizon_angular
-        total_horizon_carter += shell_n_horizon_carter
-        branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_horizon_energy, tol, mode_abs_floor)
-        branch_levin_abs_hor[] = LEVIN_ABS_FRACTION * tol * abs(total_horizon_energy)
-        n_threshold = _mode_cutoff_threshold(tol * abs(total_horizon_energy), branch_mode_floor_hor[])
-        below_count_n = abs(shell_n_horizon_energy) <= n_threshold ? below_count_n + 1 : 0
-        if below_count_n >= n_stop_run
-            n_reached_hor = n
-            break
-        end
-    end
+    # n >= 1 shells of both boundaries (see _eccentric_branch_shells!), each from the state after its n = 0 shell;
+    # with mode_parallelism > 1 their l walks are computed ahead and, without a record, the boundaries run on two tasks
+    walk_run = (key, q) -> _eccentric_l_walk(ecc_compute_q, key[1], key[2], key[3], q, lmax, minimum_consecutive, Float64(tol), mode_parallelism > 1)
+    branch_ctx = s -> (lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, n_stop_run = n_stop_run,
+        radial_over_azimuthal = radial_over_azimuthal, high_e = rules.high_e, e = e, tol = Float64(tol), model = model, p0 = p0,
+        mode_abs_floor = mode_abs_floor, n0_reach = s == -2 ? n0_reach_inf : n0_reach_hor,
+        energy_list = s == -2 ? Energy_flux_inf : Energy_flux_hor, angular_list = s == -2 ? Angular_flux_inf : Angular_flux_hor,
+        carter_list = s == -2 ? Carter_flux_inf : Carter_flux_hor, n_list = s == -2 ? n_list_inf : n_list_hor,
+        floor_ref = s == -2 ? branch_mode_floor_inf : branch_mode_floor_hor,
+        levin_abs_ref = s == -2 ? branch_levin_abs_inf : branch_levin_abs_hor,
+        totals = s == -2 ? (total_infinity_energy, total_infinity_angular, total_infinity_carter) :
+            (total_horizon_energy, total_horizon_angular, total_horizon_carter),
+        shell_n_energy_last = s == -2 ? shell_n_infinity_energy_last : shell_n_horizon_energy_last,
+        shell_parameters = shell_parameters, use_levin = use_eccentric_tail_levin, run = walk_run, accept! = ecc_accept!,
+        record! = (boundary, n, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, n, m, l, mode_index, mode, N),
+        log_shell = log_shell)
+    pf_inf = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+    pf_hor = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+    inf, hor = _run_boundaries(() -> _eccentric_branch_shells!(-2, branch_ctx(-2), pf_inf),
+        () -> _eccentric_branch_shells!(2, branch_ctx(2), pf_hor), mode_parallelism > 1 && !record)
+    total_infinity_energy, total_infinity_angular, total_infinity_carter, n_reached_inf, last_shell_inf, modes_inf = inf
+    total_horizon_energy, total_horizon_angular, total_horizon_carter, n_reached_hor, last_shell_hor, modes_hor = hor
+    total_modes += modes_inf + modes_hor
 
     tail_factor_inf, tail_ratio_inf = _geometric_n_tail_factor(Energy_flux_inf, e, n_reached_inf, n_stop_run)
     tail_factor_hor, tail_ratio_hor = _geometric_n_tail_factor(Energy_flux_hor, e, n_reached_hor, n_stop_run)
@@ -1494,8 +1358,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         n_reached_hor = n_reached_hor,
         mode_parallelism = mode_parallelism,
         # with mode_parallelism > 1: modes computed in all, and those computed ahead but never asked for
-        modes_computed = prefetch === nothing ? nothing : prefetch.computed,
-        modes_computed_unused = prefetch === nothing ? nothing : prefetch.computed - prefetch.used,
+        modes_computed = pf_inf === nothing ? nothing : pf_inf.modes + pf_hor.modes,
+        modes_computed_unused = pf_inf === nothing ? nothing : (pf_inf.modes - pf_inf.modes_used) + (pf_hor.modes - pf_hor.modes_used),
         lmax_hit_inf = _cap_hits(cap_trackers[1], tol, total_infinity_energy)[1],
         lmax_hit_hor = _cap_hits(cap_trackers[2], tol, total_horizon_energy)[1],
         nmax_hit_inf = _nmax_hit(n_reached_inf, Energy_flux_inf, nmax, tol, total_infinity_energy),
@@ -1525,7 +1389,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         record_file = record ? record_path : nothing,
     )
     finally
-        prefetch === nothing || _prefetch_drain!(prefetch)
+        pf_inf === nothing || _walk_discard!(pf_inf)
+        pf_hor === nothing || _walk_discard!(pf_hor)
         record && _public_close_resource!(scope, record_h5)
     end
 end
@@ -1650,6 +1515,163 @@ function inclined_mode_flux(a, p, x, l, m, k; submission = nothing, K = 16, Kmax
     end
 end
 
+# One l walk of the inclined sum, (s, m, k) with k >= 1, up from the peak l (infinity) or from lmin (horizon) as in
+# _branch_l_walk, from the shell's parameters q only (max_flux and floor of the modes, threshold of the cutoff): pure.
+# Returns the (l, mode) in walk order and the extrapolated l tail beyond lmax; `strip` drops the large members of the
+# mode Dicts.
+function _inclined_l_walk(compute, s::Int, m::Int, k::Int, q, lmax::Int, minimum_consecutive::Int, x, strip::Bool)
+    modes = Tuple{Int, Any}[]
+    lmin = max(2, abs(m))
+    tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, q.threshold, minimum_consecutive, s == 2) do l
+        mode = compute(s, l, m, k, q)
+        strip && _strip_mode!(mode)
+        push!(modes, (l, mode))
+        mode["EnergyFlux"]
+    end
+    return (modes = modes, tail = tail)
+end
+
+# The k >= 1 shells of one boundary of the inclined sum (s = -2: infinity, 2: horizon), after its k = 0 shell: the
+# m = 0, m = 1, 2, .. and m = -1, -2, .. l walks of each shell, the m and k stop rules, the shell lists and the totals.
+# The l walks depend on the shell's parameters only: with `prefetch` they are computed ahead, planned from the m reach
+# of the previous shell. The two boundaries may run on different tasks: everything mutable here is local or owned by
+# this boundary (ctx). Returns (total energy, angular momentum, Carter constant, k_reached, l_reached, lmax_hit,
+# near-static zeros, failed modes, modes).
+function _inclined_branch_shells!(s::Int, ctx, prefetch)
+    (; lmax, kmax, minimum_consecutive, tol, x, model, p0, mode_abs_floor, energy_list, angular_list, carter_list,
+        k_list, floor_ref, run) = ctx
+    total_energy, total_angular, total_carter = ctx.totals
+    shell_k_energy_last = ctx.shell_k_energy_last
+    l_reached = ctx.l_reached
+    lmax_hit = ctx.lmax_hit
+    boundary = s == -2 ? "I" : "H"
+    near_static_zero = 0
+    failed_modes = 0
+    total_modes = 0
+    k_reached = nothing
+    below_count_n = 0
+    prev_reach_pos = ctx.k0_reach
+    prev_reach_neg = ctx.k0_reach
+    params_for = nothing
+    k_current = Ref(0)
+    # the walk of (m, k), computed ahead or now; a walk beyond the plan starts the next two of its direction
+    take = m -> begin
+        key = (s, m, 0, k_current[])
+        prefetch === nothing && return run(key, params_for(key))
+        step = m >= 0 ? 1 : -1
+        return prefetch(key; ahead = [(s, mm, 0, k_current[]) for mm in (m + step):step:(m + 2step) if abs(mm) <= lmax])
+    end
+    # the replay of one walk: the serial bookkeeping of its modes, in order
+    replay! = (walk, m, k, shell_k_energy, track_max) -> begin
+        shell_m_energy = 0.0
+        shell_m_angular = 0.0
+        shell_m_carter = 0.0
+        Max_flux = 0.0
+        for (l, mode) in walk.modes
+            ctx.record!(boundary, k, m, l, mode)
+            get(mode, "NearStaticOverflow", false) && (near_static_zero += 1)
+            get(mode, "FailedMode", false) && (failed_modes += 1)
+            l_reached = max(l_reached, l)
+            shell_m_energy += 2 * mode["EnergyFlux"]
+            shell_m_angular += 2 * mode["AngularMomentumFlux"]
+            shell_m_carter += 2 * mode["CarterConstantFlux"]
+            total_modes += 2
+            track_max && abs(mode["EnergyFlux"]) > Max_flux && (Max_flux = abs(mode["EnergyFlux"]))
+        end
+        lmax_hit = lmax_hit || _tail_hit(walk.tail, tol, total_energy + shell_k_energy + shell_m_energy)
+        return (shell_m_energy, shell_m_angular, shell_m_carter, Max_flux)
+    end
+    for k in 1:kmax
+        k_current[] = k
+        E_estimate = _fit_shell_estimate(model, k_list, energy_list, k, p0, abs(shell_k_energy_last))
+        layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_energy_last), floor_ref[])
+        shell_q = (max_flux = 2 * E_estimate, floor = MODE_REFINE_FLOOR_FRACTION * floor_ref[], threshold = layer_threshold)
+        params_for = key -> shell_q
+        if prefetch !== nothing
+            prefetch.params_for = params_for
+            _walk_plan!(prefetch, [(s, 0, 0, k); [(s, m, 0, k) for m in 1:min(lmax, prev_reach_pos + 1)];
+                [(s, -m, 0, k) for m in 1:min(lmax, prev_reach_neg + 1)]])
+        end
+        shell_k_energy = 0.0
+        shell_k_angular = 0.0
+        shell_k_carter = 0.0
+        below_count_m = 0
+
+        shell_m_energy, shell_m_angular, shell_m_carter, _ = replay!(take(0), 0, k, shell_k_energy, false)
+
+        shell_k_energy += shell_m_energy
+        shell_k_angular += shell_m_angular
+        shell_k_carter += shell_m_carter
+
+        Max_flux = 0.0
+        Max_m = 1
+        m_trail = Float64[]
+        # an m shell counts towards the stop only past the largest m shell of this k walk
+        peak_m = 0.0
+        reach_pos = 0
+        reach_neg = 0
+        for m in 1:lmax
+            reach_pos = m
+            shell_m_energy, shell_m_angular, shell_m_carter, walk_max = replay!(take(m), m, k, shell_k_energy, true)
+            if walk_max > Max_flux
+                Max_flux = walk_max
+                Max_m = m
+            end
+
+            shell_k_energy += shell_m_energy
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            _push_trail!(m_trail, shell_m_energy)
+
+            # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
+            below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_energy) <= layer_threshold) && (abs(shell_m_energy) < peak_m) ? below_count_m + 1 : 0
+            peak_m = max(peak_m, abs(shell_m_energy))
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+        below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_energy + shell_k_energy) && (lmax_hit = true)
+
+        below_count_m = 0
+        m_trail = Float64[]
+        for m in -1:-1:-lmax
+            reach_neg = -m
+            shell_m_energy, shell_m_angular, shell_m_carter, _ = replay!(take(m), m, k, shell_k_energy, false)
+
+            shell_k_energy += shell_m_energy
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            _push_trail!(m_trail, shell_m_energy)
+
+            below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                shell_k_energy_last = shell_k_energy
+                break
+            end
+        end
+        below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_energy + shell_k_energy) && (lmax_hit = true)
+        prefetch === nothing || _walk_discard!(prefetch)
+        prev_reach_pos = reach_pos
+        prev_reach_neg = reach_neg
+
+        push!(energy_list, shell_k_energy)
+        push!(k_list, k)
+        push!(angular_list, shell_k_angular); push!(carter_list, shell_k_carter)
+        ctx.log_shell(s == -2 ? "infinity" : "horizon", "k", k, shell_k_energy, shell_k_angular, shell_k_carter, total_modes)
+        total_energy += shell_k_energy
+        total_angular += shell_k_angular
+        total_carter += shell_k_carter
+        floor_ref[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
+        k_threshold = _mode_cutoff_threshold(tol * abs(total_energy), floor_ref[])
+        below_count_n = abs(shell_k_energy) <= k_threshold ? below_count_n + 1 : 0
+        if below_count_n >= minimum_consecutive + 1
+            k_reached = k
+            break
+        end
+    end
+    return (total_energy, total_angular, total_carter, k_reached, l_reached, lmax_hit, near_static_zero, failed_modes, total_modes)
+end
+
 function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, warn_truncation::Bool = true, mode_parallelism::Int = 1, progress::Bool = false)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
@@ -1678,12 +1700,14 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     # progress = true: one line per finished k shell (the shell index of inclined orbits is k; there is no n)
     t_start = time()
     shells_done = Ref(0)
-    log_shell = (branch, label, idx, E, L, Q) -> begin
+    log_shell = (branch, label, idx, E, L, Q, modes) -> begin
         progress || return nothing
-        shells_done[] += 1
-        @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d branch=%s %s=%d E=%.6e L=%.6e Q=%.6e shells_done=%d elapsed=%.1fs\n",
-            a, p, 0.0, x, lmax, branch, label, idx, E, L, Q, shells_done[], time() - t_start)
-        flush(stdout)
+        lock(_PROGRESS_LOCK) do
+            shells_done[] += 1
+            @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d branch=%s %s=%d E=%.6e L=%.6e Q=%.6e modes=%d shells_done=%d elapsed=%.1fs\n",
+                a, p, 0.0, x, lmax, branch, label, idx, E, L, Q, modes, shells_done[], time() - t_start)
+            flush(stdout)
+        end
         return nothing
     end
     model(x, p) = p[1] .* (x .+ 1) .^ p[2] .* exp.(-p[3] .* x)
@@ -1715,17 +1739,15 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     ci_kwargs = fast ? (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling) : (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = false)
     branch_mode_floor_inf = Ref(Float64(mode_abs_floor))
     branch_mode_floor_hor = Ref(Float64(mode_abs_floor))
-    # One mode from its parameters (max_flux, floor; the k = 0 walks use the default max_flux 1.0); the walks below do
-    # the bookkeeping. With mode_parallelism > 1 the modes come from _ModePrefetch.
+    # One mode from its parameters (max_flux, floor; the k = 0 walks use the default max_flux 1.0); the walks do the
+    # bookkeeping. The k >= 1 shells are walked by _inclined_branch_shells! (computed ahead with mode_parallelism > 1).
     inc_compute = (s, l, m, k, max_flux, floor) -> with_submission_mode(scope; mode = (s, l, m, 0, k)) do mode_cache
         ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = floor, ci_kwargs..., cache = mode_cache)
     end
-    prefetch = mode_parallelism > 1 ? _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
-        (key, q) -> inc_compute(key[1], key[2], key[3], key[5], q[1], q[2]), (key, mode) -> mode, (key, q) -> q,
-        (s, m, n, k) -> k == 0 ? max(2, abs(m)) : _branch_peak_l(max(2, abs(m)), m, k, x),
-        (s, m, n, k) -> m >= 0 ? m + 1 : m - 1) : nothing
-    inc_mode = (s, l, m, k, max_flux, floor) -> prefetch === nothing ? inc_compute(s, l, m, k, max_flux, floor) :
-        prefetch((s, l, m, 0, k), (Float64(max_flux), Float64(floor)))
+    inc_mode = inc_compute
+    inc_compute_q = (s, l, m, k, q) -> inc_compute(s, l, m, k, q.max_flux, q.floor)
+    pf_inf = nothing   # the walk prefetches of the two boundaries (mode_parallelism > 1), set below, drained in finally
+    pf_hor = nothing
 
     try
         if record
@@ -1759,7 +1781,9 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
         peak_m_hor = 0.0
         m_trail_inf = Float64[]
         m_trail_hor = Float64[]
+        k0_reach = 0   # the m reached by the k = 0 walks, the first plan of the k = 1 walks
         for m in 1:lmax
+            k0_reach = m
             lmin = max(2, abs(m))
             shell_m_infinity_energy = 0.0
             shell_m_infinity_angular = 0.0
@@ -1845,8 +1869,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
         push!(k_list_hor, 0)
         push!(Angular_flux_inf, shell_k_infinity_angular); push!(Carter_flux_inf, shell_k_infinity_carter)
         push!(Angular_flux_hor, shell_k_horizon_angular); push!(Carter_flux_hor, shell_k_horizon_carter)
-        log_shell("infinity", "k", 0, shell_k_infinity_energy, shell_k_infinity_angular, shell_k_infinity_carter)
-        log_shell("horizon", "k", 0, shell_k_horizon_energy, shell_k_horizon_angular, shell_k_horizon_carter)
+        log_shell("infinity", "k", 0, shell_k_infinity_energy, shell_k_infinity_angular, shell_k_infinity_carter, total_modes)
+        log_shell("horizon", "k", 0, shell_k_horizon_energy, shell_k_horizon_angular, shell_k_horizon_carter, total_modes)
         total_infinity_energy += shell_k_infinity_energy
         total_infinity_angular += shell_k_infinity_angular
         total_infinity_carter += shell_k_infinity_carter
@@ -1859,267 +1883,31 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
         branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_infinity_energy, tol, mode_abs_floor)
         branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_horizon_energy, tol, mode_abs_floor)
 
-        for k in 1:kmax
-            E_estimate_inf = _fit_shell_estimate(model, k_list_inf, Energy_flux_inf, k, p0, abs(shell_k_infinity_energy_last))
-            shell_k_infinity_energy = 0.0
-            shell_k_infinity_angular = 0.0
-            shell_k_infinity_carter = 0.0
-            below_count_m = 0
-
-            shell_m_infinity_energy = 0.0
-            shell_m_infinity_angular = 0.0
-            shell_m_infinity_carter = 0.0
-            below_count_l = 0
-
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-            l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                mode = inc_mode(-2, l, 0, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
-                _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
-                get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
-                get(mode, "FailedMode", false) && (failed_modes_inf += 1)
-                l_reached_inf = max(l_reached_inf, l)
-                shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-                shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                mode["EnergyFlux"]
-            end
-            lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
-
-            shell_k_infinity_energy += shell_m_infinity_energy
-            shell_k_infinity_angular += shell_m_infinity_angular
-            shell_k_infinity_carter += shell_m_infinity_carter
-
-            Max_flux = 0.0
-            Max_m = 1
-            m_trail = Float64[]
-            # an m shell counts towards the stop only past the largest m shell of this k walk
-            peak_m_infinity = 0.0
-            for m in 1:lmax
-                lmin = max(2, abs(m))
-                shell_m_infinity_energy = 0.0
-                shell_m_infinity_angular = 0.0
-                shell_m_infinity_carter = 0.0
-                below_count_l = 0
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = inc_mode(-2, l, m, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
-                    _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
-                    get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
-                    get(mode, "FailedMode", false) && (failed_modes_inf += 1)
-                    l_reached_inf = max(l_reached_inf, l)
-                    shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-                    shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    if abs(mode["EnergyFlux"]) > Max_flux
-                        Max_flux = abs(mode["EnergyFlux"])
-                        Max_m = m
-                    end
-                    mode["EnergyFlux"]
-                end
-                lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
-
-                shell_k_infinity_energy += shell_m_infinity_energy
-                shell_k_infinity_angular += shell_m_infinity_angular
-                shell_k_infinity_carter += shell_m_infinity_carter
-                _push_trail!(m_trail, shell_m_infinity_energy)
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(shell_m_infinity_energy) < peak_m_infinity) ? below_count_m + 1 : 0
-                peak_m_infinity = max(peak_m_infinity, abs(shell_m_infinity_energy))
-                if below_count_m >= minimum_consecutive
-                    break
-                end
-            end
-            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_infinity_energy + shell_k_infinity_energy) && (lmax_hit_inf = true)
-
-            below_count_m = 0
-            m_trail = Float64[]
-            for m in -1:-1:-lmax
-                lmin = max(2, abs(m))
-                shell_m_infinity_energy = 0.0
-                shell_m_infinity_angular = 0.0
-                shell_m_infinity_carter = 0.0
-                below_count_l = 0
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = inc_mode(-2, l, m, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
-                    _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
-                    get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
-                    get(mode, "FailedMode", false) && (failed_modes_inf += 1)
-                    l_reached_inf = max(l_reached_inf, l)
-                    shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-                    shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    mode["EnergyFlux"]
-                end
-                lmax_hit_inf = lmax_hit_inf || _tail_hit(l_tail, tol, total_infinity_energy + shell_k_infinity_energy + shell_m_infinity_energy)
-
-                shell_k_infinity_energy += shell_m_infinity_energy
-                shell_k_infinity_angular += shell_m_infinity_angular
-                shell_k_infinity_carter += shell_m_infinity_carter
-                _push_trail!(m_trail, shell_m_infinity_energy)
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_infinity_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
-                if below_count_m >= minimum_consecutive
-                    shell_k_infinity_energy_last = shell_k_infinity_energy
-                    break
-                end
-            end
-            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_infinity_energy + shell_k_infinity_energy) && (lmax_hit_inf = true)
-
-            push!(Energy_flux_inf, shell_k_infinity_energy)
-            push!(k_list_inf, k)
-            push!(Angular_flux_inf, shell_k_infinity_angular); push!(Carter_flux_inf, shell_k_infinity_carter)
-            log_shell("infinity", "k", k, shell_k_infinity_energy, shell_k_infinity_angular, shell_k_infinity_carter)
-            total_infinity_energy += shell_k_infinity_energy
-            total_infinity_angular += shell_k_infinity_angular
-            total_infinity_carter += shell_k_infinity_carter
-            branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_infinity_energy, tol, mode_abs_floor)
-            k_threshold = _mode_cutoff_threshold(tol * abs(total_infinity_energy), branch_mode_floor_inf[])
-            below_count_n = abs(shell_k_infinity_energy) <= k_threshold ? below_count_n + 1 : 0
-            if below_count_n >= minimum_consecutive + 1
-                k_reached_inf = k
-                break
-            end
-        end
-
-        below_count_n = 0
-        for k in 1:kmax
-            E_estimate_hor = _fit_shell_estimate(model, k_list_hor, Energy_flux_hor, k, p0, abs(shell_k_horizon_energy_last))
-            shell_k_horizon_energy = 0.0
-            shell_k_horizon_angular = 0.0
-            shell_k_horizon_carter = 0.0
-            below_count_m = 0
-
-            shell_m_horizon_energy = 0.0
-            shell_m_horizon_angular = 0.0
-            shell_m_horizon_carter = 0.0
-            below_count_l = 0
-
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-            l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                mode = inc_mode(2, l, 0, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
-                _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
-                get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
-                get(mode, "FailedMode", false) && (failed_modes_hor += 1)
-                l_reached_hor = max(l_reached_hor, l)
-                shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-                shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-                shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
-                mode["EnergyFlux"]
-            end
-            lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
-
-            shell_k_horizon_energy += shell_m_horizon_energy
-            shell_k_horizon_angular += shell_m_horizon_angular
-            shell_k_horizon_carter += shell_m_horizon_carter
-
-            Max_flux = 0.0
-            Max_m = 1
-            m_trail = Float64[]
-            # an m shell counts towards the stop only past the largest m shell of this k walk
-            peak_m_horizon = 0.0
-            for m in 1:lmax
-                lmin = max(2, abs(m))
-                shell_m_horizon_energy = 0.0
-                shell_m_horizon_angular = 0.0
-                shell_m_horizon_carter = 0.0
-                below_count_l = 0
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = inc_mode(2, l, m, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
-                    _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
-                    get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
-                    get(mode, "FailedMode", false) && (failed_modes_hor += 1)
-                    l_reached_hor = max(l_reached_hor, l)
-                    shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-                    shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    if abs(mode["EnergyFlux"]) > Max_flux
-                        Max_flux = abs(mode["EnergyFlux"])
-                        Max_m = m
-                    end
-                    mode["EnergyFlux"]
-                end
-                lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
-
-                shell_k_horizon_energy += shell_m_horizon_energy
-                shell_k_horizon_angular += shell_m_horizon_angular
-                shell_k_horizon_carter += shell_m_horizon_carter
-                _push_trail!(m_trail, shell_m_horizon_energy)
-
-                # Horizon shells are negative in the superradiant regime, so the shell ratio compares magnitudes.
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(shell_m_horizon_energy) < peak_m_horizon) ? below_count_m + 1 : 0
-                peak_m_horizon = max(peak_m_horizon, abs(shell_m_horizon_energy))
-                if below_count_m >= minimum_consecutive
-                    break
-                end
-            end
-            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_horizon_energy + shell_k_horizon_energy) && (lmax_hit_hor = true)
-
-            below_count_m = 0
-            m_trail = Float64[]
-            for m in -1:-1:-lmax
-                lmin = max(2, abs(m))
-                shell_m_horizon_energy = 0.0
-                shell_m_horizon_angular = 0.0
-                shell_m_horizon_carter = 0.0
-                below_count_l = 0
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = inc_mode(2, l, m, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
-                    _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
-                    get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
-                    get(mode, "FailedMode", false) && (failed_modes_hor += 1)
-                    l_reached_hor = max(l_reached_hor, l)
-                    shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-                    shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    mode["EnergyFlux"]
-                end
-                lmax_hit_hor = lmax_hit_hor || _tail_hit(l_tail, tol, total_horizon_energy + shell_k_horizon_energy + shell_m_horizon_energy)
-
-                shell_k_horizon_energy += shell_m_horizon_energy
-                shell_k_horizon_angular += shell_m_horizon_angular
-                shell_k_horizon_carter += shell_m_horizon_carter
-                _push_trail!(m_trail, shell_m_horizon_energy)
-
-                layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
-                below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_horizon_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
-                if below_count_m >= minimum_consecutive
-                    shell_k_horizon_energy_last = shell_k_horizon_energy
-                    break
-                end
-            end
-            below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_horizon_energy + shell_k_horizon_energy) && (lmax_hit_hor = true)
-
-            push!(Energy_flux_hor, shell_k_horizon_energy)
-            push!(k_list_hor, k)
-            push!(Angular_flux_hor, shell_k_horizon_angular); push!(Carter_flux_hor, shell_k_horizon_carter)
-            log_shell("horizon", "k", k, shell_k_horizon_energy, shell_k_horizon_angular, shell_k_horizon_carter)
-            total_horizon_energy += shell_k_horizon_energy
-            total_horizon_angular += shell_k_horizon_angular
-            total_horizon_carter += shell_k_horizon_carter
-            branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_horizon_energy, tol, mode_abs_floor)
-            k_threshold = _mode_cutoff_threshold(tol * abs(total_horizon_energy), branch_mode_floor_hor[])
-            below_count_n = abs(shell_k_horizon_energy) <= k_threshold ? below_count_n + 1 : 0
-            if below_count_n >= minimum_consecutive + 1
-                k_reached_hor = k
-                break
-            end
-        end
+        # k >= 1 shells of both boundaries (see _inclined_branch_shells!), each from the state after the k = 0 shell;
+        # with mode_parallelism > 1 their l walks are computed ahead and, without a record, the boundaries run on two tasks
+        walk_run = (key, q) -> _inclined_l_walk(inc_compute_q, key[1], key[2], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1)
+        branch_ctx = s -> (lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, tol = tol, x = x, model = model,
+            p0 = p0, mode_abs_floor = mode_abs_floor, k0_reach = k0_reach,
+            energy_list = s == -2 ? Energy_flux_inf : Energy_flux_hor, angular_list = s == -2 ? Angular_flux_inf : Angular_flux_hor,
+            carter_list = s == -2 ? Carter_flux_inf : Carter_flux_hor, k_list = s == -2 ? k_list_inf : k_list_hor,
+            floor_ref = s == -2 ? branch_mode_floor_inf : branch_mode_floor_hor,
+            totals = s == -2 ? (total_infinity_energy, total_infinity_angular, total_infinity_carter) :
+                (total_horizon_energy, total_horizon_angular, total_horizon_carter),
+            shell_k_energy_last = s == -2 ? shell_k_infinity_energy_last : shell_k_horizon_energy_last,
+            l_reached = s == -2 ? l_reached_inf : l_reached_hor, lmax_hit = s == -2 ? lmax_hit_inf : lmax_hit_hor,
+            run = walk_run, log_shell = log_shell,
+            record! = (boundary, k, m, l, mode) -> _record_current_mode_inclined!(record_h5, record, boundary, k, m, l, mode_index, mode, K))
+        pf_inf = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+        pf_hor = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+        inf, hor = _run_boundaries(() -> _inclined_branch_shells!(-2, branch_ctx(-2), pf_inf),
+            () -> _inclined_branch_shells!(2, branch_ctx(2), pf_hor), mode_parallelism > 1 && !record)
+        total_infinity_energy, total_infinity_angular, total_infinity_carter, k_reached_inf, l_reached_inf, lmax_hit_inf, nsz_inf, fm_inf, modes_inf = inf
+        total_horizon_energy, total_horizon_angular, total_horizon_carter, k_reached_hor, l_reached_hor, lmax_hit_hor, nsz_hor, fm_hor, modes_hor = hor
+        near_static_zero_inf += nsz_inf
+        near_static_zero_hor += nsz_hor
+        failed_modes_inf += fm_inf
+        failed_modes_hor += fm_hor
+        total_modes += modes_inf + modes_hor
 
         # A k sum that ran to kmax is truncated when the geometric tail of its last three k shells matters.
         kmax_hit_inf = k_reached_inf === nothing && _tail_hit(_geometric_tail(abs.(Energy_flux_inf[max(1, end - 2):end]), kmax), tol, total_infinity_energy)
@@ -2178,8 +1966,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             failed_modes_inf = failed_modes_inf,
             failed_modes_hor = failed_modes_hor,
             mode_parallelism = mode_parallelism,
-            modes_computed = prefetch === nothing ? nothing : prefetch.computed,
-            modes_computed_unused = prefetch === nothing ? nothing : prefetch.computed - prefetch.used,
+            modes_computed = pf_inf === nothing ? nothing : pf_inf.modes + pf_hor.modes,
+            modes_computed_unused = pf_inf === nothing ? nothing : (pf_inf.modes - pf_inf.modes_used) + (pf_hor.modes - pf_hor.modes_used),
             # every k shell (symmetry weights included)
             infinity_shells = (k = k_list_inf, energy = Energy_flux_inf, angular_momentum = Angular_flux_inf, carter_constant = Carter_flux_inf),
             horizon_shells = (k = k_list_hor, energy = Energy_flux_hor, angular_momentum = Angular_flux_hor, carter_constant = Carter_flux_hor),
@@ -2188,7 +1976,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             record_file = record ? record_path : nothing,
         )
     finally
-        prefetch === nothing || _prefetch_drain!(prefetch)
+        pf_inf === nothing || _walk_discard!(pf_inf)
+        pf_hor === nothing || _walk_discard!(pf_hor)
         record && _public_close_resource!(scope, record_h5)
     end
 end
@@ -2204,6 +1993,656 @@ function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, 
             end
         end
     end
+end
+
+# One l walk of the generic sum, (s, m, n, k): for k = 0 up from lmin with the consecutive and deep stops, for k != 0
+# as in _branch_l_walk (search for the peak l), from the shell's parameters q only (max_flux, floor, levin_floor and
+# levin_flux_scale of the modes; the Levin choice of the shell, completed by the auto rule of (s, m, n, k) here;
+# threshold, search_threshold and deep of the stop rules): pure. Returns the (l, mode) in walk order; `strip` drops
+# the large members of the mode Dicts. A mode's non-finite flux is the error of the walk.
+function _generic_l_walk(compute, s::Int, m::Int, n::Int, k::Int, q, lmax::Int, minimum_consecutive::Int, x, strip::Bool)
+    factors = Dict{Any, Any}()
+    modes = Tuple{Int, Any}[]
+    use_levin = q.use_levin_shell || q.levin_auto(s, m, n, k)
+    mq = (max_flux = q.max_flux, use_levin = use_levin, floor = q.floor, levin_floor = q.levin_floor,
+        levin_flux_scale = use_levin ? q.levin_flux_scale : 0.0)
+    eval_l = l -> begin
+        mode = compute(s, l, m, n, k, mq, factors)
+        ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
+        strip && _strip_mode!(mode)
+        push!(modes, (l, mode))
+        mode["EnergyFlux"]
+    end
+    lmin = max(2, abs(m))
+    if k == 0
+        below = 0
+        walk_max = 0.0
+        for l in lmin:lmax
+            E = abs(eval_l(l))
+            below = E <= q.threshold ? below + 1 : 0
+            (below >= minimum_consecutive || _deep_stop(E, q.deep, q.threshold, walk_max)) && break
+            walk_max = max(walk_max, E)
+        end
+    else
+        _branch_l_walk(eval_l, lmin, _branch_peak_l(lmin, m, k, x), lmax, q.threshold, minimum_consecutive, s == 2;
+            deep = q.deep, search_threshold = q.search_threshold)
+    end
+    return modes
+end
+
+# The m reach (m > 0 walks, m < 0 walks) planned for row k from the rows of the previous shell: that row, else the
+# nearest row towards k = 0.
+function _generic_row_reach(prev_rows, k::Int)
+    kk = k
+    while !haskey(prev_rows, kk) && kk != 0
+        kk -= sign(kk)
+    end
+    return get(prev_rows, kk, (1, 1))
+end
+
+# One boundary of the generic sum (s = -2: infinity, 2: horizon): the n = 0 shell (its k = 0 m walks serial, with the
+# running cutoff), then the n >= 1 shells, each over the k = 0 row and the k = 1, 2, .. and k = -1, -2, .. rows of m = 0,
+# m > 0 and m < 0 l walks, with the m, k and n stop rules. The l walks of a row depend on the row's parameters only:
+# with `prefetch` they are computed ahead, a whole shell planned from the reach of the previous one. The two boundaries
+# may run on different tasks: everything mutable here is local or owned by this boundary (ctx).
+function _generic_branch_summation!(s::Int, ctx, prefetch)
+    (; e, x, tol, lmax, kmax, nmax, minimum_consecutive, mode_abs_floor, beta, deep, neg_branch_scale,
+        radial_over_azimuthal, polar_over_azimuthal, floor_ref, run) = ctx
+    params_for = nothing
+    # the walk key, computed ahead or now; a walk beyond the plan starts the next two of its direction
+    take = key -> begin
+        prefetch === nothing && return run(key, params_for(key))
+        m, n, k = key[2], key[3], key[4]
+        step = m >= 0 ? 1 : -1
+        return prefetch(key; ahead = [(s, mm, n, k) for mm in (m + step):step:(m + 2step) if abs(mm) <= lmax])
+    end
+    plan_rows! = (n, ks, prev_rows) -> begin
+        prefetch === nothing && return nothing
+        prefetch.params_for = params_for
+        plan = NTuple{4, Int}[]
+        for k in ks
+            rp, rn = _generic_row_reach(prev_rows, k)
+            push!(plan, (s, 0, n, k))
+            for m in 1:min(lmax, rp)
+                push!(plan, (s, m, n, k))
+            end
+            for m in 1:min(lmax, rn)
+                push!(plan, (s, -m, n, k))
+            end
+        end
+        _walk_plan!(prefetch, plan)
+        return nothing
+    end
+    shell_list = Float64[]
+    angular_list = Float64[]   # L and Q of each n shell, alongside shell_list
+    carter_list = Float64[]
+    last_shell = (0.0, 0.0, 0.0)
+    n_list = Int[]
+    total_energy = 0.0
+    total_angular = 0.0
+    total_carter = 0.0
+    total_modes = 0
+    n_reached = nothing
+    shell_last = 0.0
+
+    shell_n = 0.0
+    shell_n_angular = 0.0
+    shell_n_carter = 0.0
+    below_count_m = 0
+    row_reach = Dict{Int, Tuple{Int, Int}}()   # k => (m reach of the m > 0 walks, of the m < 0 walks) of the last shell
+    reach_pos = 0
+    reach_neg = 0
+    for m in 1:lmax
+        reach_pos = m
+        lmin = max(2, abs(m))
+        shell_m = 0.0
+        shell_m_angular = 0.0
+        shell_m_carter = 0.0
+        below_count_l = 0
+        max_flux = 1e-2
+        for l in lmin:lmax
+            mode = ctx.eval_mode(s, l, m, 0, 0, max_flux)
+            ctx.record_mode(s, l, m, 0, 0, mode)
+            shell_m += 2 * mode["EnergyFlux"]
+            shell_m_angular += 2 * mode["AngularMomentumFlux"]
+            shell_m_carter += 2 * mode["CarterConstantFlux"]
+            shell_n += 2 * mode["EnergyFlux"]
+            shell_n_angular += 2 * mode["AngularMomentumFlux"]
+            shell_n_carter += 2 * mode["CarterConstantFlux"]
+            total_modes += 2
+            below_count_l = abs(mode["EnergyFlux"]) <= tol * abs(shell_n) ? below_count_l + 1 : 0
+            floor_ref[] = _adaptive_branch_mode_floor(shell_n, tol, mode_abs_floor)
+            if below_count_l >= minimum_consecutive
+                break
+            end
+        end
+        below_count_m = abs(shell_m) <= tol * abs(shell_n) ? below_count_m + 1 : 0
+        if below_count_m >= minimum_consecutive
+            break
+        end
+    end
+
+    initial_floor = _adaptive_branch_mode_floor(total_energy + shell_n, tol, mode_abs_floor)
+    initial_mode_threshold = _mode_cutoff_threshold(tol * max(abs(total_energy + shell_n), abs(shell_n)), initial_floor)
+    initial_k_shell_threshold = _generic_k_shell_threshold(total_energy + shell_n, shell_n, tol, initial_floor)
+    below_count_k = 0
+    peak_k_shell = 0.0
+    row_reach[0] = (reach_pos, reach_pos)
+    k_reach_pos = 0
+    k_reach_neg = 0
+    for k in 1:kmax
+        k_reach_pos = k
+        shell_k = 0.0
+        shell_k_angular = 0.0
+        shell_k_carter = 0.0
+        max_flux = abs(shell_n)
+        # the modes of this row from its parameters (as gen_parameters for the serial walk)
+        row_floor = MODE_REFINE_FLOOR_FRACTION * floor_ref[]
+        shell_q = (max_flux = max_flux, floor = row_floor, levin_floor = _tail_levin_mode_floor(row_floor, ctx.levin_floor(s)),
+            threshold = initial_mode_threshold, search_threshold = initial_mode_threshold, deep = deep,
+            use_levin_shell = ctx.use_shell_levin(s, 0), levin_auto = ctx.levin_auto, levin_flux_scale = max(abs(sum(shell_list)), abs(max_flux)))
+        params_for = key -> shell_q
+        plan_rows!(0, [k], row_reach)   # the next row's max_flux is known at its start only
+        reach_pos = 0
+        reach_neg = 0
+
+        shell_m = 0.0
+        shell_m_angular = 0.0
+        shell_m_carter = 0.0
+        below_count_l = 0
+        for (l, mode) in take((s, 0, 0, k))
+            mode = ctx.accept!(s, l, 0, 0, k, mode)
+            ctx.record_mode(s, l, 0, 0, k, mode)
+            shell_m += 2 * mode["EnergyFlux"]
+            shell_m_angular += 2 * mode["AngularMomentumFlux"]
+            shell_m_carter += 2 * mode["CarterConstantFlux"]
+            shell_n += 2 * mode["EnergyFlux"]
+            shell_n_angular += 2 * mode["AngularMomentumFlux"]
+            shell_n_carter += 2 * mode["CarterConstantFlux"]
+            total_modes += 2
+        end
+        shell_k += shell_m
+        shell_k_angular += shell_m_angular
+        shell_k_carter += shell_m_carter
+
+        below_count_m = 0
+        previous_shell_m = Inf
+        Max_flux = 0.0
+        Max_m = 1
+        for m in 1:lmax
+            reach_pos = m
+            lmin = max(2, abs(m))
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            for (l, mode) in take((s, m, 0, k))
+                mode = ctx.accept!(s, l, m, 0, k, mode)
+                ctx.record_mode(s, l, m, 0, k, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            if abs(shell_m) > Max_flux
+                Max_flux = abs(shell_m)
+                Max_m = m
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+            growing_m = abs(shell_m) > abs(previous_shell_m)
+            previous_shell_m = shell_m
+            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, initial_mode_threshold, tol, m, Max_m, mode_abs_floor, false) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+
+        below_count_m = 0
+        previous_shell_m = Inf
+        for m in -1:-1:-lmax
+            reach_neg = -m
+            lmin = max(2, abs(m))
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            for (l, mode) in take((s, m, 0, k))
+                mode = ctx.accept!(s, l, m, 0, k, mode)
+                ctx.record_mode(s, l, m, 0, k, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+            growing_m = abs(shell_m) > abs(previous_shell_m)
+            previous_shell_m = shell_m
+            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, initial_mode_threshold, neg_branch_scale, m, Max_m, false) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+
+        row_reach[k] = (reach_pos, reach_neg)
+        prefetch === nothing || _walk_discard!(prefetch)
+        # a k shell counts towards the stop only past the largest k shell (shells can rise before they fall)
+        below_count_k = abs(shell_k) <= initial_k_shell_threshold && abs(shell_k) < peak_k_shell ? below_count_k + 1 : 0
+        peak_k_shell = max(peak_k_shell, abs(shell_k))
+        if below_count_k >= minimum_consecutive
+            break
+        end
+    end
+
+    push!(shell_list, shell_n)
+    push!(n_list, 0)
+    push!(angular_list, shell_n_angular); push!(carter_list, shell_n_carter)
+    ctx.log_shell(s == -2 ? "infinity" : "horizon", "n", 0, shell_n, shell_n_angular, shell_n_carter, total_modes)
+    total_energy += shell_n
+    total_angular += shell_n_angular
+    total_carter += shell_n_carter
+    floor_ref[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
+    shell_last = shell_n
+
+
+    below_count_n = 0
+    for n in 1:nmax
+        m_omega_zero = -n * radial_over_azimuthal
+        max_flux = 2 * abs(ctx.fit_estimate(n_list, shell_list, n, abs(shell_last)))
+        shell_n = 0.0
+        shell_n_angular = 0.0
+        shell_n_carter = 0.0
+        floor = floor_ref[]
+        search_threshold = _mode_cutoff_threshold(tol * abs(shell_last), floor)
+        threshold = max(search_threshold, beta * tol * abs(total_energy))
+        k_shell_scale = sqrt(abs(total_energy) * abs(shell_last))
+        # k-shell stops are relative to the branch total; the absolute per-mode floor would cut whole
+        # k shells when the branch total is small (horizon totals of 1e-8..1e-7).
+        k_shell_threshold = tol * k_shell_scale
+        negative_k_shell_threshold = neg_branch_scale * tol * abs(total_energy)
+        tail_cutoff = ctx.use_shell_levin(s, n)
+        # the modes of this shell from its parameters (as gen_parameters for the serial walk); the walks of the shell
+        # are planned from the reach of the previous shell, rows (k) and m walks
+        mode_floor = MODE_REFINE_FLOOR_FRACTION * floor
+        shell_q = (max_flux = max_flux, floor = mode_floor, levin_floor = _tail_levin_mode_floor(mode_floor, ctx.levin_floor(s)),
+            threshold = threshold, search_threshold = search_threshold, deep = deep, use_levin_shell = tail_cutoff,
+            levin_auto = ctx.levin_auto, levin_flux_scale = max(abs(sum(shell_list)), abs(max_flux)))
+        params_for = key -> shell_q
+        prev_row_reach = row_reach
+        row_reach = Dict{Int, Tuple{Int, Int}}()
+        plan_rows!(n, [0; 1:min(kmax, 1); -1:-1:-min(kmax, 1)], prev_row_reach)
+        reach_pos = 0
+        reach_neg = 0
+
+        shell_k = 0.0
+        shell_k_angular = 0.0
+        shell_k_carter = 0.0
+        shell_m = 0.0
+        shell_m_angular = 0.0
+        shell_m_carter = 0.0
+        below_count_l = 0
+        walk_max_l = 0.0
+        for (l, mode) in take((s, 0, n, 0))
+            mode = ctx.accept!(s, l, 0, n, 0, mode)
+            ctx.record_mode(s, l, 0, n, 0, mode)
+            shell_m += 2 * mode["EnergyFlux"]
+            shell_m_angular += 2 * mode["AngularMomentumFlux"]
+            shell_m_carter += 2 * mode["CarterConstantFlux"]
+            shell_n += 2 * mode["EnergyFlux"]
+            shell_n_angular += 2 * mode["AngularMomentumFlux"]
+            shell_n_carter += 2 * mode["CarterConstantFlux"]
+            total_modes += 2
+        end
+
+        shell_k += shell_m
+        shell_k_angular += shell_m_angular
+        shell_k_carter += shell_m_carter
+
+        below_count_m = 0
+        previous_shell_m = Inf
+        Max_flux = 0.0
+        Max_m = 1
+        for m in 1:lmax
+            reach_pos = m
+            lmin = max(2, abs(m))
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            walk_max_l = 0.0
+            for (l, mode) in take((s, m, n, 0))
+                mode = ctx.accept!(s, l, m, n, 0, mode)
+                ctx.record_mode(s, l, m, n, 0, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            if abs(shell_m) > Max_flux
+                Max_flux = abs(shell_m)
+                Max_m = m
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+            growing_m = abs(shell_m) > abs(previous_shell_m)
+            previous_shell_m = shell_m
+            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+
+        below_count_m = 0
+        previous_shell_m = Inf
+        for m in -1:-1:-lmax
+            reach_neg = -m
+            lmin = max(2, abs(m))
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            walk_max_l = 0.0
+            for (l, mode) in take((s, m, n, 0))
+                mode = ctx.accept!(s, l, m, n, 0, mode)
+                ctx.record_mode(s, l, m, n, 0, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+            # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+            growing_m = abs(shell_m) > abs(previous_shell_m)
+            previous_shell_m = shell_m
+            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+            if below_count_m >= minimum_consecutive
+                break
+            end
+        end
+
+        row_reach[0] = (reach_pos, reach_neg)
+        k_reach_pos = 0
+        k_reach_neg = 0
+
+        below_count_k = 0
+        previous_shell_k = Inf
+        for k in 1:kmax
+            k_reach_pos = k
+            k < kmax && plan_rows!(n, [k + 1], prev_row_reach)
+            reach_pos = 0
+            reach_neg = 0
+            shell_k = 0.0
+            shell_k_angular = 0.0
+            shell_k_carter = 0.0
+
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            for (l, mode) in take((s, 0, n, k))
+                mode = ctx.accept!(s, l, 0, n, k, mode)
+                ctx.record_mode(s, l, 0, n, k, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+
+            below_count_m = 0
+            previous_shell_m = Inf
+            Max_flux = 0.0
+            Max_m = 1
+            for m in 1:lmax
+                reach_pos = m
+                lmin = max(2, abs(m))
+                shell_m = 0.0
+                shell_m_angular = 0.0
+                shell_m_carter = 0.0
+                below_count_l = 0
+                for (l, mode) in take((s, m, n, k))
+                    mode = ctx.accept!(s, l, m, n, k, mode)
+                    ctx.record_mode(s, l, m, n, k, mode)
+                    shell_m += 2 * mode["EnergyFlux"]
+                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_m_carter += 2 * mode["CarterConstantFlux"]
+                    shell_n += 2 * mode["EnergyFlux"]
+                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_n_carter += 2 * mode["CarterConstantFlux"]
+                    total_modes += 2
+                end
+                if abs(shell_m) > Max_flux
+                    Max_flux = abs(shell_m)
+                    Max_m = m
+                end
+                shell_k += shell_m
+                shell_k_angular += shell_m_angular
+                shell_k_carter += shell_m_carter
+                # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+                growing_m = abs(shell_m) > abs(previous_shell_m)
+                previous_shell_m = shell_m
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                if below_count_m >= minimum_consecutive
+                    break
+                end
+            end
+
+            below_count_m = 0
+            previous_shell_m = Inf
+            for m in -1:-1:-lmax
+                reach_neg = -m
+                lmin = max(2, abs(m))
+                shell_m = 0.0
+                shell_m_angular = 0.0
+                shell_m_carter = 0.0
+                below_count_l = 0
+                for (l, mode) in take((s, m, n, k))
+                    mode = ctx.accept!(s, l, m, n, k, mode)
+                    ctx.record_mode(s, l, m, n, k, mode)
+                    shell_m += 2 * mode["EnergyFlux"]
+                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_m_carter += 2 * mode["CarterConstantFlux"]
+                    shell_n += 2 * mode["EnergyFlux"]
+                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_n_carter += 2 * mode["CarterConstantFlux"]
+                    total_modes += 2
+                end
+                shell_k += shell_m
+                shell_k_angular += shell_m_angular
+                shell_k_carter += shell_m_carter
+                # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+                growing_m = abs(shell_m) > abs(previous_shell_m)
+                previous_shell_m = shell_m
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                if below_count_m >= minimum_consecutive
+                    break
+                end
+            end
+
+            row_reach[k] = (reach_pos, reach_neg)
+            # a k shell that is still growing does not count toward the stop: shells can dip, then rise again
+            growing = abs(shell_k) > abs(previous_shell_k)
+            previous_shell_k = shell_k
+            below_count_k = !growing && abs(shell_k) <= k_shell_threshold ? below_count_k + 1 : 0
+            if below_count_k >= minimum_consecutive
+                break
+            end
+        end
+
+        below_count_k = 0
+        previous_shell_k = Inf
+        for k in -1:-1:-kmax
+            k_reach_neg = -k
+            -k < kmax && plan_rows!(n, [k - 1], prev_row_reach)
+            reach_pos = 0
+            reach_neg = 0
+            shell_k = 0.0
+            shell_k_angular = 0.0
+            shell_k_carter = 0.0
+
+            shell_m = 0.0
+            shell_m_angular = 0.0
+            shell_m_carter = 0.0
+            below_count_l = 0
+            for (l, mode) in take((s, 0, n, k))
+                mode = ctx.accept!(s, l, 0, n, k, mode)
+                ctx.record_mode(s, l, 0, n, k, mode)
+                shell_m += 2 * mode["EnergyFlux"]
+                shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                shell_m_carter += 2 * mode["CarterConstantFlux"]
+                shell_n += 2 * mode["EnergyFlux"]
+                shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                shell_n_carter += 2 * mode["CarterConstantFlux"]
+                total_modes += 2
+            end
+            shell_k += shell_m
+            shell_k_angular += shell_m_angular
+            shell_k_carter += shell_m_carter
+
+            below_count_m = 0
+            previous_shell_m = Inf
+            Max_flux = 0.0
+            Max_m = 1
+            for m in 1:lmax
+                reach_pos = m
+                lmin = max(2, abs(m))
+                shell_m = 0.0
+                shell_m_angular = 0.0
+                shell_m_carter = 0.0
+                below_count_l = 0
+                for (l, mode) in take((s, m, n, k))
+                    mode = ctx.accept!(s, l, m, n, k, mode)
+                    ctx.record_mode(s, l, m, n, k, mode)
+                    shell_m += 2 * mode["EnergyFlux"]
+                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_m_carter += 2 * mode["CarterConstantFlux"]
+                    shell_n += 2 * mode["EnergyFlux"]
+                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_n_carter += 2 * mode["CarterConstantFlux"]
+                    total_modes += 2
+                end
+                if abs(shell_m) > Max_flux
+                    Max_flux = abs(shell_m)
+                    Max_m = m
+                end
+                shell_k += shell_m
+                shell_k_angular += shell_m_angular
+                shell_k_carter += shell_m_carter
+                # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+                growing_m = abs(shell_m) > abs(previous_shell_m)
+                previous_shell_m = shell_m
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                if below_count_m >= minimum_consecutive
+                    break
+                end
+            end
+
+            below_count_m = 0
+            previous_shell_m = Inf
+            for m in -1:-1:-lmax
+                reach_neg = -m
+                lmin = max(2, abs(m))
+                shell_m = 0.0
+                shell_m_angular = 0.0
+                shell_m_carter = 0.0
+                below_count_l = 0
+                for (l, mode) in take((s, m, n, k))
+                    mode = ctx.accept!(s, l, m, n, k, mode)
+                    ctx.record_mode(s, l, m, n, k, mode)
+                    shell_m += 2 * mode["EnergyFlux"]
+                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_m_carter += 2 * mode["CarterConstantFlux"]
+                    shell_n += 2 * mode["EnergyFlux"]
+                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
+                    shell_n_carter += 2 * mode["CarterConstantFlux"]
+                    total_modes += 2
+                end
+                shell_k += shell_m
+                shell_k_angular += shell_m_angular
+                shell_k_carter += shell_m_carter
+                # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
+                growing_m = abs(shell_m) > abs(previous_shell_m)
+                previous_shell_m = shell_m
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                if below_count_m >= minimum_consecutive
+                    break
+                end
+            end
+
+            row_reach[k] = (reach_pos, reach_neg)
+            # a k shell that is still growing does not count toward the stop: shells can dip, then rise again
+            growing = abs(shell_k) > abs(previous_shell_k)
+            previous_shell_k = shell_k
+            below_count_k = !growing && abs(shell_k) <= negative_k_shell_threshold ? below_count_k + 1 : 0
+            if below_count_k >= minimum_consecutive
+                break
+            end
+        end
+
+        prefetch === nothing || _walk_discard!(prefetch)
+        push!(shell_list, shell_n)
+        push!(n_list, n)
+        push!(angular_list, shell_n_angular); push!(carter_list, shell_n_carter)
+        ctx.log_shell(s == -2 ? "infinity" : "horizon", "n", n, shell_n, shell_n_angular, shell_n_carter, total_modes)
+        last_shell = (shell_n, shell_n_angular, shell_n_carter)
+        total_energy += shell_n
+        total_angular += shell_n_angular
+        total_carter += shell_n_carter
+        floor_ref[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
+        n_threshold = _mode_cutoff_threshold(tol * abs(total_energy), floor_ref[])
+        below_count_n = abs(shell_n) <= n_threshold ? below_count_n + 1 : 0
+        shell_last = shell_n
+
+        if below_count_n >= minimum_consecutive + 1
+            n_reached = n
+            break
+        end
+    end
+
+    # Geometric n tail at high eccentricity, as for eccentric equatorial orbits.
+    tail_factor, tail_ratio = _geometric_n_tail_factor(shell_list, e, n_reached, minimum_consecutive + 1)
+    n_tail = tail_factor .* last_shell
+    total_energy += n_tail[1]
+    total_angular += n_tail[2]
+    total_carter += n_tail[3]
+
+    return (
+        energy_flux = total_energy,
+        angular_momentum_flux = total_angular,
+        carter_constant_flux = total_carter,
+        total_modes = total_modes,
+        n_reached = n_reached,
+        shell_list = shell_list,
+        shells = (n = n_list, energy = shell_list, angular_momentum = angular_list, carter_constant = carter_list),
+        truncation_floor = floor_ref[],
+        n_tail = (energy = n_tail[1], angular_momentum = n_tail[2], carter_constant = n_tail[3], ratio = tail_ratio),
+    )
 end
 
 function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false)
@@ -2256,7 +2695,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         end
     end
 
-    gen_prefetch = nothing   # set below when mode_parallelism > 1; drained in finally
+    pf_inf = nothing   # the walk prefetches of the two boundaries (mode_parallelism > 1), set below, drained in finally
+    pf_hor = nothing
     try
         if record
             record_h5["meta/a"] = a
@@ -2286,7 +2726,6 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             flush(progress_io)
         end
 
-        current_shell_list = Ref{Vector{Float64}}(Float64[])
         branch_mode_floor_inf = Ref(Float64(mode_abs_floor))
         branch_mode_floor_hor = Ref(Float64(mode_abs_floor))
         levin_floor_tracks_mode_floor = levin_mode_abs_floor == mode_abs_floor
@@ -2320,7 +2759,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         near_static_zero = [0, 0]
         # One mode from its parameters (max_flux, Levin choice, floors; levin_flux_scale is passed to the adaptive Levin
         # route, which does not use it), and its acceptance, which the walks apply in their order.
-        gen_compute = (s, l, m, n, k, max_flux, use_levin, floor, levin_floor, levin_flux_scale) -> begin
+        gen_compute = (s, l, m, n, k, max_flux, use_levin, floor, levin_floor, levin_flux_scale, factors) -> begin
             ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"]
             if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
                 res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
@@ -2330,6 +2769,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             let; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if fast
                 if use_levin
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
+                        mode_cache.walk_factors = factors
                         ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
                     end
                 else
@@ -2355,41 +2795,20 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         gen_levin_auto = (s, m, n, k) -> (fast && (s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
             _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
                 levin_local_n, levin_max_depth, levin_nmin))
-        gen_shell_levin = (s, n) -> begin
-            branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
-            _tail_enabled(branch_policy) && fast || return false
-            return _use_levin_tail(n; nmin = levin_nmin) && (branch_policy === true || _gen_levin_auto_mode(
-                _mode_radial_trapezoid_n(KG_master, 2, n, 0, N0, Nmax), n, K0, Kmax, levin_local_n, levin_max_depth, levin_nmin))
-        end
         gen_parameters = (s, l, m, n, k, max_flux, use_levin) -> begin
             auto_levin = use_generic_tail_levin(s, n)
             use_levin = use_levin || auto_levin || gen_levin_auto(s, m, n, k)
             floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s)
             (Float64(max_flux), use_levin, floor, _tail_levin_mode_floor(floor, branch_levin_floor(s)),
-                use_levin ? max(abs(sum(current_shell_list[])), abs(max_flux)) : 0.0)
+                use_levin ? abs(max_flux) : 0.0)   # the n = 0 shell list is empty: levin_flux_scale = |max_flux|
         end
-        gen_prefetch = nothing
-        if mode_parallelism > 1
-            decisions = Dict{NTuple{4, Int}, Bool}()
-            gen_prefetch = _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
-                (key, q) -> gen_compute(key..., q...),
-                (key, mode) -> gen_accept!(key..., mode),
-                (key, q) -> begin
-                    length(decisions) > 4096 && empty!(decisions)
-                    use_levin = get!(() -> gen_shell_levin(key[1], key[4]) || gen_levin_auto(key[1], key[3], key[4], key[5]),
-                        decisions, (key[1], key[3], key[4], key[5]))
-                    (q[1], use_levin, q[3], q[4], use_levin ? max(q[5], abs(q[1])) : 0.0)
-                end,
-                (s, m, n, k) -> k == 0 ? max(2, abs(m)) : _branch_peak_l(max(2, abs(m)), m, k, x),
-                (s, m, n, k) -> m >= 0 ? m + 1 : m - 1;
-                # levin_flux_scale (5th) does not enter the adaptive Levin result
-                same = (u, v) -> u[1] == v[1] && u[2] == v[2] && u[3] == v[3] && u[4] == v[4])
-        end
+        # the serial evaluation of one mode (the k = 0 walks of the n = 0 shell); the other walks go through
+        # _generic_l_walk with gen_compute_q
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             q = gen_parameters(s, l, m, n, k, max_flux, use_levin)
-            gen_prefetch === nothing ? gen_accept!(s, l, m, n, k, gen_compute(s, l, m, n, k, q...)) :
-                gen_prefetch((s, l, m, n, k), q)
+            gen_accept!(s, l, m, n, k, gen_compute(s, l, m, n, k, q..., nothing))
         end
+        gen_compute_q = (s, l, m, n, k, q, factors) -> gen_compute(s, l, m, n, k, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_flux_scale, factors)
 
         record_mode = (s, l, m, n, k, mode) -> begin
             _record_current_mode_generic!(record_h5, record, s == -2 ? "I" : "H", n, k, m, l, mode_index, mode, N0, K0)
@@ -2435,572 +2854,29 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         # progress = true: one line per finished n shell of a branch
         t_start = time()
         shells_done = Ref(0)
-        log_shell = (branch, label, idx, E, L, Q) -> begin
+        log_shell = (branch, label, idx, E, L, Q, modes) -> begin
             progress || return nothing
-            shells_done[] += 1
-            @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d branch=%s %s=%d E=%.6e L=%.6e Q=%.6e shells_done=%d elapsed=%.1fs\n",
-                a, p, e, x, lmax, branch, label, idx, E, L, Q, shells_done[], time() - t_start)
-            flush(stdout)
+            lock(_PROGRESS_LOCK) do
+                shells_done[] += 1
+                @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d branch=%s %s=%d E=%.6e L=%.6e Q=%.6e modes=%d shells_done=%d elapsed=%.1fs\n",
+                    a, p, e, x, lmax, branch, label, idx, E, L, Q, modes, shells_done[], time() - t_start)
+                flush(stdout)
+            end
             return nothing
         end
-        function branch_summation(s::Int)
-            shell_list = Float64[]
-            angular_list = Float64[]   # L and Q of each n shell, alongside shell_list
-            carter_list = Float64[]
-            last_shell = (0.0, 0.0, 0.0)
-            current_shell_list[] = shell_list
-            n_list = Int[]
-            total_energy = 0.0
-            total_angular = 0.0
-            total_carter = 0.0
-            total_modes = 0
-            n_reached = nothing
-            shell_last = 0.0
-
-            shell_n = 0.0
-            shell_n_angular = 0.0
-            shell_n_carter = 0.0
-            below_count_m = 0
-            for m in 1:lmax
-                lmin = max(2, abs(m))
-                shell_m = 0.0
-                shell_m_angular = 0.0
-                shell_m_carter = 0.0
-                below_count_l = 0
-                max_flux = 1e-2
-                for l in lmin:lmax
-                    mode = eval_mode(s, l, m, 0, 0, max_flux)
-                    record_mode(s, l, m, 0, 0, mode)
-                    shell_m += 2 * mode["EnergyFlux"]
-                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_carter += 2 * mode["CarterConstantFlux"]
-                    shell_n += 2 * mode["EnergyFlux"]
-                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    below_count_l = abs(mode["EnergyFlux"]) <= tol * abs(shell_n) ? below_count_l + 1 : 0
-                    if s == -2
-                        branch_mode_floor_inf[] = _adaptive_branch_mode_floor(shell_n, tol, mode_abs_floor)
-                    else
-                        branch_mode_floor_hor[] = _adaptive_branch_mode_floor(shell_n, tol, mode_abs_floor)
-                    end
-                    if below_count_l >= minimum_consecutive
-                        break
-                    end
-                end
-                below_count_m = abs(shell_m) <= tol * abs(shell_n) ? below_count_m + 1 : 0
-                if below_count_m >= minimum_consecutive
-                    break
-                end
-            end
-
-            initial_floor = _adaptive_branch_mode_floor(total_energy + shell_n, tol, mode_abs_floor)
-            initial_mode_threshold = _mode_cutoff_threshold(tol * max(abs(total_energy + shell_n), abs(shell_n)), initial_floor)
-            initial_k_shell_threshold = _generic_k_shell_threshold(total_energy + shell_n, shell_n, tol, initial_floor)
-            below_count_k = 0
-            peak_k_shell = 0.0
-            for k in 1:kmax
-                shell_k = 0.0
-                shell_k_angular = 0.0
-                shell_k_carter = 0.0
-                max_flux = abs(shell_n)
-
-                shell_m = 0.0
-                shell_m_angular = 0.0
-                shell_m_carter = 0.0
-                below_count_l = 0
-                _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, initial_mode_threshold, minimum_consecutive, s == 2; deep=deep) do l
-                    mode = eval_mode(s, l, 0, 0, k, max_flux)
-                    record_mode(s, l, 0, 0, k, mode)
-                    shell_m += 2 * mode["EnergyFlux"]
-                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_carter += 2 * mode["CarterConstantFlux"]
-                    shell_n += 2 * mode["EnergyFlux"]
-                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    mode["EnergyFlux"]
-                end
-                shell_k += shell_m
-                shell_k_angular += shell_m_angular
-                shell_k_carter += shell_m_carter
-
-                below_count_m = 0
-                previous_shell_m = Inf
-                Max_flux = 0.0
-                Max_m = 1
-                for m in 1:lmax
-                    lmin = max(2, abs(m))
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, initial_mode_threshold, minimum_consecutive, s == 2; deep=deep) do l
-                        mode = eval_mode(s, l, m, 0, k, max_flux)
-                        record_mode(s, l, m, 0, k, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        mode["EnergyFlux"]
-                    end
-                    if abs(shell_m) > Max_flux
-                        Max_flux = abs(shell_m)
-                        Max_m = m
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-                    # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                    growing_m = abs(shell_m) > abs(previous_shell_m)
-                    previous_shell_m = shell_m
-                    below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, initial_mode_threshold, tol, m, Max_m, mode_abs_floor, false) ? below_count_m + 1 : 0
-                    if below_count_m >= minimum_consecutive
-                        break
-                    end
-                end
-
-                below_count_m = 0
-                previous_shell_m = Inf
-                for m in -1:-1:-lmax
-                    lmin = max(2, abs(m))
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, initial_mode_threshold, minimum_consecutive, s == 2; deep=deep) do l
-                        mode = eval_mode(s, l, m, 0, k, max_flux)
-                        record_mode(s, l, m, 0, k, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        mode["EnergyFlux"]
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-                    # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                    growing_m = abs(shell_m) > abs(previous_shell_m)
-                    previous_shell_m = shell_m
-                    below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, initial_mode_threshold, neg_branch_scale, m, Max_m, false) ? below_count_m + 1 : 0
-                    if below_count_m >= minimum_consecutive
-                        break
-                    end
-                end
-
-                # a k shell counts towards the stop only past the largest k shell (shells can rise before they fall)
-                below_count_k = abs(shell_k) <= initial_k_shell_threshold && abs(shell_k) < peak_k_shell ? below_count_k + 1 : 0
-                peak_k_shell = max(peak_k_shell, abs(shell_k))
-                if below_count_k >= minimum_consecutive
-                    break
-                end
-            end
-
-            push!(shell_list, shell_n)
-            push!(n_list, 0)
-            push!(angular_list, shell_n_angular); push!(carter_list, shell_n_carter)
-            log_shell(s == -2 ? "infinity" : "horizon", "n", 0, shell_n, shell_n_angular, shell_n_carter)
-            total_energy += shell_n
-            total_angular += shell_n_angular
-            total_carter += shell_n_carter
-            if s == -2
-                branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
-            else
-                branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
-            end
-            shell_last = shell_n
-
-
-            below_count_n = 0
-            for n in 1:nmax
-                m_omega_zero = -n * radial_over_azimuthal
-                max_flux = 2 * abs(fit_estimate(n_list, shell_list, n, abs(shell_last)))
-                shell_n = 0.0
-                shell_n_angular = 0.0
-                shell_n_carter = 0.0
-                floor = branch_mode_floor(s)
-                search_threshold = _mode_cutoff_threshold(tol * abs(shell_last), floor)
-                threshold = max(search_threshold, beta * tol * abs(total_energy))
-                k_shell_scale = sqrt(abs(total_energy) * abs(shell_last))
-                # k-shell stops are relative to the branch total; the absolute per-mode floor would cut whole
-                # k shells when the branch total is small (horizon totals of 1e-8..1e-7).
-                k_shell_threshold = tol * k_shell_scale
-                negative_k_shell_threshold = neg_branch_scale * tol * abs(total_energy)
-                tail_cutoff = use_generic_tail_levin(s, n)
-
-                shell_k = 0.0
-                shell_k_angular = 0.0
-                shell_k_carter = 0.0
-                shell_m = 0.0
-                shell_m_angular = 0.0
-                shell_m_carter = 0.0
-                below_count_l = 0
-                walk_max_l = 0.0
-                for l in 2:lmax
-                    mode = eval_mode(s, l, 0, n, 0, max_flux)
-                    record_mode(s, l, 0, n, 0, mode)
-                    shell_m += 2 * mode["EnergyFlux"]
-                    shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_m_carter += 2 * mode["CarterConstantFlux"]
-                    shell_n += 2 * mode["EnergyFlux"]
-                    shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                    shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
-                    below_count_l = abs(mode["EnergyFlux"]) <= threshold ? below_count_l + 1 : 0
-                    if below_count_l >= minimum_consecutive || _deep_stop(abs(mode["EnergyFlux"]), deep, threshold, walk_max_l)
-                        break
-                    end
-                    walk_max_l = max(walk_max_l, abs(mode["EnergyFlux"]))
-                end
-
-                shell_k += shell_m
-                shell_k_angular += shell_m_angular
-                shell_k_carter += shell_m_carter
-
-                below_count_m = 0
-                previous_shell_m = Inf
-                Max_flux = 0.0
-                Max_m = 1
-                for m in 1:lmax
-                    lmin = max(2, abs(m))
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    walk_max_l = 0.0
-                    for l in lmin:lmax
-                        mode = eval_mode(s, l, m, n, 0, max_flux)
-                        record_mode(s, l, m, n, 0, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        below_count_l = abs(mode["EnergyFlux"]) <= threshold ? below_count_l + 1 : 0
-                        if below_count_l >= minimum_consecutive || _deep_stop(abs(mode["EnergyFlux"]), deep, threshold, walk_max_l)
-                            break
-                        end
-                        walk_max_l = max(walk_max_l, abs(mode["EnergyFlux"]))
-                    end
-                    if abs(shell_m) > Max_flux
-                        Max_flux = abs(shell_m)
-                        Max_m = m
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-                    # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                    growing_m = abs(shell_m) > abs(previous_shell_m)
-                    previous_shell_m = shell_m
-                    below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
-                    if below_count_m >= minimum_consecutive
-                        break
-                    end
-                end
-
-                below_count_m = 0
-                previous_shell_m = Inf
-                for m in -1:-1:-lmax
-                    lmin = max(2, abs(m))
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    walk_max_l = 0.0
-                    for l in lmin:lmax
-                        mode = eval_mode(s, l, m, n, 0, max_flux)
-                        record_mode(s, l, m, n, 0, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        below_count_l = abs(mode["EnergyFlux"]) <= threshold ? below_count_l + 1 : 0
-                        if below_count_l >= minimum_consecutive || _deep_stop(abs(mode["EnergyFlux"]), deep, threshold, walk_max_l)
-                            break
-                        end
-                        walk_max_l = max(walk_max_l, abs(mode["EnergyFlux"]))
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-                    # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                    growing_m = abs(shell_m) > abs(previous_shell_m)
-                    previous_shell_m = shell_m
-                    below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
-                    if below_count_m >= minimum_consecutive
-                        break
-                    end
-                end
-
-                below_count_k = 0
-                previous_shell_k = Inf
-                for k in 1:kmax
-                    shell_k = 0.0
-                    shell_k_angular = 0.0
-                    shell_k_carter = 0.0
-
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                        mode = eval_mode(s, l, 0, n, k, max_flux)
-                        record_mode(s, l, 0, n, k, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        mode["EnergyFlux"]
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-
-                    below_count_m = 0
-                    previous_shell_m = Inf
-                    Max_flux = 0.0
-                    Max_m = 1
-                    for m in 1:lmax
-                        lmin = max(2, abs(m))
-                        shell_m = 0.0
-                        shell_m_angular = 0.0
-                        shell_m_carter = 0.0
-                        below_count_l = 0
-                        _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                            mode = eval_mode(s, l, m, n, k, max_flux)
-                            record_mode(s, l, m, n, k, mode)
-                            shell_m += 2 * mode["EnergyFlux"]
-                            shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_m_carter += 2 * mode["CarterConstantFlux"]
-                            shell_n += 2 * mode["EnergyFlux"]
-                            shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_n_carter += 2 * mode["CarterConstantFlux"]
-                            total_modes += 2
-                            mode["EnergyFlux"]
-                        end
-                        if abs(shell_m) > Max_flux
-                            Max_flux = abs(shell_m)
-                            Max_m = m
-                        end
-                        shell_k += shell_m
-                        shell_k_angular += shell_m_angular
-                        shell_k_carter += shell_m_carter
-                        # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                        growing_m = abs(shell_m) > abs(previous_shell_m)
-                        previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
-                        if below_count_m >= minimum_consecutive
-                            break
-                        end
-                    end
-
-                    below_count_m = 0
-                    previous_shell_m = Inf
-                    for m in -1:-1:-lmax
-                        lmin = max(2, abs(m))
-                        shell_m = 0.0
-                        shell_m_angular = 0.0
-                        shell_m_carter = 0.0
-                        below_count_l = 0
-                        _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                            mode = eval_mode(s, l, m, n, k, max_flux)
-                            record_mode(s, l, m, n, k, mode)
-                            shell_m += 2 * mode["EnergyFlux"]
-                            shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_m_carter += 2 * mode["CarterConstantFlux"]
-                            shell_n += 2 * mode["EnergyFlux"]
-                            shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_n_carter += 2 * mode["CarterConstantFlux"]
-                            total_modes += 2
-                            mode["EnergyFlux"]
-                        end
-                        shell_k += shell_m
-                        shell_k_angular += shell_m_angular
-                        shell_k_carter += shell_m_carter
-                        # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                        growing_m = abs(shell_m) > abs(previous_shell_m)
-                        previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
-                        if below_count_m >= minimum_consecutive
-                            break
-                        end
-                    end
-
-                    # a k shell that is still growing does not count toward the stop: shells can dip, then rise again
-                    growing = abs(shell_k) > abs(previous_shell_k)
-                    previous_shell_k = shell_k
-                    below_count_k = !growing && abs(shell_k) <= k_shell_threshold ? below_count_k + 1 : 0
-                    if below_count_k >= minimum_consecutive
-                        break
-                    end
-                end
-
-                below_count_k = 0
-                previous_shell_k = Inf
-                for k in -1:-1:-kmax
-                    shell_k = 0.0
-                    shell_k_angular = 0.0
-                    shell_k_carter = 0.0
-
-                    shell_m = 0.0
-                    shell_m_angular = 0.0
-                    shell_m_carter = 0.0
-                    below_count_l = 0
-                    _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                        mode = eval_mode(s, l, 0, n, k, max_flux)
-                        record_mode(s, l, 0, n, k, mode)
-                        shell_m += 2 * mode["EnergyFlux"]
-                        shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_m_carter += 2 * mode["CarterConstantFlux"]
-                        shell_n += 2 * mode["EnergyFlux"]
-                        shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                        shell_n_carter += 2 * mode["CarterConstantFlux"]
-                        total_modes += 2
-                        mode["EnergyFlux"]
-                    end
-                    shell_k += shell_m
-                    shell_k_angular += shell_m_angular
-                    shell_k_carter += shell_m_carter
-
-                    below_count_m = 0
-                    previous_shell_m = Inf
-                    Max_flux = 0.0
-                    Max_m = 1
-                    for m in 1:lmax
-                        lmin = max(2, abs(m))
-                        shell_m = 0.0
-                        shell_m_angular = 0.0
-                        shell_m_carter = 0.0
-                        below_count_l = 0
-                        _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                            mode = eval_mode(s, l, m, n, k, max_flux)
-                            record_mode(s, l, m, n, k, mode)
-                            shell_m += 2 * mode["EnergyFlux"]
-                            shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_m_carter += 2 * mode["CarterConstantFlux"]
-                            shell_n += 2 * mode["EnergyFlux"]
-                            shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_n_carter += 2 * mode["CarterConstantFlux"]
-                            total_modes += 2
-                            mode["EnergyFlux"]
-                        end
-                        if abs(shell_m) > Max_flux
-                            Max_flux = abs(shell_m)
-                            Max_m = m
-                        end
-                        shell_k += shell_m
-                        shell_k_angular += shell_m_angular
-                        shell_k_carter += shell_m_carter
-                        # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                        growing_m = abs(shell_m) > abs(previous_shell_m)
-                        previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
-                        if below_count_m >= minimum_consecutive
-                            break
-                        end
-                    end
-
-                    below_count_m = 0
-                    previous_shell_m = Inf
-                    for m in -1:-1:-lmax
-                        lmin = max(2, abs(m))
-                        shell_m = 0.0
-                        shell_m_angular = 0.0
-                        shell_m_carter = 0.0
-                        below_count_l = 0
-                        _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, threshold, minimum_consecutive, s == 2; deep=deep, search_threshold=search_threshold) do l
-                            mode = eval_mode(s, l, m, n, k, max_flux)
-                            record_mode(s, l, m, n, k, mode)
-                            shell_m += 2 * mode["EnergyFlux"]
-                            shell_m_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_m_carter += 2 * mode["CarterConstantFlux"]
-                            shell_n += 2 * mode["EnergyFlux"]
-                            shell_n_angular += 2 * mode["AngularMomentumFlux"]
-                            shell_n_carter += 2 * mode["CarterConstantFlux"]
-                            total_modes += 2
-                            mode["EnergyFlux"]
-                        end
-                        shell_k += shell_m
-                        shell_k_angular += shell_m_angular
-                        shell_k_carter += shell_m_carter
-                        # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
-                        growing_m = abs(shell_m) > abs(previous_shell_m)
-                        previous_shell_m = shell_m
-                        below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
-                        if below_count_m >= minimum_consecutive
-                            break
-                        end
-                    end
-
-                    # a k shell that is still growing does not count toward the stop: shells can dip, then rise again
-                    growing = abs(shell_k) > abs(previous_shell_k)
-                    previous_shell_k = shell_k
-                    below_count_k = !growing && abs(shell_k) <= negative_k_shell_threshold ? below_count_k + 1 : 0
-                    if below_count_k >= minimum_consecutive
-                        break
-                    end
-                end
-
-                push!(shell_list, shell_n)
-                push!(n_list, n)
-                push!(angular_list, shell_n_angular); push!(carter_list, shell_n_carter)
-                log_shell(s == -2 ? "infinity" : "horizon", "n", n, shell_n, shell_n_angular, shell_n_carter)
-                last_shell = (shell_n, shell_n_angular, shell_n_carter)
-                total_energy += shell_n
-                total_angular += shell_n_angular
-                total_carter += shell_n_carter
-                if s == -2
-                    branch_mode_floor_inf[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
-                else
-                    branch_mode_floor_hor[] = _adaptive_branch_mode_floor(total_energy, tol, mode_abs_floor)
-                end
-                n_threshold = _mode_cutoff_threshold(tol * abs(total_energy), branch_mode_floor(s))
-                below_count_n = abs(shell_n) <= n_threshold ? below_count_n + 1 : 0
-                shell_last = shell_n
-
-                if below_count_n >= minimum_consecutive + 1
-                    n_reached = n
-                    break
-                end
-            end
-
-            # Geometric n tail at high eccentricity, as for eccentric equatorial orbits.
-            tail_factor, tail_ratio = _geometric_n_tail_factor(shell_list, e, n_reached, minimum_consecutive + 1)
-            n_tail = tail_factor .* last_shell
-            total_energy += n_tail[1]
-            total_angular += n_tail[2]
-            total_carter += n_tail[3]
-
-            return (
-                energy_flux = total_energy,
-                angular_momentum_flux = total_angular,
-                carter_constant_flux = total_carter,
-                total_modes = total_modes,
-                n_reached = n_reached,
-                shell_list = shell_list,
-                shells = (n = n_list, energy = shell_list, angular_momentum = angular_list, carter_constant = carter_list),
-                truncation_floor = branch_mode_floor(s),
-                n_tail = (energy = n_tail[1], angular_momentum = n_tail[2], carter_constant = n_tail[3], ratio = tail_ratio),
-            )
-        end
-
-        inf = branch_summation(-2)
-        hor = branch_summation(2)
+        # both boundaries (see _generic_branch_summation!); with mode_parallelism > 1 their l walks are computed ahead
+        # and, without a record or progress log, the boundaries run on two tasks
+        walk_run = (key, q) -> _generic_l_walk(gen_compute_q, key[1], key[2], key[3], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1)
+        branch_ctx = s -> (e = e, x = x, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = minimum_consecutive,
+            mode_abs_floor = mode_abs_floor, beta = beta, deep = deep, neg_branch_scale = neg_branch_scale,
+            radial_over_azimuthal = radial_over_azimuthal, polar_over_azimuthal = polar_over_azimuthal,
+            floor_ref = s == -2 ? branch_mode_floor_inf : branch_mode_floor_hor, levin_floor = branch_levin_floor,
+            use_shell_levin = use_generic_tail_levin, levin_auto = gen_levin_auto, fit_estimate = fit_estimate, eval_mode = eval_mode, accept! = gen_accept!,
+            record_mode = record_mode, log_shell = log_shell, run = walk_run)
+        pf_inf = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+        pf_hor = mode_parallelism > 1 ? _WalkPrefetch(walk_run) : nothing
+        inf, hor = _run_boundaries(() -> _generic_branch_summation!(-2, branch_ctx(-2), pf_inf),
+            () -> _generic_branch_summation!(2, branch_ctx(2), pf_hor), mode_parallelism > 1 && !record && progress_interval == 0)
         total_modes = inf.total_modes + hor.total_modes
 
         if record
@@ -3072,8 +2948,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             infinity_truncation_floor = inf.truncation_floor,
             horizon_truncation_floor = hor.truncation_floor,
             mode_parallelism = mode_parallelism,
-            modes_computed = gen_prefetch === nothing ? nothing : gen_prefetch.computed,
-            modes_computed_unused = gen_prefetch === nothing ? nothing : gen_prefetch.computed - gen_prefetch.used,
+            modes_computed = pf_inf === nothing ? nothing : pf_inf.modes + pf_hor.modes,
+            modes_computed_unused = pf_inf === nothing ? nothing : (pf_inf.modes - pf_inf.modes_used) + (pf_hor.modes - pf_hor.modes_used),
             # every n shell of each branch (summed over k, m, l with symmetry weights)
             infinity_shells = inf.shells,
             horizon_shells = hor.shells,
@@ -3082,7 +2958,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             record_file = record ? record_path : nothing,
         )
     finally
-        gen_prefetch === nothing || _prefetch_drain!(gen_prefetch)
+        pf_inf === nothing || _walk_discard!(pf_inf)
+        pf_hor === nothing || _walk_discard!(pf_hor)
         record && _public_close_resource!(scope, record_h5)
         progress_io !== nothing && _public_close_resource!(scope, progress_io)
     end

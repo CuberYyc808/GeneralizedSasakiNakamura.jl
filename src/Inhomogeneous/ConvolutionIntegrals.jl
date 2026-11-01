@@ -165,6 +165,9 @@ mutable struct EccentricFluxCache
     levin_phase_factors::Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}
     levin_factored_phase_factors::Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}
     geometry_owner::Union{Nothing, EccentricGeometryOwner}
+    # Adaptive Levin phase factorizations shared by the modes of one l walk (see _cached_levin_phase_factors!): set by
+    # the walk on each of its mode caches, owned by the walk, not cleared with the cache.
+    walk_factors::Union{Nothing, Dict{Any, Any}}
 end
 
 mutable struct InclinedFluxCache
@@ -175,7 +178,7 @@ end
 # The positional constructors build a cache without a geometry owner. The owner-based constructors build a
 # submission-aware cache that owns only its private dictionaries and borrows read-only owner data.
 EccentricFluxCache(samples, levin_samples, adaptive_segments, phase_vectors, phase_factors, factored_factors) =
-    EccentricFluxCache(samples, levin_samples, adaptive_segments, phase_vectors, phase_factors, factored_factors, nothing)
+    EccentricFluxCache(samples, levin_samples, adaptive_segments, phase_vectors, phase_factors, factored_factors, nothing, nothing)
 InclinedFluxCache(samples::Dict{Int, Dict}) = InclinedFluxCache(samples, nothing)
 function EccentricFluxCache(owner::EccentricGeometryOwner)
     check_submission_geometry(owner, owner.master)
@@ -200,10 +203,12 @@ end
 
 function _clear_private_mode_cache!(cache)
     for field in fieldnames(typeof(cache))
+        field === :walk_factors && continue   # owned by the l walk, see EccentricFluxCache
         value = getfield(cache, field)
         value isa AbstractDict && empty!(value)
     end
     cache.geometry_owner = nothing
+    hasfield(typeof(cache), :walk_factors) && (cache.walk_factors = nothing)
     return nothing
 end
 clear_eccentric_mode_cache!(cache::EccentricFluxCache) = _clear_private_mode_cache!(cache)
@@ -634,10 +639,12 @@ mutable struct GenericM2FluxCache
     adaptive_levin_phase_bases::Dict{Tuple, Any}
     adaptive_levin_weights::Dict{Tuple, Vector{Float64}}
     geometry_owner::Union{Nothing, GenericGeometryOwner}
+    # adaptive radial Levin phase factorizations shared by the modes of one l walk, as in EccentricFluxCache
+    walk_factors::Union{Nothing, Dict{Any, Any}}
 end
 
 GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights) =
-    GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights, nothing)
+    GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights, nothing, nothing)
 function GenericM2FluxCache(owner::GenericGeometryOwner)
     check_submission_geometry(owner, owner.master)
     cache = GenericM2FluxCache()
@@ -764,26 +771,10 @@ end
 
 function _cached_generic_levin_phase_factor!(build::Function, cache, key::Tuple)
     cache isa GenericM2FluxCache || return build()
-    owner = cache.geometry_owner
-    if owner !== nothing && (key[1] === :adaptive_radial || key[1] === :adaptive_radial_in)
-        # (:adaptive_radial[_in], level_r, ib, s, m, n, k, sign, nr): shared by the l walk of (s, m, n, k)
-        group = (key[4], key[5], key[6], key[7])
-        return lock(owner.lock) do
-            owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
-            factors = owner.levin_phase_factors
-            haskey(factors, key) && return factors[key]
-            value = build()
-            if !(group in owner.levin_phase_groups)
-                push!(owner.levin_phase_groups, group)
-                # one group per concurrently computed mode (ModeSummation._ModePrefetch), else one
-            while length(owner.levin_phase_groups) > max(LEVIN_PHASE_GROUPS, Threads.nthreads())
-                    old = popfirst!(owner.levin_phase_groups)
-                    filter!(entry -> (entry.first[4], entry.first[5], entry.first[6], entry.first[7]) != old, factors)
-                end
-            end
-            factors[key] = value
-            return value
-        end
+    if cache.walk_factors !== nothing && (key[1] === :adaptive_radial || key[1] === :adaptive_radial_in)
+        # (:adaptive_radial[_in], level_r, ib, s, m, n, k, sign, nr) depends on (s, m, n, k) and the segment only:
+        # shared by the modes of the l walk of (s, m, n, k) through the walk's own dictionary (one task per walk)
+        return get!(build, cache.walk_factors, key)
     end
     return get!(cache.levin_phase_factors, key) do
         build()
@@ -3981,30 +3972,13 @@ function _adaptive_eccentric_factored_segment(bundle::Dict, Ysamp::Dict, SH, s::
 end
 
 # Phase factorizations of an adaptive Levin segment. The phases depend on (s, m, n) and the segment only, so the
-# l walk of one (s, m, n) builds them once (they took about two thirds of a segment's cost at e = 0.95). Kept in the
-# geometry owner under its lock for the last LEVIN_PHASE_GROUPS (s, m, n) groups; no owner, no reuse.
-const LEVIN_PHASE_GROUPS = 1
-
+# l walk of one (s, m, n) builds them once (they took about two thirds of a segment's cost at e = 0.95): the walk
+# sets its own dictionary on each of its mode caches (`walk_factors`, one task per walk, no lock); without it (a
+# mode computed on its own) they are built per mode.
 function _cached_levin_phase_factors!(build, cache, key::NTuple{7, Int})
-    owner = cache isa EccentricFluxCache ? cache.geometry_owner : nothing
-    owner === nothing && return build()
-    group = (key[1], key[2], key[3])
-    return lock(owner.lock) do
-        owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
-        factors = owner.levin_phase_factors
-        haskey(factors, key) && return factors[key]
-        value = build()
-        if !(group in owner.levin_phase_groups)
-            push!(owner.levin_phase_groups, group)
-            # one group per concurrently computed mode (ModeSummation._ModePrefetch), else one
-            while length(owner.levin_phase_groups) > max(LEVIN_PHASE_GROUPS, Threads.nthreads())
-                old = popfirst!(owner.levin_phase_groups)
-                filter!(entry -> (entry.first[1], entry.first[2], entry.first[3]) != old, factors)
-            end
-        end
-        factors[key] = value
-        return value
-    end
+    factors = cache isa EccentricFluxCache ? cache.walk_factors : nothing
+    factors === nothing && return build()
+    return get!(build, factors, key)
 end
 
 # Y of s = -2 IN split into its two waves at large r, Y = e^{-i phi} (A_in R_in + A_out R_out) / r^2 with the

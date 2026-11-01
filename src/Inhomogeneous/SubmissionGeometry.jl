@@ -56,10 +56,8 @@ mutable struct GenericGeometryOwner <: AbstractSubmissionGeometryOwner
     adaptive_segments::Dict{Tuple, Dict}
     adaptive_weights::Dict{Tuple, Vector{Float64}}
     geometries::IdDict{Dict, GenericM2Geometry}
-    # Adaptive radial Levin phase factorizations, which depend on (s, m, n, k) and the segment only, kept for the last
-    # LEVIN_PHASE_GROUPS (s, m, n, k) groups so that the l walk of one group builds them once (as for eccentric orbits).
-    levin_phase_factors::Dict{Tuple, Any}
-    levin_phase_groups::Vector{NTuple{4, Int}}
+    # builds in progress, (field, key) => _PendingBuild, so that concurrent requesters wait instead of building twice
+    pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
     stats::Dict{String, Int}
@@ -72,6 +70,7 @@ mutable struct InclinedGeometryOwner <: AbstractSubmissionGeometryOwner
     samples::Dict{Int, Dict}
     cheby_samples::Dict{Int, Dict}
     levin_trap_samples::Dict{Int, Dict}
+    pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
     stats::Dict{String, Int}
@@ -84,16 +83,22 @@ mutable struct EccentricGeometryOwner <: AbstractSubmissionGeometryOwner
     samples::Dict{Int, Dict}
     cheby_samples::Dict{Int, Dict}
     adaptive_segments::Dict{Tuple{Int, Int, Int}, Any}
-    # Adaptive Levin phase factorizations keyed by (s, m, n, local_n, level, bin, wave), kept for at most
-    # LEVIN_PHASE_GROUPS (s, m, n) groups: the l walk of one (s, m, n) reuses them, and memory stays bounded.
-    levin_phase_factors::Dict{NTuple{7, Int}, Any}
-    levin_phase_groups::Vector{NTuple{3, Int}}
+    pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
     stats::Dict{String, Int}
     observer::Union{Nothing, Function}
     closed::Bool
 end
+
+# A build of one memo entry in progress (see _submission_geometry_lookup!): the builder publishes the value or the
+# error and sets `done`; the others wait for it.
+mutable struct _PendingBuild
+    done::Threads.Event
+    value::Any
+    error::Any
+end
+_PendingBuild() = _PendingBuild(Threads.Event(), nothing, nothing)
 
 # Numerical context captured when an owner is built; the owner refuses use once it changes.
 # The KerrGeodesics version and path of a loaded module cannot change, so they are read once: pathof and pkgversion
@@ -109,14 +114,13 @@ end
 
 GenericGeometryOwner(master::Dict; observer = nothing) = GenericGeometryOwner(master,
     Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Dict}(),
-    Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), Dict{Tuple, Any}(), NTuple{4, Int}[], ReentrantLock(),
+    Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 InclinedGeometryOwner(master::Dict; observer = nothing) = InclinedGeometryOwner(master, Dict{Int, Dict}(),
-    Dict{Int, Dict}(), Dict{Int, Dict}(), ReentrantLock(),
+    Dict{Int, Dict}(), Dict{Int, Dict}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 EccentricGeometryOwner(master::Dict; observer = nothing) = EccentricGeometryOwner(master, Dict{Int, Dict}(),
-    Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{NTuple{7, Int}, Any}(), NTuple{3, Int}[],
-    ReentrantLock(),
+    Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 
 function _check_submission_geometry_unlocked(owner::AbstractSubmissionGeometryOwner, master)
@@ -138,30 +142,76 @@ function _submission_geometry_increment!(owner, key::String)
     return nothing
 end
 
+# "<field>_lookups", "_hits", "_misses", "_builds" of the memo fields, built once (the lookups run under the owner lock)
+const _GEOMETRY_STAT_KEYS = Dict{Symbol, NTuple{4, String}}(f => (string(f) * "_lookups", string(f) * "_hits",
+    string(f) * "_misses", string(f) * "_builds") for f in (:samples, :cheby_samples, :trap_samples, :levin_trap_samples,
+    :adaptive_segments, :adaptive_weights, :geometries))
+_geometry_stat_keys(field::Symbol) = get(_GEOMETRY_STAT_KEYS, field, (string(field) * "_lookups",
+    string(field) * "_hits", string(field) * "_misses", string(field) * "_builds"))
+
 function _submission_geometry_lookup!(build::Function, owner::AbstractSubmissionGeometryOwner,
         field::Symbol, key, master)
-    # The lookup, miss, construction and publication share one lock. Failed builds
-    # publish no value. No unlocked get!/haskey/read races with another builder.
+    # The lookup, the miss and the publication share one lock; the construction runs outside it (the builds of
+    # the modes computed concurrently by a flux summation do not wait for each other), each key built by one
+    # requester while the others wait for it (`pending`). Failed builds publish no value, and the waiters
+    # then look up (and build) again. No unlocked get!/haskey/read races with another builder.
     # Optional diagnostic observer is fixed at construction, before tasks start.
     # It may notify/gate, but must not retain science keys or reenter owner APIs.
     observer = owner.observer
     observer === nothing || Base.invokelatest(observer, :lookup_requested, field, key)
-    return lock(owner.lock) do
-        _check_submission_geometry_unlocked(owner, master)
-        memo = getfield(owner, field)
-        prefix = string(field)
-        _submission_geometry_increment!(owner, prefix * "_lookups")
-        if haskey(memo, key)
-            _submission_geometry_increment!(owner, prefix * "_hits")
-            return memo[key]
+    stat_lookups, stat_hits, stat_misses, stat_builds = _geometry_stat_keys(field)
+    while true
+        pending = nothing
+        found = false
+        value = lock(owner.lock) do
+            _check_submission_geometry_unlocked(owner, master)
+            memo = getfield(owner, field)
+            _submission_geometry_increment!(owner, stat_lookups)
+            if haskey(memo, key)
+                _submission_geometry_increment!(owner, stat_hits)
+                found = true
+                return memo[key]
+            end
+            pending = get(owner.pending, (field, key), nothing)
+            if pending === nothing
+                _submission_geometry_increment!(owner, stat_misses)
+                owner.pending[(field, key)] = _PendingBuild()
+            end
+            return nothing
         end
-        _submission_geometry_increment!(owner, prefix * "_misses")
-        observer === nothing || Base.invokelatest(observer, :build_started, field, key)
-        value = build()
-        memo[key] = value
-        _submission_geometry_increment!(owner, prefix * "_builds")
-        observer === nothing || Base.invokelatest(observer, :published, field, key)
-        return value
+        found && return value
+        if pending !== nothing
+            # another requester is building this entry
+            wait(pending.done)
+            pending.error === nothing && return pending.value
+            continue
+        end
+        mine = nothing
+        try
+            observer === nothing || Base.invokelatest(observer, :build_started, field, key)
+            value = build()
+            lock(owner.lock) do
+                memo = getfield(owner, field)
+                memo[key] = value
+                _submission_geometry_increment!(owner, stat_builds)
+                mine = pop!(owner.pending, (field, key))
+            end
+            mine.value = value
+            notify(mine.done)
+            observer === nothing || Base.invokelatest(observer, :published, field, key)
+            return value
+        catch error
+            if mine === nothing
+                mine = lock(owner.lock) do
+                    pop!(owner.pending, (field, key), nothing)
+                end
+            end
+            if mine !== nothing
+                mine.error = error
+                notify(mine.done)
+            end
+            rethrow()
+        end
     end
 end
 
@@ -173,7 +223,7 @@ function _release_submission_geometry!(owner::AbstractSubmissionGeometryOwner)
         for field in fieldnames(typeof(owner))
             field in (:stats, :master) && continue
             value = getfield(owner, field)
-            (value isa AbstractDict || field == :levin_phase_groups) && empty!(value)
+            value isa AbstractDict && empty!(value)
         end
         owner.master = nothing
         owner.observer = nothing
