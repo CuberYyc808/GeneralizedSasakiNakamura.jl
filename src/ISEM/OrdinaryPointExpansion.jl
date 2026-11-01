@@ -9,7 +9,7 @@ using ..CoefficientTables:
 using ...Potentials: sF, sU, sF_delta, sW
 using TaylorSeries: Taylor1, getcoeff, derivative
 
-export PQLayout
+export PQLayout, release_task_arenas!
 export pq_layout, split_starts, ab_term_counts, horizon_kplus
 export rational_series_from_coefficients!
 export endpoint_ab_series!, endpoint_ab_series
@@ -25,6 +25,9 @@ export series_issue, denom_ok
 
 include("TaylorArena.jl")
 include("RationalArena.jl")
+
+# Return the current task's series arenas to their pools; called by a task that ends (see TaylorArena.jl).
+release_task_arenas!() = (_release_taylor_arena!(); _release_rational_arena!(); nothing)
 
 const _SERIES_MAG_LIMIT = sqrt(floatmax(Float64))
 const _SERIES_RATIO_LIMIT = inv(sqrt(eps(Float64)))
