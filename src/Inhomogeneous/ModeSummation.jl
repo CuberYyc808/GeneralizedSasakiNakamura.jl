@@ -728,94 +728,112 @@ end
 
 _record_tag(x) = replace(replace(@sprintf("%.16g", x), "." => "p"), "-" => "m")
 
-# Modes computed ahead of an eccentric summation's walk, mode_parallelism of them at a time (Julia threads of one
-# process). Within one (s, n) shell every mode depends only on the shell's parameters (max_flux, the branch floors
-# and the Levin energy tolerance, fixed until the shell ends), so a mode computed ahead equals the one the serial walk
-# computes. The walk itself is unchanged: it asks for its modes in the serial order and applies the acceptance
-# (counters, finiteness check, cap tracking), the stopping rules, the sums and the record in that order; modes
-# computed ahead and never asked for are dropped. A mode's error is raised when the walk asks for it. Predicted next
-# modes: the following l of the current l walk, then the first l of the next |m|, a few each.
-mutable struct _ModePrefetch{D, U, C, A, P}
+# Modes computed ahead of a flux summation's walks, up to `parallelism` at a time on the Julia threads of one process.
+# The walks themselves are unchanged: they ask for their modes one by one in the serial order and apply the acceptance
+# (counters, finiteness check, cap tracking), the stopping rules, the sums and the record in that order. A mode asked
+# for with parameters `params` (every summation-dependent input of its computation: max_flux, floors, Levin
+# tolerances and choice) is taken from a task computed ahead only if that task used exactly these parameters, else it is
+# computed now; so each mode equals the serial one. Ahead: the modes `predict(key)` lists (the rest of the current l
+# walk in both directions, then the next |m|), with the parameters `params_for(key, params)` derives from the current
+# request; tasks no longer predicted are dropped (their results unused). A mode's error is raised when it is asked for.
+# Keys are (s, l, m, n, k).
+mutable struct _ModePrefetch{C, A, F, S, N}
     parallelism::Int
-    scope::Any
+    lmin::Int
     lmax::Int
     depth::Int
-    decide::D
-    decide_and_note::U
-    compute::C
-    accept!::A
-    parameters::P
-    shell::Any
-    shell_parameters::Any
-    tasks::Dict{NTuple{4, Int}, Task}
-    decisions::Dict{NTuple{3, Int}, Bool}
-    computed::Int   # modes started (used or dropped)
-    used::Int       # modes the walk asked for
+    compute::C        # (key, params) -> mode, pure
+    accept!::A        # (key, mode) -> mode, the serial bookkeeping
+    params_for::F     # (key, params of the request) -> params of a predicted key
+    start_l::S        # (s, m, n, k) -> first l of that walk
+    next_m::N         # (s, m, n, k) -> m of the walk that follows (nothing at the end)
+    same::Function    # equality of two parameter tuples (isequal unless an entry does not change the result)
+    tasks::Dict{NTuple{5, Int}, Tuple{Any, Task}}
+    dropped::Vector{Task}
+    computed::Int     # modes started (used or dropped)
+    used::Int         # modes the walks asked for
 end
 
-_ModePrefetch(parallelism, scope, lmax, minimum_consecutive, decide, decide_and_note, compute, accept!, parameters) =
-    _ModePrefetch(parallelism, scope, lmax, minimum_consecutive + 2, decide, decide_and_note, compute, accept!, parameters,
-        nothing, nothing, Dict{NTuple{4, Int}, Task}(), Dict{NTuple{3, Int}, Bool}(), 0, 0)
+_ModePrefetch(parallelism, lmin, lmax, minimum_consecutive, compute, accept!, params_for, start_l, next_m; same = isequal) =
+    _ModePrefetch(parallelism, lmin, lmax, minimum_consecutive + 2, compute, accept!, params_for, start_l, next_m, same,
+        Dict{NTuple{5, Int}, Tuple{Any, Task}}(), Task[], 0, 0)
 
 function _prefetch_drain!(pf::_ModePrefetch)
-    for task in values(pf.tasks)
+    for (_, task) in values(pf.tasks)
         fetch(task)   # the worker returns its error instead of throwing, see _prefetch_spawn!
     end
+    foreach(fetch, pf.dropped)
     empty!(pf.tasks)
+    empty!(pf.dropped)
     return nothing
 end
 
-function _prefetch_spawn!(pf::_ModePrefetch, key::NTuple{4, Int}, max_flux)
-    haskey(pf.tasks, key) && return nothing
-    s, l, m, n = key
-    # one decision per (s, m, n) of the shell (it costs a phase-rate scan of the master grid)
-    use_levin = get!(() -> pf.decide(s, m, n), pf.decisions, (s, m, n))
-    shell = pf.shell_parameters
-    compute = pf.compute
-    # A plain task: the summation drains its tasks before it returns (also on error), and each mode is admitted by
-    # with_submission_mode inside compute, which release waits for. (spawn_submission_task! would keep every task, and
-    # with it its mode result, registered until release: the heap grew with the modes and GC took 60% of the run.)
+function _prefetch_spawn!(pf::_ModePrefetch, key::NTuple{5, Int}, params)
     pf.computed += 1
-    pf.tasks[key] = Threads.@spawn try
-        mode = compute(s, l, m, n, max_flux, use_levin, shell...)
-        # the walk reads only the mode's scalars: drop the trajectory, radial and angular objects, so that at most
+    compute = pf.compute
+    task = Threads.@spawn try
+        mode = compute(key, params)
+        # the walks read only the mode's scalars: drop the trajectory, radial and angular objects, so that at most
         # parallelism small results wait in the queue
         mode isa AbstractDict && foreach(k -> delete!(mode, k), ("Trajectory", "YSolution", "SWSH"))
         (true, mode)
     catch error
         (false, error)
     end
+    pf.tasks[key] = (params, task)
     return nothing
 end
 
-function (pf::_ModePrefetch)(s, l, m, n, max_flux, tail_values)
-    if pf.shell !== (s, n, max_flux)
-        _prefetch_drain!(pf)
-        empty!(pf.decisions)
-        pf.shell = (s, n, max_flux)
-        pf.shell_parameters = pf.parameters(s)
+# the keys computed ahead of a request for `key`: its l walk on (both directions from l), then the following walks
+function _prefetch_predicted(pf::_ModePrefetch, key::NTuple{5, Int})
+    s, l, m, n, k = key
+    keys = NTuple{5, Int}[]
+    lo = max(pf.lmin, abs(m))
+    for d in 1:pf.depth
+        l + d <= pf.lmax && push!(keys, (s, l + d, m, n, k))
+        l - d >= lo && pf.start_l(s, m, n, k) > lo && push!(keys, (s, l - d, m, n, k))
     end
-    key = (s, l, m, n)
-    _prefetch_spawn!(pf, key, max_flux)
-    # top up with the predicted next modes of this shell
     mm = m
-    ll = l
-    while length(pf.tasks) < pf.parallelism && abs(mm) <= pf.lmax
-        lmin = max(2, abs(mm))
-        start = mm == m ? ll + 1 : lmin
-        stop = min(pf.lmax, (mm == m ? ll : lmin - 1) + pf.depth)
-        for lnext in start:stop
-            length(pf.tasks) >= pf.parallelism && break
-            _prefetch_spawn!(pf, (s, lnext, mm, n), max_flux)
+    while length(keys) < 4 * pf.parallelism
+        mm = pf.next_m(s, mm, n, k)
+        (mm === nothing || abs(mm) > pf.lmax) && break
+        l0 = pf.start_l(s, mm, n, k)
+        lo = max(pf.lmin, abs(mm))
+        for d in 0:pf.depth
+            l0 + d <= pf.lmax && push!(keys, (s, l0 + d, mm, n, k))
+            d > 0 && l0 - d >= lo && push!(keys, (s, l0 - d, mm, n, k))
         end
-        mm = mm >= 0 ? mm + 1 : mm - 1
     end
-    ok, value = fetch(pf.tasks[key])
+    return keys
+end
+
+function (pf::_ModePrefetch)(key::NTuple{5, Int}, params)
+    predicted = _prefetch_predicted(pf, key)
+    keep = Set(predicted)
+    push!(keep, key)
+    for k in collect(keys(pf.tasks))
+        k in keep && continue
+        push!(pf.dropped, pf.tasks[k][2])
+        delete!(pf.tasks, k)
+    end
+    entry = get(pf.tasks, key, nothing)
+    if entry === nothing || !pf.same(entry[1], params)
+        entry === nothing || push!(pf.dropped, entry[2])
+        _prefetch_spawn!(pf, key, params)
+    end
+    for k in predicted
+        length(pf.tasks) >= pf.parallelism && break
+        haskey(pf.tasks, k) || _prefetch_spawn!(pf, k, pf.params_for(k, params))
+    end
+    if length(pf.dropped) > pf.parallelism
+        foreach(fetch, pf.dropped)
+        empty!(pf.dropped)
+    end
+    ok, value = fetch(pf.tasks[key][2])
     delete!(pf.tasks, key)
     pf.used += 1
     ok || throw(value)
-    pf.decide_and_note(s, m, n)   # the serial walk's Levin bookkeeping, in its order
-    return pf.accept!(s, l, m, n, value)
+    return pf.accept!(key, value)
 end
 
 function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false)
@@ -966,12 +984,12 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     end
     shell_parameters = s -> (MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s), branch_levin_floor(s),
         s == -2 ? branch_levin_abs_inf[] : branch_levin_abs_hor[])
-    ecc_eval = if mode_parallelism <= 1
-        (s, l, m, n, max_flux, tail_values) -> begin
-            use_levin = use_eccentric_tail_levin(s, m, n)
-            ecc_accept!(s, l, m, n, ecc_compute(s, l, m, n, max_flux, use_levin, shell_parameters(s)...))
-        end
-    else
+    ecc_serial = (s, l, m, n, max_flux, tail_values) -> begin
+        use_levin = use_eccentric_tail_levin(s, m, n)
+        ecc_accept!(s, l, m, n, ecc_compute(s, l, m, n, max_flux, use_levin, shell_parameters(s)...))
+    end
+    prefetch = nothing
+    if mode_parallelism > 1
         # use_eccentric_tail_levin without its bookkeeping, for modes computed ahead of the walk
         levin_decision = (s, m, n) -> begin
             branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
@@ -982,8 +1000,21 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             return branch_policy === true || _ecc_levin_auto(_mode_radial_trapezoid_n(KG_sample, m, n, 0, N, Nmax), n,
                 adaptive_local_n, levin_max_depth, levin_nmin)
         end
-        _ModePrefetch(mode_parallelism, scope, lmax, minimum_consecutive, levin_decision, use_eccentric_tail_levin,
-            ecc_compute, ecc_accept!, shell_parameters)
+        decisions = Dict{NTuple{3, Int}, Bool}()
+        prefetch = _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
+            (key, q) -> ecc_compute(key[1], key[2], key[3], key[4], q[1], q[5], q[2], q[3], q[4]),
+            (key, mode) -> ecc_accept!(key[1], key[2], key[3], key[4], mode),
+            (key, q) -> begin
+                length(decisions) > 4096 && empty!(decisions)   # one scan of the master grid per (s, m, n)
+                (q[1], q[2], q[3], q[4], get!(() -> levin_decision(key[1], key[3], key[4]), decisions, (key[1], key[3], key[4])))
+            end,
+            (s, m, n, k) -> max(2, abs(m)),
+            (s, m, n, k) -> m >= 0 ? m + 1 : m - 1)
+    end
+    ecc_eval = prefetch === nothing ? ecc_serial : (s, l, m, n, max_flux, tail_values) -> begin
+        # the serial order of the Levin bookkeeping, then the mode with exactly the serial parameters
+        use_levin = use_eccentric_tail_levin(s, m, n)
+        prefetch((s, l, m, n, 0), (max_flux, shell_parameters(s)..., use_levin))
     end
 
     try
@@ -1463,8 +1494,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         n_reached_hor = n_reached_hor,
         mode_parallelism = mode_parallelism,
         # with mode_parallelism > 1: modes computed in all, and those computed ahead but never asked for
-        modes_computed = ecc_eval isa _ModePrefetch ? ecc_eval.computed : nothing,
-        modes_computed_unused = ecc_eval isa _ModePrefetch ? ecc_eval.computed - ecc_eval.used : nothing,
+        modes_computed = prefetch === nothing ? nothing : prefetch.computed,
+        modes_computed_unused = prefetch === nothing ? nothing : prefetch.computed - prefetch.used,
         lmax_hit_inf = _cap_hits(cap_trackers[1], tol, total_infinity_energy)[1],
         lmax_hit_hor = _cap_hits(cap_trackers[2], tol, total_horizon_energy)[1],
         nmax_hit_inf = _nmax_hit(n_reached_inf, Energy_flux_inf, nmax, tol, total_infinity_energy),
@@ -1494,7 +1525,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         record_file = record ? record_path : nothing,
     )
     finally
-        ecc_eval isa _ModePrefetch && _prefetch_drain!(ecc_eval)
+        prefetch === nothing || _prefetch_drain!(prefetch)
         record && _public_close_resource!(scope, record_h5)
     end
 end
@@ -1619,7 +1650,7 @@ function inclined_mode_flux(a, p, x, l, m, k; submission = nothing, K = 16, Kmax
     end
 end
 
-function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, warn_truncation::Bool = true)
+function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, warn_truncation::Bool = true, mode_parallelism::Int = 1)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
@@ -1670,6 +1701,17 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
     ci_kwargs = fast ? (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling) : (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = false)
     branch_mode_floor_inf = Ref(Float64(mode_abs_floor))
     branch_mode_floor_hor = Ref(Float64(mode_abs_floor))
+    # One mode from its parameters (max_flux, floor; the k = 0 walks use the default max_flux 1.0); the walks below do
+    # the bookkeeping. With mode_parallelism > 1 the modes come from _ModePrefetch.
+    inc_compute = (s, l, m, k, max_flux, floor) -> with_submission_mode(scope; mode = (s, l, m, 0, k)) do mode_cache
+        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = floor, ci_kwargs..., cache = mode_cache)
+    end
+    prefetch = mode_parallelism > 1 ? _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
+        (key, q) -> inc_compute(key[1], key[2], key[3], key[5], q[1], q[2]), (key, mode) -> mode, (key, q) -> q,
+        (s, m, n, k) -> k == 0 ? max(2, abs(m)) : _branch_peak_l(max(2, abs(m)), m, k, x),
+        (s, m, n, k) -> m >= 0 ? m + 1 : m - 1) : nothing
+    inc_mode = (s, l, m, k, max_flux, floor) -> prefetch === nothing ? inc_compute(s, l, m, k, max_flux, floor) :
+        prefetch((s, l, m, 0, k), (Float64(max_flux), Float64(floor)))
 
     try
         if record
@@ -1716,9 +1758,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 l_trail = Float64[]
 
                 for l in lmin:lmax
-                    mode_inf = let; with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode_inf = inc_mode(-2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
                     _record_current_mode_inclined!(record_h5, record, "I", 0, m, l, mode_index, mode_inf, K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1751,9 +1791,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
                 l_trail = Float64[]
                 for l in lmin:lmax
-                    mode_hor = let; with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, 0, K; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode_hor = inc_mode(2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
                     _record_current_mode_inclined!(record_h5, record, "H", 0, m, l, mode_index, mode_hor, K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1817,9 +1855,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                mode = let; with_submission_mode(scope; mode = (-2, l, 0, 0, k)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                end; end
+                mode = inc_mode(-2, l, 0, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
                 _record_current_mode_inclined!(record_h5, record, "I", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                 get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1850,9 +1886,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = let; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode = inc_mode(-2, l, m, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1894,9 +1928,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_infinity_energy_last), branch_mode_floor_inf[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, false) do l
-                    mode = let; with_submission_mode(scope; mode = (-2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, -2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_inf, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[], ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode = inc_mode(-2, l, m, k, 2 * E_estimate_inf, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_inf[])
                     _record_current_mode_inclined!(record_h5, record, "I", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1952,9 +1984,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
             l_tail = _branch_l_walk(2, _branch_peak_l(2, 0, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                mode = let; with_submission_mode(scope; mode = (2, l, 0, 0, k)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, 0, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                end; end
+                mode = inc_mode(2, l, 0, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
                 _record_current_mode_inclined!(record_h5, record, "H", k, 0, l, mode_index, mode, K)
                 get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                 get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -1985,9 +2015,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = let; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode = inc_mode(2, l, m, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -2030,9 +2058,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 layer_threshold = _mode_cutoff_threshold(tol * abs(shell_k_horizon_energy_last), branch_mode_floor_hor[])
                 l_tail = _branch_l_walk(lmin, _branch_peak_l(lmin, m, k, x), lmax, layer_threshold, minimum_consecutive, true) do l
-                    mode = let; with_submission_mode(scope; mode = (2, l, m, 0, k)) do mode_cache
-                        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, 2, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = 2 * E_estimate_hor, mode_abs_floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[], ci_kwargs..., cache = mode_cache)
-                    end; end
+                    mode = inc_mode(2, l, m, k, 2 * E_estimate_hor, MODE_REFINE_FLOOR_FRACTION * branch_mode_floor_hor[])
                     _record_current_mode_inclined!(record_h5, record, "H", k, m, l, mode_index, mode, K)
                     get(mode, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode, "FailedMode", false) && (failed_modes_hor += 1)
@@ -2134,24 +2160,25 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             record_file = record ? record_path : nothing,
         )
     finally
+        prefetch === nothing || _prefetch_drain!(prefetch)
         record && _public_close_resource!(scope, record_h5)
     end
 end
 
 # Total inclined circular fluxes, summed over k shells as the eccentric summation sums n shells.
-function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
+function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, mode_parallelism::Int = 1, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
-                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, warn_truncation = warn)
+                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, warn_truncation = warn, mode_parallelism = mode_parallelism)
             end
         end
     end
 end
 
-function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing)
+function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
     nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
@@ -2161,10 +2188,10 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
-        return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
     if e == 0.0
-        return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, submission = isequal(e, 0.0) ? scope : nothing, stop_requested = isequal(e, 0.0) ? nothing : (() -> _mode_flux_parent_stop_requested(scope)), lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, submission = isequal(e, 0.0) ? scope : nothing, stop_requested = isequal(e, 0.0) ? nothing : (() -> _mode_flux_parent_stop_requested(scope)), lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
 
     record_path = record_path === nothing ? "generic_mode_data_a_$(_record_tag(a))_p_$(_record_tag(p))_e_$(_record_tag(e))_x_$(_record_tag(x)).h5" : record_path
@@ -2201,6 +2228,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         end
     end
 
+    gen_prefetch = nothing   # set below when mode_parallelism > 1; drained in finally
     try
         if record
             record_h5["meta/a"] = a
@@ -2262,23 +2290,17 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         cap_trackers = (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
         failed_modes = [0, 0]
         near_static_zero = [0, 0]
-        eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
-            auto_levin = use_generic_tail_levin(s, n)
-            use_levin = use_levin || auto_levin ||
-                (fast && (s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
-                    _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
-                        levin_local_n, levin_max_depth, levin_nmin))
-            floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s)
+        # One mode from its parameters (max_flux, Levin choice, floors; levin_flux_scale is passed to the adaptive Levin
+        # route, which does not use it), and its acceptance, which the walks apply in their order.
+        gen_compute = (s, l, m, n, k, max_flux, use_levin, floor, levin_floor, levin_flux_scale) -> begin
             ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"]
-            mode = if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
+            if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
                 res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
                 res["NearStaticOverflow"] = true
                 res
             else
             let; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, k; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if fast
                 if use_levin
-                    levin_flux_scale = max(abs(sum(current_shell_list[])), abs(max_flux))
-                    levin_floor = _tail_levin_mode_floor(floor, branch_levin_floor(s))
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
                         ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
                     end
@@ -2293,11 +2315,52 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 end
             end; end; end
             end
+        end
+        gen_accept! = (s, l, m, n, k, mode) -> begin
             get(mode, "FailedMode", false) && (failed_modes[s == -2 ? 1 : 2] += 1)
             get(mode, "NearStaticOverflow", false) && (near_static_zero[s == -2 ? 1 : 2] += 1)
             ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
             _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
+        end
+        # the Levin choice of the auto rule for (s, m, n, k), without use_generic_tail_levin's bookkeeping
+        gen_levin_auto = (s, m, n, k) -> (fast && (s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
+            _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
+                levin_local_n, levin_max_depth, levin_nmin))
+        gen_shell_levin = (s, n) -> begin
+            branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
+            _tail_enabled(branch_policy) && fast || return false
+            return _use_levin_tail(n; nmin = levin_nmin) && (branch_policy === true || _gen_levin_auto_mode(
+                _mode_radial_trapezoid_n(KG_master, 2, n, 0, N0, Nmax), n, K0, Kmax, levin_local_n, levin_max_depth, levin_nmin))
+        end
+        gen_parameters = (s, l, m, n, k, max_flux, use_levin) -> begin
+            auto_levin = use_generic_tail_levin(s, n)
+            use_levin = use_levin || auto_levin || gen_levin_auto(s, m, n, k)
+            floor = MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s)
+            (Float64(max_flux), use_levin, floor, _tail_levin_mode_floor(floor, branch_levin_floor(s)),
+                use_levin ? max(abs(sum(current_shell_list[])), abs(max_flux)) : 0.0)
+        end
+        gen_prefetch = nothing
+        if mode_parallelism > 1
+            decisions = Dict{NTuple{4, Int}, Bool}()
+            gen_prefetch = _ModePrefetch(mode_parallelism, 2, lmax, minimum_consecutive,
+                (key, q) -> gen_compute(key..., q...),
+                (key, mode) -> gen_accept!(key..., mode),
+                (key, q) -> begin
+                    length(decisions) > 4096 && empty!(decisions)
+                    use_levin = get!(() -> gen_shell_levin(key[1], key[4]) || gen_levin_auto(key[1], key[3], key[4], key[5]),
+                        decisions, (key[1], key[3], key[4], key[5]))
+                    (q[1], use_levin, q[3], q[4], use_levin ? max(q[5], abs(q[1])) : 0.0)
+                end,
+                (s, m, n, k) -> k == 0 ? max(2, abs(m)) : _branch_peak_l(max(2, abs(m)), m, k, x),
+                (s, m, n, k) -> m >= 0 ? m + 1 : m - 1;
+                # levin_flux_scale (5th) does not enter the adaptive Levin result
+                same = (u, v) -> u[1] == v[1] && u[2] == v[2] && u[3] == v[3] && u[4] == v[4])
+        end
+        eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
+            q = gen_parameters(s, l, m, n, k, max_flux, use_levin)
+            gen_prefetch === nothing ? gen_accept!(s, l, m, n, k, gen_compute(s, l, m, n, k, q...)) :
+                gen_prefetch((s, l, m, n, k), q)
         end
 
         record_mode = (s, l, m, n, k, mode) -> begin
@@ -2967,6 +3030,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             record_file = record ? record_path : nothing,
         )
     finally
+        gen_prefetch === nothing || _prefetch_drain!(gen_prefetch)
         record && _public_close_resource!(scope, record_h5)
         progress_io !== nothing && _public_close_resource!(scope, progress_io)
     end
@@ -2974,13 +3038,13 @@ end
 
 # Total generic-orbit fluxes, summed over n, k, m and l shells with the stopping rules described in
 # Teukolsky_pointparticle_flux. Equatorial and e = 0 orbits are passed to the eccentric and inclined summations.
-function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
     caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
-                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path)
+                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path, mode_parallelism = mode_parallelism)
             end
         end
     end

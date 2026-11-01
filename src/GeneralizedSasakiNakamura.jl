@@ -2070,10 +2070,11 @@ shell that is still growing does not count towards the stop, and the positive-m
 walk only stops more than 5 past the m with the largest shell.
 Pass `submission` (see `with_pointparticle_submission`) to reuse the orbit's
 sampling geometry across calls.
-`mode_parallelism` (default 1, serial) computes up to that many modes of an eccentric equatorial sum at a time on the
-Julia threads of one process (start Julia with `--threads` at least that large): within each n shell the modes the
-walks will ask for next are computed ahead, while the walks, stopping rules, sums and record keep the serial order, so
-the result equals the serial one. Other orbit types run serially.
+`mode_parallelism` (default 1, serial) computes up to that many modes of an eccentric, inclined or generic sum at a
+time on the Julia threads of one process (start Julia with `--threads` at least that large): the modes the walks will
+ask for next are computed ahead, while the walks, stopping rules, sums and record keep the serial order, and a mode
+computed ahead is used only if it was computed with exactly the parameters the serial walk gives it, so the result
+equals the serial one. Circular equatorial orbits run serially.
 `progress = true` prints one line per finished shell (eccentric orbits). The result's `result.infinity_shells` and
 `result.horizon_shells` (eccentric orbits) hold every n shell's energy, angular-momentum and Carter-constant fluxes.
 Nearly polar orbits with `abs(x) < 1e-4` (including `x = 0`) are interpolated linearly between
@@ -2105,8 +2106,8 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
 
     orbit_type = _teukolsky_flux_orbit_type(e, x)
     mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
-    mode_parallelism > 1 && orbit_type != :eccentric &&
-        @warn "mode_parallelism > 1 is implemented for eccentric equatorial orbits only; this $(orbit_type) orbit runs serially." maxlog = 1
+    mode_parallelism > 1 && orbit_type == :circular &&
+        @warn "mode_parallelism > 1 does not apply to circular equatorial orbits; this one runs serially." maxlog = 1
     mode_parallelism > Threads.nthreads() &&
         @warn "mode_parallelism = $(mode_parallelism) exceeds the $(Threads.nthreads()) Julia threads; start Julia with --threads=$(mode_parallelism)." maxlog = 1
     t0 = time()
@@ -2116,9 +2117,9 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
         elseif orbit_type == :eccentric
             ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         elseif orbit_type == :inclined
-            ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         else
-            ModeSummation.generic_mode_summation(a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=generic_beta, deep=generic_deep, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.generic_mode_summation(a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=generic_beta, deep=generic_deep, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         end
     end
     cost = time() - t0
