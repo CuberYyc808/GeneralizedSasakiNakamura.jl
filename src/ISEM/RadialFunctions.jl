@@ -61,6 +61,7 @@ function teukolsky_horizon_pair(s, m, a, omega, lambda, r::Real)
         T(j, n) = p2[j + 1] * (n + rho) * (n + rho - 1) + p1[j + 1] * (n + rho) +
             p0[j + 1]
         coefficients = ComplexF64[1.0]
+        sizehint!(coefficients, 128)   # up to 400 terms; grown once instead of at every doubling
         value = 1.0 + 0.0im
         derivative = rho / z
         zn = 1.0
