@@ -193,7 +193,13 @@ function GSN_to_Y_solution_from_matrix(rstar_from_r, teukolsky_from_gsn_matrix, 
     else
         error("GSN_to_Y_solution_from_matrix supports only s = -2 and s = +2.")
     end
+    return _gsn_to_y_closure(rstar_from_r, gsn_solution, coeffs)
+end
 
+# The closure is built in a function of its own: `coeffs` is assigned in two branches above, so a closure defined
+# there would capture it boxed (every call then dispatches dynamically and boxes its results, a fifth of a mode's
+# allocation in the flux sums); here the three functions are captured with their concrete types.
+function _gsn_to_y_closure(rstar_from_r::F1, gsn_solution::F2, coeffs::F3) where {F1, F2, F3}
     return r -> begin
         rs = rstar_from_r(r)
         Xvals = gsn_solution(rs)
