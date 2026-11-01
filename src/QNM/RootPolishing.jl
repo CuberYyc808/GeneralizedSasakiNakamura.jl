@@ -2035,7 +2035,24 @@ function _extremal_ladder_family(mode::QNMMode, a, roots)
     family = !synchronous ? :DM :
         all(r -> r <= oftype(r, 0.7), ratios) ? :ZDM :
         all(r -> r >= oftype(r, 0.8), ratios) ? :DM : :ambiguous
-    return (family=family, ratios=ratios)
+    # One inaccurate rung makes both consecutive ratios uninformative (the (0, 1, 1, 1) rung at
+    # 1 - |a| = 1.25e-5 was 50% off its neighbours: ratios 0.75, 0.35). Then every pair (i, j)
+    # of the last four rungs is scored by log(d_j / d_i) / log(2^-(j - i)), 1 on a zero-damping
+    # branch and 0 on a damped one, and the median over the pairs decides.
+    score = oftype(ratios[1], NaN)
+    if family == :ambiguous && length(roots) >= 4
+        all_distances = [abs(root - target) for root in roots[end-3:end]]
+        if any(iszero, all_distances)
+            family = :ZDM
+        else
+            scores = [log(all_distances[j] / all_distances[i]) / (-(j - i) * log(2))
+                for i in 1:4 for j in i+1:4]
+            sort!(scores)
+            score = (scores[3] + scores[4]) / 2
+            family = score >= 0.6 ? :ZDM : score <= 0.3 ? :DM : :ambiguous
+        end
+    end
+    return (family=family, ratios=ratios, pair_score=score)
 end
 
 # Map a root solved at (-a, -m) to the requested (a, m); the frequency is
@@ -2052,6 +2069,18 @@ function _spin_reflected_result(
         end
     end
     mapped_a = -source.a
+    # A failed source root (NaN frequency, e.g. an exact-extremal ladder whose rungs failed) has no
+    # angular data to recompute; the failure is mapped as it is.
+    if !isfinite(source.omega)
+        return LeaverResult(
+            requested_mode, source.convention, source.overtone_index,
+            source.inversion_index, mapped_a, source.omega, source.angular_A,
+            source.lambda, source.mixing, source.cf_value, source.cf_error,
+            source.cf_iterations, source.root_residual, source.angular_residual,
+            source.precision_bits, source.status, source.stop_reason,
+            merge(source.provenance, (
+                spin_reflection=:nonfinite_source_root_mapped_unchanged,)))
+    end
     angular = angular_branch(
         requested_mode, mapped_a, source.omega;
         truncation_order=angular_order,

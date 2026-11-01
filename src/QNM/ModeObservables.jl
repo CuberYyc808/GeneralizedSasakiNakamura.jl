@@ -315,7 +315,21 @@ function _qnm_branch_observables(root, excitation_options;
     end
     detailed || return QNMResult(compact)
 
-    solutions = _qnm_radial_solutions(root)
+    # The callable X, Y, R come from the ISEM complex route at the root frequency, which can be
+    # unusable (its error estimate above 0.01, e.g. s = 2, a = 0.999, n = 2) where the observables
+    # above were still computed; the result then keeps its status and reports the missing solutions.
+    solutions = try
+        _qnm_radial_solutions(root)
+    catch error
+        return QNMResult(merge(compact, (
+            X=missing,
+            Y=missing,
+            R=missing,
+            solutions=missing,
+            solutions_error=sprint(showerror, error),
+            detailed=true,
+        )))
+    end
     teukolsky = (
         reflection_amplitude=excitation.reflection_teukolsky,
         incidence_derivative=excitation.alpha_teukolsky,
