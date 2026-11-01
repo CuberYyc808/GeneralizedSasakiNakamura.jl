@@ -56,6 +56,10 @@ mutable struct GenericGeometryOwner <: AbstractSubmissionGeometryOwner
     adaptive_segments::Dict{Tuple, Dict}
     adaptive_weights::Dict{Tuple, Vector{Float64}}
     geometries::IdDict{Dict, GenericM2Geometry}
+    # Adaptive radial Levin phase factorizations, which depend on (s, m, n, k) and the segment only, kept for the last
+    # LEVIN_PHASE_GROUPS (s, m, n, k) groups so that the l walk of one group builds them once (as for eccentric orbits).
+    levin_phase_factors::Dict{Tuple, Any}
+    levin_phase_groups::Vector{NTuple{4, Int}}
     lock::ReentrantLock
     context::NamedTuple
     stats::Dict{String, Int}
@@ -105,7 +109,7 @@ end
 
 GenericGeometryOwner(master::Dict; observer = nothing) = GenericGeometryOwner(master,
     Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Dict}(),
-    Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), ReentrantLock(),
+    Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), Dict{Tuple, Any}(), NTuple{4, Int}[], ReentrantLock(),
     _submission_geometry_context(), Dict{String, Int}(), observer, false)
 InclinedGeometryOwner(master::Dict; observer = nothing) = InclinedGeometryOwner(master, Dict{Int, Dict}(),
     Dict{Int, Dict}(), Dict{Int, Dict}(), ReentrantLock(),

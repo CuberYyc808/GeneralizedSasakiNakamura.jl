@@ -146,9 +146,10 @@ end
     teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start, R0, dR0, r_stop)
 
 As `teukolsky_taylor_chain`, but covering [r_stop, r_start] (r_+ < r_stop < r_start) by steps towards the horizon,
-under the same step-control invariant; `nothing` if it cannot be met.
+under the same step-control invariant with at most `max_patches` patches; `nothing` if it cannot be met.
 """
-function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64, R0, dR0, r_stop::Float64)
+function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64, R0, dR0, r_stop::Float64;
+        max_patches::Int = MAX_PATCHES)
     rplus = 1 + sqrt((1 - a) * (1 + a))
     (r_stop > rplus && r_start > r_stop) || return nothing
     P2r, P1r, P0r = _teukolsky_polynomials(s, m, a, omega, lambda)
@@ -157,7 +158,7 @@ function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64,
     buf = Vector{ComplexF64}(undef, ORDER + 1)
     r0 = r_start; R = ComplexF64(R0); dR = ComplexF64(dR0)
     while r0 > r_stop
-        length(centers) < MAX_PATCHES || return nothing
+        length(centers) < max_patches || return nothing
         _taylor!(buf, _shift(P2r, r0), _shift(P1r, r0), _shift(P0r, r0), R, dR)
         h = min(STEP_FRACTION * (r0 - rplus), r0 - r_stop)
         while true

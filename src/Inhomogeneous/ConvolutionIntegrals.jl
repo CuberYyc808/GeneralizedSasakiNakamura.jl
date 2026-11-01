@@ -764,6 +764,26 @@ end
 
 function _cached_generic_levin_phase_factor!(build::Function, cache, key::Tuple)
     cache isa GenericM2FluxCache || return build()
+    owner = cache.geometry_owner
+    if owner !== nothing && (key[1] === :adaptive_radial || key[1] === :adaptive_radial_in)
+        # (:adaptive_radial[_in], level_r, ib, s, m, n, k, sign, nr): shared by the l walk of (s, m, n, k)
+        group = (key[4], key[5], key[6], key[7])
+        return lock(owner.lock) do
+            owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
+            factors = owner.levin_phase_factors
+            haskey(factors, key) && return factors[key]
+            value = build()
+            if !(group in owner.levin_phase_groups)
+                push!(owner.levin_phase_groups, group)
+                while length(owner.levin_phase_groups) > LEVIN_PHASE_GROUPS
+                    old = popfirst!(owner.levin_phase_groups)
+                    filter!(entry -> (entry.first[4], entry.first[5], entry.first[6], entry.first[7]) != old, factors)
+                end
+            end
+            factors[key] = value
+            return value
+        end
+    end
     return get!(cache.levin_phase_factors, key) do
         build()
     end
@@ -2035,6 +2055,8 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     res["AdaptiveLevinSplitCount"] = split_count
     res["AdaptiveLevinRelErr"] = last_relerr
     res["AdaptiveLevinStopReason"] = stop_reason
+    res["AdaptiveLevinUnconverged"] = stop_reason == "inactive_or_max_depth" &&
+        any(leaf -> leaf.active && leaf.key.level_r >= max_depth, leaves)
     if zero_low_flux && amp == 0.0 + 0.0im
         res["LowFluxZeroed"] = true
     end
@@ -4027,9 +4049,10 @@ function _y_two_wave_chains(Yf, m::Int, lambda, r_low)
         chain_in = nothing, chain_out = nothing)
     Rin, dRin, Rout, dRout, _ = RF._infinity_solutions(-2, a, ω, ComplexF64(r_series), Yf.cin, Yf.cout)
     NHT = RF.NearHorizonTeukolsky
-    chain_in = NHT.teukolsky_taylor_chain_inward(-2, m, a, ω, lambda, r_series, Rin, dRin, r_low)
+    # high l and omega need many patches (640 at (l, m, n) = (80, 80, 5730) on the C02 orbit, from r = 80)
+    chain_in = NHT.teukolsky_taylor_chain_inward(-2, m, a, ω, lambda, r_series, Rin, dRin, r_low; max_patches = TWO_WAVE_MAX_PATCHES)
     chain_in === nothing && return nothing
-    chain_out = NHT.teukolsky_taylor_chain_inward(-2, m, a, ω, lambda, r_series, Rout, dRout, r_low)
+    chain_out = NHT.teukolsky_taylor_chain_inward(-2, m, a, ω, lambda, r_series, Rout, dRout, r_low; max_patches = TWO_WAVE_MAX_PATCHES)
     chain_out === nothing && return nothing
     # Below a turning point (omega^2 under the potential: high l, low omega) the two infinity solutions grow apart from
     # Y and cancel in it ((12, 3, 150): (|Y_in| + |Y_out|) / |Y| = 6e5 at r = 10, 2e29 at r = 2, where the split Y was
@@ -4064,6 +4087,7 @@ const TWO_WAVE_CANCELLATION = 10.0
 const TWO_WAVE_CANCELLATION_SCAN = 64
 const TWO_WAVE_CANCELLATION_WINDOW = 4
 const TWO_WAVE_CHECK_EVERY = 8
+const TWO_WAVE_MAX_PATCHES = 4096
 
 function _y_two_wave(Ysol, s::Int, l::Int, m::Int, a, ω; r_low = nothing)
     (s == -2 && ω isa Real && ω > 0) || return nothing
@@ -4577,6 +4601,10 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     res["AdaptiveLevinSegmentEvaluations"] = segment_evaluations
     res["AdaptiveLevinSplitCount"] = split_count
     res["AdaptiveLevinStopReason"] = stop_reason
+    # "inactive_or_max_depth" ends the refinement without a convergence or low-flux verdict; when an active leaf sits
+    # at max_depth the returned amplitude is not converged (metadata only, the value is unchanged)
+    res["AdaptiveLevinUnconverged"] = stop_reason == "inactive_or_max_depth" &&
+        any(leaf -> leaf.active && leaf.level >= max_depth, leaves)
     return res
 end
 
