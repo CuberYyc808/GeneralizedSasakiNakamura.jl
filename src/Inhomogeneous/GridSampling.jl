@@ -985,13 +985,9 @@ end
     end
 end
 
-function _y_sample_isem(Y_soln, KG_sample::Dict, amplitude_key::String; threaded::Bool = false)
-    r_vals = KG_sample["r"]
-    n = length(r_vals)
-    Y_vals = Vector{ComplexF64}(undef, n)
-    Yp_vals = Vector{ComplexF64}(undef, n)
-    X_vals = Vector{ComplexF64}(undef, n)
-    Y = Y_soln.Y_solution
+# (Y, Y', X) of the Y solution at r_vals into the three vectors. A function of its own: the Y solution is held in a
+# field of abstract type, and a loop calling it in the caller would dispatch dynamically and box every result.
+function _fill_y_sample!(Y_vals, Yp_vals, X_vals, r_vals, Y, threaded::Bool)
     if threaded
         Threads.@threads :dynamic for i in eachindex(r_vals)
             Yi, Ypi, Xi, _ = Y(r_vals[i])
@@ -1007,6 +1003,16 @@ function _y_sample_isem(Y_soln, KG_sample::Dict, amplitude_key::String; threaded
             X_vals[i] = Xi
         end
     end
+    return nothing
+end
+
+function _y_sample_isem(Y_soln, KG_sample::Dict, amplitude_key::String; threaded::Bool = false)
+    r_vals = KG_sample["r"]
+    n = length(r_vals)
+    Y_vals = Vector{ComplexF64}(undef, n)
+    Yp_vals = Vector{ComplexF64}(undef, n)
+    X_vals = Vector{ComplexF64}(undef, n)
+    _fill_y_sample!(Y_vals, Yp_vals, X_vals, r_vals, Y_soln.Y_solution, threaded)
     return Dict(
         "Y" => Y_vals,
         "Yp" => Yp_vals,
@@ -1020,11 +1026,13 @@ end
 function y_cheb_table(Y_soln, rmin::Float64, rmax::Float64, M::Int)
     xs = [cos(pi * j / (M - 1)) for j in 0:(M - 1)]
     rs = 0.5 .* (rmin + rmax) .+ 0.5 .* (rmax - rmin) .* xs
-    Y = Y_soln.Y_solution
-    vals = [Y(r) for r in rs]
+    Yv = Vector{ComplexF64}(undef, M)
+    Ypv = Vector{ComplexF64}(undef, M)
+    Xv = Vector{ComplexF64}(undef, M)
+    _fill_y_sample!(Yv, Ypv, Xv, rs, Y_soln.Y_solution, false)
     return (rmin = rmin, rmax = rmax, x = xs,
             w = [(isodd(j) ? -1.0 : 1.0) * ((j == 0 || j == M - 1) ? 0.5 : 1.0) for j in 0:(M - 1)],
-            Y = ComplexF64[v[1] for v in vals], Yp = ComplexF64[v[2] for v in vals], X = ComplexF64[v[3] for v in vals])
+            Y = Yv, Yp = Ypv, X = Xv)
 end
 
 function _bary_eval(tab, r::Float64)
@@ -1187,39 +1195,34 @@ function _refine_y_sample(Y_soln, Y_sample::Dict, next_sample::Dict; threaded::B
     next_points >= prev_points || throw(ArgumentError("next_sample must not be coarser than prev Y sample"))
     next_points == prev_points && return Y_sample
     out = Dict{Any, Any}()
-    out["Y"] = Vector{ComplexF64}(undef, next_points)
-    out["Yp"] = Vector{ComplexF64}(undef, next_points)
-    out["X"] = Vector{ComplexF64}(undef, next_points)
-    Y = Y_soln.Y_solution
-    if threaded
-        Threads.@threads :dynamic for i in 1:next_points
-            if isodd(i)
-                j = (i + 1) >>> 1
-                out["Y"][i] = Y_sample["Y"][j]
-                out["Yp"][i] = Y_sample["Yp"][j]
-                out["X"][i] = Y_sample["X"][j]
-            else
-                Yi, Ypi, Xi, _ = Y(next_sample["r"][i])
-                out["Y"][i] = Yi
-                out["Yp"][i] = Ypi
-                out["X"][i] = Xi
-            end
-        end
-    else
-        @inbounds for i in 1:next_points
-            if isodd(i)
-                j = (i + 1) >>> 1
-                out["Y"][i] = Y_sample["Y"][j]
-                out["Yp"][i] = Y_sample["Yp"][j]
-                out["X"][i] = Y_sample["X"][j]
-            else
-                Yi, Ypi, Xi, _ = Y(next_sample["r"][i])
-                out["Y"][i] = Yi
-                out["Yp"][i] = Ypi
-                out["X"][i] = Xi
-            end
+    Y_out = Vector{ComplexF64}(undef, next_points)
+    Yp_out = Vector{ComplexF64}(undef, next_points)
+    X_out = Vector{ComplexF64}(undef, next_points)
+    # the odd points are the previous sample, the even ones are new (see _fill_y_sample! for the barrier)
+    r_new = Vector{Float64}(next_sample["r"]::AbstractVector)[2:2:next_points]
+    Y_new = Vector{ComplexF64}(undef, length(r_new))
+    Yp_new = Vector{ComplexF64}(undef, length(r_new))
+    X_new = Vector{ComplexF64}(undef, length(r_new))
+    _fill_y_sample!(Y_new, Yp_new, X_new, r_new, Y_soln.Y_solution, threaded)
+    Y_prev = Y_sample["Y"]::Vector{ComplexF64}
+    Yp_prev = Y_sample["Yp"]::Vector{ComplexF64}
+    X_prev = Y_sample["X"]::Vector{ComplexF64}
+    @inbounds for i in 1:next_points
+        if isodd(i)
+            j = (i + 1) >>> 1
+            Y_out[i] = Y_prev[j]
+            Yp_out[i] = Yp_prev[j]
+            X_out[i] = X_prev[j]
+        else
+            j = i >>> 1
+            Y_out[i] = Y_new[j]
+            Yp_out[i] = Yp_new[j]
+            X_out[i] = X_new[j]
         end
     end
+    out["Y"] = Y_out
+    out["Yp"] = Yp_out
+    out["X"] = X_out
     _copy_y_metadata!(out, Y_sample)
     return out
 end
@@ -2477,8 +2480,8 @@ end
     Mbar = im * (a * energy - angular_momentum)
     Mbar2 = Mbar * Mbar
     qstep = count > 1 ? pi / (count - 1) : 0.0
-    phase0 = m * (delta_phir_func(qr0) - qphi0) -
-        omega * (delta_tr_func(qr0) - qt0) - n * qr0
+    phase0 = Float64(m * (delta_phir_func(qr0) - qphi0) -
+        omega * (delta_tr_func(qr0) - qt0) - n * qr0)::Float64
     prefactor = 4im * pi * omega * cis(phase0) / (gamma * Binc)
     total = 0.0 + 0.0im
 
@@ -2580,8 +2583,8 @@ end
          8im * a^3 * rp * (m * (7 + lambda - 6im * omega) -
           a * omega * (4 + lambda)) +
          12 * a^5 * omega * (a * omega - 3 * m))
-    phase0 = m * (delta_phir_func(qr0) - qphi0) -
-        omega * (delta_tr_func(qr0) - qt0) - n * qr0
+    phase0 = Float64(m * (delta_phir_func(qr0) - qphi0) -
+        omega * (delta_tr_func(qr0) - qt0) - n * qr0)::Float64
     prefactor = -im * pi * factor * eta * cis(phase0) /
         (gamma * Cinc * kappa)
     total = 0.0 + 0.0im
