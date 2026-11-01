@@ -1,6 +1,6 @@
 module NearHorizonTeukolsky
 
-export TeukolskyTaylorChain, teukolsky_taylor_chain, teukolsky_taylor_state
+export TeukolskyTaylorChain, TeukolskyInwardChain, teukolsky_taylor_chain, teukolsky_taylor_chain_inward, teukolsky_taylor_state
 
 # Taylor series of the radial Teukolsky equation (M = 1) at real r > r_+,
 #     Delta^2 R'' + (s + 1) Delta Delta' R' + [K^2 - 2 i s (r - 1) K + Delta (4 i s omega r - lambda)] R = 0,
@@ -133,6 +133,56 @@ function teukolsky_taylor_state(chain::TeukolskyTaylorChain, r::Real)
     # callers stay inside [starts[1], stops[end]]; the clamp only absorbs rounding at the two ends
     i = clamp(searchsortedlast(chain.starts, rr), 1, length(chain.starts))
     return _horner(chain.coeffs, (i - 1) * (ORDER + 1), rr - chain.starts[i])
+end
+
+# Inward chain: patch i is expanded about centers[i] and covers [lows[i], centers[i]]; both vectors ascend.
+struct TeukolskyInwardChain
+    lows::Vector{Float64}
+    centers::Vector{Float64}
+    coeffs::Vector{ComplexF64}
+end
+
+"""
+    teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start, R0, dR0, r_stop)
+
+As `teukolsky_taylor_chain`, but covering [r_stop, r_start] (r_+ < r_stop < r_start) by steps towards the horizon,
+under the same step-control invariant; `nothing` if it cannot be met.
+"""
+function teukolsky_taylor_chain_inward(s, m, a, omega, lambda, r_start::Float64, R0, dR0, r_stop::Float64)
+    rplus = 1 + sqrt((1 - a) * (1 + a))
+    (r_stop > rplus && r_start > r_stop) || return nothing
+    P2r, P1r, P0r = _teukolsky_polynomials(s, m, a, omega, lambda)
+    lows = Float64[]; centers = Float64[]
+    coeffs = ComplexF64[]
+    buf = Vector{ComplexF64}(undef, ORDER + 1)
+    r0 = r_start; R = ComplexF64(R0); dR = ComplexF64(dR0)
+    while r0 > r_stop
+        length(centers) < MAX_PATCHES || return nothing
+        _taylor!(buf, _shift(P2r, r0), _shift(P1r, r0), _shift(P0r, r0), R, dR)
+        h = min(STEP_FRACTION * (r0 - rplus), r0 - r_stop)
+        while true
+            v, _ = _horner(buf, 0, -h)
+            tail = (abs(buf[ORDER]) * h^(ORDER - 1) + abs(buf[ORDER + 1]) * h^ORDER) / max(abs(v), floatmin(Float64))
+            tail <= TRUNCATION_TOL && break
+            h /= 2
+            h >= MIN_STEP_FRACTION * (r0 - rplus) || return nothing
+        end
+        r1 = (r0 - h) - r_stop <= 4eps(r_stop) ? r_stop : r0 - h
+        R, dR = _horner(buf, 0, r1 - r0)
+        push!(lows, r1); push!(centers, r0); append!(coeffs, buf)
+        r0 = r1
+    end
+    n = length(centers)
+    order = n:-1:1
+    perm = reduce(vcat, ((i - 1) * (ORDER + 1) + 1:i * (ORDER + 1) for i in order); init = Int[])
+    return TeukolskyInwardChain(lows[order], centers[order], coeffs[perm])
+end
+
+function teukolsky_taylor_state(chain::TeukolskyInwardChain, r::Real)
+    rr = Float64(r)
+    # the patch with the smallest center >= r; the clamp only absorbs rounding at the two ends
+    i = clamp(searchsortedfirst(chain.centers, rr), 1, length(chain.centers))
+    return _horner(chain.coeffs, (i - 1) * (ORDER + 1), rr - chain.centers[i])
 end
 
 end

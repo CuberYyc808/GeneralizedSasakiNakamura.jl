@@ -744,12 +744,38 @@ function eccentric_segment_phase_basis_cache(KG_samp::Dict)
     )
 end
 
+# The geometry and s = -2 phase basis of a segment bundle as typed vectors, for the fused s = -2 segment kernel of the
+# adaptive Levin integral (same values as the "geometry" and "phase_basis" entries).
+struct EccentricSegmentKernel
+    r::Vector{Float64}
+    rs::Vector{Float64}
+    rho::Vector{Float64}
+    inv_rho::Vector{Float64}
+    r2::Vector{Float64}
+    sqrt_r2a2::Vector{Float64}
+    Np::Vector{Float64}
+    Nm::Vector{Float64}
+    internal_m::Vector{Float64}
+    internal_n::Vector{Float64}
+    external_m::Vector{Float64}
+    external_n::Vector{Float64}
+    Mbar::ComplexF64
+end
+
+EccentricSegmentKernel(KG_samp::Dict, geometry::Dict, phase_basis::Dict) = EccentricSegmentKernel(
+    KG_samp["r"], KG_samp["rs"], geometry["rho"], geometry["inv_rho"], geometry["r2"], geometry["sqrt_r2a2"],
+    geometry["Np"], geometry["Nm"], phase_basis["internal_m_m2"], phase_basis["internal_n_m2"],
+    phase_basis["external_m"], phase_basis["external_n"], geometry["Mbar_base"])
+
 function eccentric_segment_sample_bundle_cheby(KG::Dict, qlo::Real, qhi::Real, N_sample::Int64)
     KG_samp = kerr_geo_eccentric_segment_sample_cheby(KG, qlo, qhi, N_sample)
+    geometry = eccentric_segment_geometry_cache(KG_samp)
+    phase_basis = eccentric_segment_phase_basis_cache(KG_samp)
     return Dict{String, Any}(
         "sample" => KG_samp,
-        "geometry" => eccentric_segment_geometry_cache(KG_samp),
-        "phase_basis" => eccentric_segment_phase_basis_cache(KG_samp),
+        "geometry" => geometry,
+        "phase_basis" => phase_basis,
+        "kernel" => EccentricSegmentKernel(KG_samp, geometry, phase_basis),
     )
 end
 

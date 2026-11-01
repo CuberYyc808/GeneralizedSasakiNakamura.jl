@@ -61,8 +61,8 @@ mutable struct PublicSubmission
 end
 
 _public_family(e, x) = (x == 1 || x == -1) ? (e == 0 ? :circular : :eccentric) : (e == 0 ? :inclined : :generic)
-_public_context() = (precision_bits = precision(BigFloat), rounding_mode = rounding(BigFloat),
-    kg_module = KerrGeodesics, kg_version = Base.pkgversion(KerrGeodesics), kg_path = pathof(KerrGeodesics))
+# the same context as a geometry owner's (precision, rounding, loaded KerrGeodesics), checked at every mode admission
+_public_context() = ConvolutionIntegrals._submission_geometry_context()
 
 # New submission for one orbit (a, p, e, x) and sampling-grid caps Nmax, Kmax. Orbit, dense sample and
 # geometry owner are built lazily on first use.
