@@ -2070,11 +2070,13 @@ shell that is still growing does not count towards the stop, and the positive-m
 walk only stops more than 5 past the m with the largest shell.
 Pass `submission` (see `with_pointparticle_submission`) to reuse the orbit's
 sampling geometry across calls.
-`mode_parallelism` (default 1, serial) computes up to that many modes of an eccentric, inclined or generic sum at a
-time on the Julia threads of one process (start Julia with `--threads` at least that large): the modes the walks will
-ask for next are computed ahead, while the walks, stopping rules, sums and record keep the serial order, and a mode
-computed ahead is used only if it was computed with exactly the parameters the serial walk gives it, so the result
-equals the serial one. Circular equatorial orbits run serially.
+`mode_parallelism` (default 1, serial) computes the l walks of an eccentric, inclined or generic sum ahead on the
+Julia threads of one process (start Julia with `--threads` at least that large): the l walks of a shell depend on the
+shell's parameters only, so each is computed as a whole on its own task, the walks of a shell planned from the reach
+of the previous shell, and the two boundaries run concurrently; the summation takes the walks in its serial order and
+applies the stopping rules, sums and record in that order, so the result equals the serial one (the n = 0 shell of
+eccentric and generic orbits and the k = 0 shell of inclined ones, whose cutoffs follow their running sums, stay
+serial). Circular equatorial orbits run serially.
 `progress = true` prints one line per finished shell. The result's `result.infinity_shells` and `result.horizon_shells`
 hold every shell's energy, angular-momentum and Carter-constant fluxes: n shells for eccentric and generic orbits,
 k shells (index `k`) for inclined ones.
