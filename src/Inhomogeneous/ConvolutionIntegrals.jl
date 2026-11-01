@@ -775,7 +775,8 @@ function _cached_generic_levin_phase_factor!(build::Function, cache, key::Tuple)
             value = build()
             if !(group in owner.levin_phase_groups)
                 push!(owner.levin_phase_groups, group)
-                while length(owner.levin_phase_groups) > LEVIN_PHASE_GROUPS
+                # one group per concurrently computed mode (ModeSummation._ModePrefetch), else one
+            while length(owner.levin_phase_groups) > max(LEVIN_PHASE_GROUPS, Threads.nthreads())
                     old = popfirst!(owner.levin_phase_groups)
                     filter!(entry -> (entry.first[4], entry.first[5], entry.first[6], entry.first[7]) != old, factors)
                 end
@@ -3995,7 +3996,8 @@ function _cached_levin_phase_factors!(build, cache, key::NTuple{7, Int})
         value = build()
         if !(group in owner.levin_phase_groups)
             push!(owner.levin_phase_groups, group)
-            while length(owner.levin_phase_groups) > LEVIN_PHASE_GROUPS
+            # one group per concurrently computed mode (ModeSummation._ModePrefetch), else one
+            while length(owner.levin_phase_groups) > max(LEVIN_PHASE_GROUPS, Threads.nthreads())
                 old = popfirst!(owner.levin_phase_groups)
                 filter!(entry -> (entry.first[1], entry.first[2], entry.first[3]) != old, factors)
             end
