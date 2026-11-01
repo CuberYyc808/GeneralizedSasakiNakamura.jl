@@ -2074,6 +2074,8 @@ sampling geometry across calls.
 Julia threads of one process (start Julia with `--threads` at least that large): within each n shell the modes the
 walks will ask for next are computed ahead, while the walks, stopping rules, sums and record keep the serial order, so
 the result equals the serial one. Other orbit types run serially.
+`progress = true` prints one line per finished shell (eccentric orbits). The result's `result.infinity_shells` and
+`result.horizon_shells` (eccentric orbits) hold every n shell's energy, angular-momentum and Carter-constant fluxes.
 Nearly polar orbits with `abs(x) < 1e-4` (including `x = 0`) are interpolated linearly between
 `x = -1e-4` and `x = 1e-4`, which costs two summations; `reached.small_x_interpolation` records it
 and `submission` is not used for them.
@@ -2084,7 +2086,7 @@ Carter-constant fluxes at infinity and at the horizon, or `nothing` (with a
 warning) when `(a, p, e, x)` is neither a stable bound orbit nor a marginally
 stable (critical) bound circular orbit, as classified by KerrGeodesics.
 """
-function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
+function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
     # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
     a, p, e, x = _pointparticle_float(a, p, e, x)
     if !_teukolsky_flux_bound_orbit(a, p, e, x)
@@ -2097,7 +2099,7 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
             Teukolsky_pointparticle_flux(a, p, e, xs; submission = nothing, tol, lmax, nmax, kmax, minimum_consecutive, N, N0, K, K0,
                 Nmax, Kmax, sample_tol, record = rec && record, record_path, fast, truncation_floor, mode_abs_floor, zero_low_flux,
                 threaded_sampling, neg_branch_scale, generic_beta, generic_deep, tail_levin, tail_levin_infinity, tail_levin_horizon,
-                levin_nmin, levin_mode_abs_floor, levin_local_n, levin_max_depth, mode_parallelism, info, stop_requested, lifecycle_observer)
+                levin_nmin, levin_mode_abs_floor, levin_local_n, levin_max_depth, mode_parallelism, progress, info, stop_requested, lifecycle_observer)
         end
     end
 
@@ -2112,7 +2114,7 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
         if orbit_type == :circular
             ModeSummation.circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = something(minimum_consecutive, 5), submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         elseif orbit_type == :eccentric
-            ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         elseif orbit_type == :inclined
             ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         else

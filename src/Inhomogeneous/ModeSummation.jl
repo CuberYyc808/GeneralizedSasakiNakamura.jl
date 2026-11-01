@@ -777,7 +777,11 @@ function _prefetch_spawn!(pf::_ModePrefetch, key::NTuple{4, Int}, max_flux)
     # with it its mode result, registered until release: the heap grew with the modes and GC took 60% of the run.)
     pf.computed += 1
     pf.tasks[key] = Threads.@spawn try
-        (true, compute(s, l, m, n, max_flux, use_levin, shell...))
+        mode = compute(s, l, m, n, max_flux, use_levin, shell...)
+        # the walk reads only the mode's scalars: drop the trajectory, radial and angular objects, so that at most
+        # parallelism small results wait in the queue
+        mode isa AbstractDict && foreach(k -> delete!(mode, k), ("Trajectory", "YSolution", "SWSH"))
+        (true, mode)
     catch error
         (false, error)
     end
@@ -814,7 +818,7 @@ function (pf::_ModePrefetch)(s, l, m, n, max_flux, tail_values)
     return pf.accept!(s, l, m, n, value)
 end
 
-function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1)
+function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false)
     rules = orbit_rules(a, p, e, x)
     mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
     if e == 0.0
@@ -843,6 +847,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     KG_sample = submission_master!(scope)
     Energy_flux_inf = Vector{Float64}()
     Energy_flux_hor = Vector{Float64}()
+    # angular-momentum and Carter-constant shells, alongside the energy shells (the n of each shell in n_list_*)
+    Angular_flux_inf = Vector{Float64}()
+    Angular_flux_hor = Vector{Float64}()
+    Carter_flux_inf = Vector{Float64}()
+    Carter_flux_hor = Vector{Float64}()
     n_list_inf = Vector{Int64}()
     n_list_hor = Vector{Int64}()
     model(x, p) = p[1] .* (x .+ 1) .^p[2] .* exp.(-p[3] .* x)
@@ -871,6 +880,17 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     shell_n_horizon_carter = 0.0
     below_count_m = 0
     mode_index = Ref(0)
+    # progress = true: one line per finished n shell on stdout (the number of shells is not known in advance)
+    t_start = time()
+    shells_done = Ref(0)
+    log_shell = (branch, n, E, L, Q) -> begin
+        progress || return nothing
+        shells_done[] += 1
+        @printf("GSN shell (a, p, e, x) = (%s, %s, %s, %s) lmax=%d nmax=%d branch=%s n=%d E=%.6e L=%.6e Q=%.6e modes=%d shells_done=%d elapsed=%.1fs\n",
+            a, p, e, x, lmax, nmax, branch, n, E, L, Q, total_modes, shells_done[], time() - t_start)
+        flush(stdout)
+        return nothing
+    end
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
     adaptive_local_n = levin_local_n
     tail_policy = _tail_policy(tail_levin)
@@ -1061,6 +1081,10 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     push!(Energy_flux_hor, shell_n_horizon_energy)
     push!(n_list_inf, 0)
     push!(n_list_hor, 0)
+    push!(Angular_flux_inf, shell_n_infinity_angular); push!(Carter_flux_inf, shell_n_infinity_carter)
+    push!(Angular_flux_hor, shell_n_horizon_angular); push!(Carter_flux_hor, shell_n_horizon_carter)
+    log_shell("infinity", 0, shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
+    log_shell("horizon", 0, shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
     total_infinity_energy += shell_n_infinity_energy
     total_infinity_angular += shell_n_infinity_angular
     total_infinity_carter += shell_n_infinity_carter
@@ -1210,6 +1234,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
         push!(Energy_flux_inf, shell_n_infinity_energy)
         push!(n_list_inf, n)
+        push!(Angular_flux_inf, shell_n_infinity_angular); push!(Carter_flux_inf, shell_n_infinity_carter)
+        log_shell("infinity", n, shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
         last_shell_inf = (shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter)
         total_infinity_energy += shell_n_infinity_energy
         total_infinity_angular += shell_n_infinity_angular
@@ -1364,6 +1390,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
 
         push!(Energy_flux_hor, shell_n_horizon_energy)
         push!(n_list_hor, n)
+        push!(Angular_flux_hor, shell_n_horizon_angular); push!(Carter_flux_hor, shell_n_horizon_carter)
+        log_shell("horizon", n, shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
         last_shell_hor = (shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter)
         total_horizon_energy += shell_n_horizon_energy
         total_horizon_angular += shell_n_horizon_angular
@@ -1460,6 +1488,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         n_tail_horizon = (energy = n_tail_hor[1], angular_momentum = n_tail_hor[2], carter_constant = n_tail_hor[3], ratio = tail_ratio_hor),
         infinity_energy_flux_list = Energy_flux_inf,
         horizon_energy_flux_list = Energy_flux_hor,
+        # every n shell of the run (symmetry weights included; the totals are their sums plus n_tail_*)
+        infinity_shells = (n = n_list_inf, energy = Energy_flux_inf, angular_momentum = Angular_flux_inf, carter_constant = Carter_flux_inf),
+        horizon_shells = (n = n_list_hor, energy = Energy_flux_hor, angular_momentum = Angular_flux_hor, carter_constant = Carter_flux_hor),
         record_file = record ? record_path : nothing,
     )
     finally
@@ -1470,13 +1501,13 @@ end
 
 # Total eccentric equatorial fluxes: n = 0 shell, then n = 1, 2, ... shells (each over m >= 1, m <= -1 and l),
 # until minimum_consecutive + 1 n shells are below tol times the branch total. See Teukolsky_pointparticle_flux.
-function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
     caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn
             with_submission_operation(scope) do
-                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism)
+                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress)
             end
         end
     end
