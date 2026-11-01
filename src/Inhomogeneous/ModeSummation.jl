@@ -779,7 +779,7 @@ function (pf::_WalkPrefetch)(key::NTuple{4, Int}; ahead = ())
     delete!(pf.tasks, key)
     ok || throw(value)
     pf.walks_used += 1
-    pf.modes += _walk_length(value)
+    pf.modes += _walk_length(value) + _walk_unused(value)
     pf.modes_used += _walk_length(value)
     return value
 end
@@ -789,12 +789,13 @@ function _walk_discard!(pf::_WalkPrefetch)
     for key in collect(keys(pf.tasks))
         ok, value = fetch(pf.tasks[key][2])
         delete!(pf.tasks, key)
-        ok && (pf.modes += _walk_length(value))
+        ok && (pf.modes += _walk_length(value) + _walk_unused(value))
     end
     return nothing
 end
 
 _walk_length(walk) = walk isa AbstractVector ? length(walk) : length(walk.modes)
+_walk_unused(walk) = walk isa NamedTuple && haskey(walk, :unused) ? walk.unused : 0
 
 # the summation reads only the scalars of a mode computed ahead: drop the trajectory, radial and angular objects
 _strip_mode!(mode) = (mode isa AbstractDict && foreach(k -> delete!(mode, k), ("Trajectory", "YSolution", "SWSH")); mode)
@@ -804,15 +805,33 @@ const _PROGRESS_LOCK = ReentrantLock()
 # One l walk of the eccentric sum: the modes (s, l, m, n), l = max(2, |m|)..lmax, until minimum_consecutive modes are
 # below the shell cutoff, from the shell's parameters q only (max_flux, use_levin, floor, levin_floor, levin_abs of
 # the modes; branch_floor and threshold of the cutoff: tol times the previous n shell, or, for m = 0, tol times the
-# running m shell when threshold === nothing). Returns the (l, mode) in walk order; `strip` drops the large members
-# of the mode Dicts. A mode's non-finite flux is the error of the walk.
+# running m shell when threshold === nothing). Computed ahead (`strip`, which also drops the large members of the mode
+# Dicts) with q.l_pred, the last l of this m in the previous shell, the modes up to l_pred are computed on tasks of
+# their own at once (the walk is otherwise the critical path of a shell: at e = 0.7 the m = 0 walk alone took a third
+# of the shell's time on 8 threads), the stop rule applied to them in order; a mode beyond the stop is waited for and
+# dropped (counted in `unused`). Returns (modes = the (l, mode) in walk order, unused). A mode's non-finite flux is
+# the error of the walk.
 function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimum_consecutive::Int, tol::Float64, strip::Bool)
-    factors = Dict{Any, Any}()
+    lmin = max(2, abs(m))
+    l_pred = strip ? q.l_pred : nothing
+    speculate = l_pred !== nothing && l_pred > lmin
+    factors = speculate ? ConvolutionIntegrals._SharedFactors() : Dict{Any, Any}()
+    ahead = Dict{Int, Task}()
+    if speculate
+        for l in lmin:min(lmax, l_pred)
+            ahead[l] = Threads.@spawn try
+                compute(s, l, m, n, q, factors)
+            finally
+                ConvolutionIntegrals.ISEM.release_task_arenas!()   # the task's ISEM series arenas go to the next task
+            end
+        end
+    end
     modes = Tuple{Int, Any}[]
     running = 0.0
     below = 0
-    for l in max(2, abs(m)):lmax
-        mode = compute(s, l, m, n, q, factors)
+    for l in lmin:lmax
+        task = pop!(ahead, l, nothing)
+        mode = task === nothing ? compute(s, l, m, n, q, factors) : _fetch_mode(task)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
         strip && _strip_mode!(mode)
         push!(modes, (l, mode))
@@ -822,7 +841,24 @@ function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimu
         below = abs(E) <= _mode_cutoff_threshold(base, q.branch_floor) ? below + 1 : 0
         below >= minimum_consecutive && break
     end
-    return modes
+    unused = 0
+    for (_, task) in ahead
+        # beyond the stop: the serial walk never computes these, so their errors do not count
+        try
+            wait(task)
+        catch
+        end
+        unused += 1
+    end
+    return (modes = modes, unused = unused)
+end
+
+function _fetch_mode(task::Task)
+    try
+        return fetch(task)
+    catch error
+        error isa TaskFailedException ? throw(error.task.result) : rethrow()
+    end
 end
 
 # The n >= 1 shells of one boundary of the eccentric sum (s = -2: infinity, 2: horizon), after its n = 0 shell: the
@@ -845,13 +881,21 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
     # |m| reached by the previous n shell's walks; an m shell counts toward the stop only past MWALK_REACH_FRACTION of it
     prev_reach_pos = n0_reach
     prev_reach_neg = n0_reach
+    # last l of each m walk of the previous shell (the l the walks computed ahead speculate up to)
+    prev_l_reach = Dict{Int, Int}()
+    l_reach = Dict{Int, Int}()
     params_for = nothing
     # the walk of (m, n), computed ahead or now; a walk beyond the plan starts the next two of its direction
     take = m -> begin
         key = (s, m, n_current[], 0)
-        prefetch === nothing && return run(key, params_for(key))
-        step = m >= 0 ? 1 : -1
-        return prefetch(key; ahead = [(s, mm, n_current[], 0) for mm in (m + step):step:(m + 2step) if abs(mm) <= lmax])
+        walk = if prefetch === nothing
+            run(key, params_for(key))
+        else
+            step = m >= 0 ? 1 : -1
+            prefetch(key; ahead = [(s, mm, n_current[], 0) for mm in (m + step):step:(m + 2step) if abs(mm) <= lmax])
+        end
+        isempty(walk.modes) || (l_reach[m] = walk.modes[end][1])
+        return walk.modes
     end
     n_current = Ref(0)
     for n in 1:nmax
@@ -865,7 +909,8 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
         layer_threshold = _mode_cutoff_threshold(base_threshold, branch_floor)
         shell_q = (max_flux = 2 * E_estimate, floor = mode_floor, levin_floor = levin_floor, levin_abs = levin_abs, branch_floor = branch_floor)
         # the Levin choice of (s, m, n) carries the serial bookkeeping: asked in the serial m order (m = 0, 1, .., -1, ..)
-        params_for = key -> (; shell_q..., use_levin = ctx.use_levin(s, key[2], n), threshold = key[2] == 0 ? nothing : base_threshold)
+        params_for = key -> (; shell_q..., use_levin = ctx.use_levin(s, key[2], n), threshold = key[2] == 0 ? nothing : base_threshold,
+            l_pred = get(prev_l_reach, key[2], nothing))
         if prefetch !== nothing
             prefetch.params_for = params_for
             _walk_plan!(prefetch, [(s, 0, n, 0); [(s, m, n, 0) for m in 1:min(lmax, prev_reach_pos + 1)];
@@ -968,6 +1013,8 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
             end
         end
         prefetch === nothing || _walk_discard!(prefetch)
+        prev_l_reach = l_reach
+        l_reach = Dict{Int, Int}()
         shell_n_energy_last = shell_n_energy
         prev_peak_m_pos = Max_m
         prev_peak_m_neg = Max_m_neg

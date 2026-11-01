@@ -166,8 +166,9 @@ mutable struct EccentricFluxCache
     levin_factored_phase_factors::Dict{Tuple{Int, Int, Int, Int, UInt64}, Any}
     geometry_owner::Union{Nothing, EccentricGeometryOwner}
     # Adaptive Levin phase factorizations shared by the modes of one l walk (see _cached_levin_phase_factors!): set by
-    # the walk on each of its mode caches, owned by the walk, not cleared with the cache.
-    walk_factors::Union{Nothing, Dict{Any, Any}}
+    # the walk on each of its mode caches, owned by the walk, not cleared with the cache. A Dict when the walk computes
+    # its modes one after the other, a _SharedFactors when it computes them on several tasks.
+    walk_factors::Any
 end
 
 mutable struct InclinedFluxCache
@@ -640,7 +641,7 @@ mutable struct GenericM2FluxCache
     adaptive_levin_weights::Dict{Tuple, Vector{Float64}}
     geometry_owner::Union{Nothing, GenericGeometryOwner}
     # adaptive radial Levin phase factorizations shared by the modes of one l walk, as in EccentricFluxCache
-    walk_factors::Union{Nothing, Dict{Any, Any}}
+    walk_factors::Any
 end
 
 GenericM2FluxCache(samples, mcaches, levin_samples, phase_factors, phase_bases, segments, adaptive_bases, weights) =
@@ -774,7 +775,7 @@ function _cached_generic_levin_phase_factor!(build::Function, cache, key::Tuple)
     if cache.walk_factors !== nothing && (key[1] === :adaptive_radial || key[1] === :adaptive_radial_in)
         # (:adaptive_radial[_in], level_r, ib, s, m, n, k, sign, nr) depends on (s, m, n, k) and the segment only:
         # shared by the modes of the l walk of (s, m, n, k) through the walk's own dictionary (one task per walk)
-        return get!(build, cache.walk_factors, key)
+        return _walk_factors_get!(build, cache.walk_factors, key)
     end
     return get!(cache.levin_phase_factors, key) do
         build()
@@ -3978,7 +3979,62 @@ end
 function _cached_levin_phase_factors!(build, cache, key::NTuple{7, Int})
     factors = cache isa EccentricFluxCache ? cache.walk_factors : nothing
     factors === nothing && return build()
-    return get!(build, factors, key)
+    return _walk_factors_get!(build, factors, key)
+end
+
+# Phase factorizations shared by the modes of one l walk computed on several tasks: each key is built once, by the
+# first task that needs it, outside the lock; the others wait for it (and build it themselves if that build fails).
+mutable struct _FactorBuild
+    done::Threads.Event
+    value::Any
+    failed::Bool
+end
+struct _SharedFactors
+    lock::ReentrantLock
+    dict::Dict{Any, Any}
+    pending::Dict{Any, _FactorBuild}
+end
+_SharedFactors() = _SharedFactors(ReentrantLock(), Dict{Any, Any}(), Dict{Any, _FactorBuild}())
+
+_walk_factors_get!(build, factors::Dict, key) = get!(build, factors, key)
+function _walk_factors_get!(build, factors::_SharedFactors, key)
+    while true
+        found = false
+        mine = nothing
+        pending = nothing
+        value = lock(factors.lock) do
+            if haskey(factors.dict, key)
+                found = true
+                return factors.dict[key]
+            end
+            pending = get(factors.pending, key, nothing)
+            pending === nothing && (mine = factors.pending[key] = _FactorBuild(Threads.Event(), nothing, false))
+            return nothing
+        end
+        found && return value
+        if mine === nothing
+            wait(pending.done)
+            pending.failed || return pending.value
+            continue
+        end
+        try
+            value = build()
+        catch
+            lock(factors.lock) do
+                delete!(factors.pending, key)
+            end
+            mine.failed = true
+            notify(mine.done)
+            rethrow()
+        end
+        lock(factors.lock) do
+            factors.dict[key] = value
+            delete!(factors.pending, key)
+        end
+        mine.value = value
+        notify(mine.done)
+        return value
+    end
 end
 
 # Y of s = -2 IN split into its two waves at large r, Y = e^{-i phi} (A_in R_in + A_out R_out) / r^2 with the
