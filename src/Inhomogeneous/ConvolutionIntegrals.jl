@@ -277,7 +277,7 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     ω = (m * ϒφ + k * ϒθ) / Γ
     KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
     Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
     Ydic = Dict(
         "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
@@ -486,6 +486,7 @@ end
 
 # ISEM Y radial function for the source integrals: IN branch for s = -2, UP branch for s = +2. With check_radii
 # (radii spanning the orbit) the Wronskian self-check runs first.
+# check_radii may be a function returning them: they are needed only for the small-frequency Wronskian check.
 @inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing, check_radii = nothing)
     branch = s == -2 ? :IN : s == 2 ? :UP :
         error("ISEM Y interfaces currently support only s = -2 and s = 2.")
@@ -494,7 +495,7 @@ end
         small_frequency_expansion = _inhomogeneous_small_frequency_expansion_control(l, a, omega),
         large_frequency_expansion = :auto)
     hasproperty(route, :controls) && route.controls.small_frequency_expansion &&
-        _isem_wronskian_check(s, l, m, a, omega, check_radii; route = route)
+        _isem_wronskian_check(s, l, m, a, omega, check_radii isa Function ? check_radii() : check_radii; route = route)
     return ISEM.y_radial_function(route)
 end
 
@@ -1657,7 +1658,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
 
     # Resolve the polar harmonic band independently of the radial grid.
     K_band = min(max(K0, nextpow(2, l + abs(k) + 1)), Kmax)
@@ -1821,7 +1822,7 @@ function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, 
     end
 
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
     flux_scale = max(max_flux, eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
     low_flux_budget = _levin_low_flux_budget(Float64(max_flux), Float64(tol), mode_abs_floor)
@@ -1931,7 +1932,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     effective_local_theta_intervals = _generic_adaptive_effective_theta_intervals(local_theta_intervals, k, l)
     nt = effective_local_theta_intervals + 1
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     sh_cache = Dict{NTuple{3, Int}, Any}()
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω; r_low = _orbit_periapsis(KG_master))
@@ -2169,7 +2170,7 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
 
     N = N0
     K = K0
@@ -2422,7 +2423,24 @@ const DEFAULT_ADAPTIVE_LEVIN_TOL0 = 1e-6
 const DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH = 2
 const DEFAULT_ADAPTIVE_LEVIN_TOL_MAX = 1e-2
 
+# Plans depend on (n, local_order) only and are read only once built; kept under a lock (a plan took a tenth of a
+# 16-node phase factorization).
+const LEVIN_PLANS = Dict{Tuple{Int, Int}, Any}()
+const LEVIN_PLANS_LOCK = ReentrantLock()
+
 function _levin_1d_local_plan(n::Int, local_order::Int)
+    plan = lock(LEVIN_PLANS_LOCK) do
+        get(LEVIN_PLANS, (n, local_order), nothing)
+    end
+    plan === nothing || return plan::Levin1DLocalPlan
+    plan = _levin_1d_local_plan_build(n, local_order)
+    lock(LEVIN_PLANS_LOCK) do
+        get!(LEVIN_PLANS, (n, local_order), plan)
+    end
+    return plan
+end
+
+function _levin_1d_local_plan_build(n::Int, local_order::Int)
     p = min(max(local_order, 4), n)
     x_ref = [cos(π * k / (n - 1)) for k in 0:n-1]
     x_phys = π .* (x_ref .+ 1.0) ./ 2.0
@@ -2591,14 +2609,13 @@ function _levin_1d_local_phase_factor(gprime_vals::Vector{<:Number}, g_vals::Vec
         idx = segment.idx
         A = segment.D .+ 1im .* Diagonal(@view gp[idx])
         F = qr(A, Val(true))
-        R = F.R
         piv = F.p
-        diagR = abs.(diag(R))
+        diagR = abs.(diag(F.factors))
         Anorm = maximum(diagR)
         tol_sing = Anorm * 1e-12
         rank = all(diagR .< tol_sing) ? 0 : count(≥(tol_sing), diagR)
         qadj = rank == 0 ? zeros(ComplexF64, 0, length(idx)) : Matrix(_q_columns(F, rank)')
-        r = rank == 0 ? zeros(ComplexF64, 0, 0) : Matrix(R[1:rank, 1:rank])
+        r = rank == 0 ? zeros(ComplexF64, 0, 0) : triu!(F.factors[1:rank, 1:rank])
         push!(factors, Levin1DLocalSegmentFactor(idx, qadj, r, collect(piv), rank, length(idx), exp(1im * g[first(idx)]), exp(1im * g[last(idx)])))
     end
     return Levin1DLocalPhaseFactor(plan.perm, factors)
@@ -2618,14 +2635,14 @@ function _levin_1d_local_phase_factor_from_values(g_vals::Vector{<:Number}; loca
         gp = segment.D * collect(@view g[idx])
         A = segment.D .+ 1im .* Diagonal(ComplexF64.(gp))
         F = qr(A, Val(true))
-        R = F.R
+        # R from the factors directly (F.R took a third of this factorization); the same values
         piv = F.p
-        diagR = abs.(diag(R))
+        diagR = abs.(diag(F.factors))
         Anorm = maximum(diagR)
         tol_sing = Anorm * 1e-12
         rank = all(diagR .< tol_sing) ? 0 : count(≥(tol_sing), diagR)
         qadj = rank == 0 ? zeros(ComplexF64, 0, length(idx)) : Matrix(_q_columns(F, rank)')
-        r = rank == 0 ? zeros(ComplexF64, 0, 0) : Matrix(R[1:rank, 1:rank])
+        r = rank == 0 ? zeros(ComplexF64, 0, 0) : triu!(F.factors[1:rank, 1:rank])
         push!(factors, Levin1DLocalSegmentFactor(idx, qadj, r, collect(piv), rank, length(idx), exp(1im * g[first(idx)]), exp(1im * g[last(idx)])))
     end
     return Levin1DLocalPhaseFactor(plan.perm, factors)
@@ -3666,7 +3683,7 @@ function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     flux_scale = max(Float64(max_flux), eps(Float64))
     effective_sample_tol = min(sample_tol, 3.0 * sqrt(Float64(tol)))
@@ -4118,7 +4135,9 @@ end
 function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::Int, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int; threaded_sampling::Bool = false, two_wave = nothing)
     bundle = _cached_adaptive_eccentric_segment_bundle!(cache, KG, local_n, level, bin)
     KG_samp = bundle["sample"]
-    if two_wave !== nothing
+    if two_wave isa EccentricP2Mode
+        return _p2_segment_amplitude!(cache, bundle, two_wave, Ysol, a, ω, m, n, local_n, level, bin)
+    elseif two_wave !== nothing
         res = _two_wave_segment_amplitude!(cache, bundle, two_wave, Ysol, SH, s, a, ω, m, n, local_n, level, bin)
         res === nothing || return res
     end
@@ -4138,6 +4157,123 @@ function _adaptive_eccentric_segment_amplitude!(cache, KG::Dict, Ysol, SH, s::In
         _levin_1d_integral_local_phase_factored(jac .* factored.smooth_m, factor_m)
     ) * factored.prefactor)
     return amp, _cheb_tail(factored.smooth_p, factored.smooth_m, factored.phase_p, factored.phase_m)
+end
+
+# Mode constants of the fused s = +2 segment kernel (integrand_eccentric_sample_cheby_p2 and the s = 2 branch of
+# _adaptive_eccentric_factored_segment): S at theta = pi/2, the angular combinations and the amplitude prefactor.
+struct EccentricP2Mode
+    S0::Float64
+    L2S::Float64
+    L1L2S::Float64
+    term2::ComplexF64
+    term4::ComplexF64
+    term5::ComplexF64
+    Mp::ComplexF64
+    E::Float64
+    Lz::Float64
+    prefactor::ComplexF64
+end
+
+function _eccentric_p2_mode(KG::Dict, Ysol, SH, a, ω, m::Int, n::Int)
+    S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
+    S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
+    λ = Ysol.mode.lambda
+    E = KG["Energy"]
+    Lz = KG["AngularMomentum"]
+    rp = 1.0 + sqrt(1.0 - a^2)
+    L1 = m - a*ω
+    L2 = m - a*ω
+    L2p = -2.0
+    L2S = S1 + L2 * S0
+    L1Sp = S2 + L1 * S1
+    L1L2S = L1Sp + L2p * S0 + L2 * S1 + L1 * L2 * S0
+    term2 = 3im * a * L1 * S0
+    term4 = 2im * a * S1
+    term5 = -1im * a * L2 * S0
+    term_M = - im * (a*E - Lz)
+    κ = ω - a * m / (2 * rp)
+    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
+    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
+    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
+    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
+    c4 = 12 * a^4
+    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
+    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
+            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
+            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
+            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    qt0, qr0, _, qφ0 = KG["InitialPhases"]
+    Δtr_func, _, Δφr_func, _ = KG["CrossFunction"]
+    Xi = m*(Δφr_func(qr0) - qφ0) - ω*(Δtr_func(qr0) - qt0) - n*qr0
+    Cinc = GridSampling._isem_gsn_incidence_amplitude(Ysol)
+    prefactor = - im * π * factor * η * exp(im * Xi) / (KG["Frequencies"]["ϒt"] * Cinc * κ)
+    return EccentricP2Mode(Float64(S0), Float64(L2S), Float64(L1L2S), ComplexF64(term2), ComplexF64(term4), ComplexF64(term5),
+        ComplexF64(term_M), Float64(E), Float64(Lz), ComplexF64(prefactor))
+end
+
+# s = +2 segment: integrand_eccentric_sample_cheby_p2 and the s = 2 factorization of _adaptive_eccentric_factored_segment
+# per node, in the same operation order, on the bundle's typed vectors, with Y evaluated behind a function barrier.
+function _p2_segment_amplitude!(cache, bundle, c::EccentricP2Mode, Ysol, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int)
+    k = bundle["kernel"]::GridSampling.EccentricSegmentKernel
+    return _p2_segment_amplitude!(cache, k, Ysol.Y_solution, c, a, ω, m, n, local_n, level, bin)
+end
+
+function _p2_segment_amplitude!(cache, k::GridSampling.EccentricSegmentKernel, Yfun::F, c::EccentricP2Mode, a, ω, m::Int, n::Int, local_n::Int, level::Int, bin::Int) where {F}
+    N = length(k.r)
+    smooth_p = Vector{ComplexF64}(undef, N); smooth_m = similar(smooth_p); phase_p = similar(smooth_p); phase_m = similar(smooth_p)
+    κ = sqrt(1.0 - a^2)
+    L1L2S, L2S, S0 = c.L1L2S, c.L2S, c.S0
+    term2, term3, term4, term5 = c.term2, 0.0, c.term4, c.term5
+    Mp = c.Mp
+    Mm = c.Mp
+    Mp_sq = Mp .^ 2
+    Mm_sq = Mm .^ 2
+    E, Lz = c.E, c.Lz
+    @inbounds for i in 1:N
+        r = k.r[i]
+        rs = k.rs[i]
+        log_term = k.log_term[i]
+        Y, Yp, X, _ = Yfun(r)
+        ρ = -1.0 / r
+        ρbar = -1.0 / r
+        inv_ρ = -r
+        L1pL2pS = inv_ρ * L1L2S + term2 + term3 + term4 + term5
+        phase = exp(- im * ω * rs + im * a * m * log_term / (2 * sqrt(1 - a ^2)))
+        Wll = 2.0 * ρbar * L1pL2pS * (r ^ 2) * Y * phase
+        term_A = L2S + im * a * (ρ - ρbar) * S0
+        term_B = 2Y + r * Yp
+        term_C = L2S * (ρ + ρbar) * r * Y
+        Wlm = 4.0 * (r * ρbar * (term_A * term_B + term_C) / ρ) * phase
+        term_D = X / (2 * sqrt(r ^ 2 + a^2))
+        term_E = (Y + 2r * Yp) * phase
+        term_F = ρ * r * (2Y + r * Yp) * phase
+        Wmm = 4.0 * S0 * ρbar * (term_D + term_E + term_F) / ρ
+        Δ = r ^ 2 - 2 * r + a ^ 2
+        numerator_L = E * (r ^ 2 + a ^ 2) - a * Lz
+        urp = k.ur_fwd[i]
+        urm = -urp
+        Lp = (numerator_L - urp) / Δ
+        Lm = (numerator_L - urm) / Δ
+        Jp = (Wll * Lp ^ 2 + Wlm * Lp * Mp + Wmm * Mp_sq) / (2.0pi)
+        Jm = (Wll * Lm ^ 2 + Wlm * Lm * Mm + Wmm * Mm_sq) / (2.0pi)
+        ψ = ω * rs - a * m * log_term / (2.0κ)
+        pf = exp(1im * ψ)
+        smooth_p[i] = Jp / pf
+        smooth_m[i] = Jm / pf
+        rphase = ω * k.Δtr[i] - m * k.Δφr[i] + n * k.qr[i]
+        phase_p[i] = rphase + ψ
+        phase_m[i] = -rphase + ψ
+    end
+    jac = (π / 2^level) / π
+    factor_p, factor_m = _cached_levin_phase_factors!(cache, (2, m, n, local_n, level, bin, 0)) do
+        (_levin_1d_local_phase_factor_from_values(phase_p; local_order = local_n),
+            _levin_1d_local_phase_factor_from_values(phase_m; local_order = local_n))
+    end
+    amp = ComplexF64((
+        _levin_1d_integral_local_phase_factored(jac .* smooth_p, factor_p) +
+        _levin_1d_integral_local_phase_factored(jac .* smooth_m, factor_m)
+    ) * c.prefactor)
+    return amp, _cheb_tail(smooth_p, smooth_m, phase_p, phase_m)
 end
 
 # Mode constants of the fused s = -2 two-wave segment kernel: the angular combinations of
@@ -4327,9 +4463,11 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     KG = haskey(KG_sample, "Energy") ? KG_sample : _kg_from_presampled_master(KG_sample)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω; r_low = _orbit_periapsis(KG_sample))
     two_wave === nothing || (two_wave = _two_wave_m2(two_wave, KG, Ysol, SH, a, ω, m, n))
+    # s = +2: the fused kernel's mode constants travel in the same slot
+    s == 2 && !threaded_sampling && (two_wave = _eccentric_p2_mode(KG, Ysol, SH, a, ω, m, n))
 
     segment_evaluations = 0
     root, root_tail = _adaptive_eccentric_segment_amplitude!(levin_cache, KG, Ysol, SH, s, a, ω, m, n, local_n, 0, 0; threaded_sampling = threaded_sampling, two_wave = two_wave)
@@ -4458,7 +4596,7 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
 
     N = N_sample
     KG_samp = cache isa EccentricFluxCache ? _cached_eccentric_sample!(cache, KG_sample, N) : subsample_eccentric_sample(KG_sample, N)

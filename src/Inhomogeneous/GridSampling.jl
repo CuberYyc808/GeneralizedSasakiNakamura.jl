@@ -760,12 +760,19 @@ struct EccentricSegmentKernel
     external_m::Vector{Float64}
     external_n::Vector{Float64}
     Mbar::ComplexF64
+    # for the s = +2 kernel
+    ur_fwd::Vector{Float64}
+    log_term::Vector{Float64}
+    Δtr::Vector{Float64}
+    Δφr::Vector{Float64}
+    qr::Vector{Float64}
 end
 
 EccentricSegmentKernel(KG_samp::Dict, geometry::Dict, phase_basis::Dict) = EccentricSegmentKernel(
     KG_samp["r"], KG_samp["rs"], geometry["rho"], geometry["inv_rho"], geometry["r2"], geometry["sqrt_r2a2"],
     geometry["Np"], geometry["Nm"], phase_basis["internal_m_m2"], phase_basis["internal_n_m2"],
-    phase_basis["external_m"], phase_basis["external_n"], geometry["Mbar_base"])
+    phase_basis["external_m"], phase_basis["external_n"], geometry["Mbar_base"],
+    KG_samp["ur_fwd"], phase_basis["log_term"], KG_samp["Δtr"], KG_samp["Δφr"], KG_samp["qr"])
 
 function eccentric_segment_sample_bundle_cheby(KG::Dict, qlo::Real, qhi::Real, N_sample::Int64)
     KG_samp = kerr_geo_eccentric_segment_sample_cheby(KG, qlo, qhi, N_sample)
