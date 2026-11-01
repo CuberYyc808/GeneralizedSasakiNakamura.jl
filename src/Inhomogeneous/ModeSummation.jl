@@ -505,6 +505,7 @@ function _record_adaptive_levin_metadata!(bgrp, mode)
         "AdaptiveLevinSegmentEvaluations",
         "AdaptiveLevinSplitCount",
         "AdaptiveLevinStopReason",
+        "AdaptiveLevinUnconverged",
     )
         haskey(mode, key) && (bgrp[key] = mode[key])
     end
