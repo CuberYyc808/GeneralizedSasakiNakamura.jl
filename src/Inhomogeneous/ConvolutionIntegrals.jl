@@ -4014,8 +4014,34 @@ function _y_two_wave_chains(Yf, m::Int, lambda, r_low)
     chain_in === nothing && return nothing
     chain_out = NHT.teukolsky_taylor_chain_inward(-2, m, a, ω, lambda, r_series, Rout, dRout, r_low)
     chain_out === nothing && return nothing
-    return (cin = Yf.cin, cout = Yf.cout, r_series = r_series, r_low = r_low, chain_in = chain_in, chain_out = chain_out)
+    # Below a turning point (omega^2 under the potential: high l, low omega) the two infinity solutions grow apart from
+    # Y and cancel in it ((12, 3, 150): (|Y_in| + |Y_out|) / |Y| = 6e5 at r = 10, 2e29 at r = 2, where the split Y was
+    # off by 3e-7 and 8e16). The chains serve down to the last radius, scanning inward, where that cancellation stays
+    # within TWO_WAVE_CANCELLATION and, at every TWO_WAVE_CHECK_EVERY-th radius, their Y agrees with the route's Y to the
+    # latter's conversion error (max(1e-9, 10 eps (2 omega r)^4), see TwoWaveYSolution); below it the segments take the
+    # direct Y, which is not oscillatory there.
+    A_in, A_out = Yf.incidence, Yf.reflection
+    κ = sqrt(1 - a^2)
+    rp, rm = 1 + κ, 1 - κ
+    r_ok = r_series
+    for i in 1:TWO_WAVE_CANCELLATION_SCAN
+        r = r_series * (r_low / r_series)^(i / TWO_WAVE_CANCELLATION_SCAN)
+        R1, _ = NHT.teukolsky_taylor_state(chain_in, r)
+        R2, _ = NHT.teukolsky_taylor_state(chain_out, r)
+        (abs(A_in * R1) + abs(A_out * R2)) <= TWO_WAVE_CANCELLATION * abs(A_in * R1 + A_out * R2) || break
+        if i % TWO_WAVE_CHECK_EVERY == 0
+            ψ = ω * rstar_from_r(a, r) - a * m / (rp - rm) * log((r - rp) / (r - rm))
+            Ysplit = cis(-ψ) * (A_in * R1 + A_out * R2) / r^2
+            abs(Ysplit / Yf(r)[1] - 1) <= max(1e-9, 10 * eps(Float64) * (2ω * r)^4) || break
+        end
+        r_ok = r
+    end
+    return (cin = Yf.cin, cout = Yf.cout, r_series = r_series, r_low = r_ok, chain_in = chain_in, chain_out = chain_out)
 end
+
+const TWO_WAVE_CANCELLATION = 10.0
+const TWO_WAVE_CANCELLATION_SCAN = 64
+const TWO_WAVE_CHECK_EVERY = 8
 
 function _y_two_wave(Ysol, s::Int, l::Int, m::Int, a, ω; r_low = nothing)
     (s == -2 && ω isa Real && ω > 0) || return nothing
