@@ -174,7 +174,11 @@ end
                 CI.convolution_integral_eccentric_adaptive_levin_isem(KG, -2, 2, 2, 400; tol = 1e-8, tol0 = 1e-12,
                     max_depth = 11, mode_abs_floor = 1e-16, cache = cache)["EnergyFlux"]
             end
-            @test ref ≈ deep rtol = 1e-8
+            # The references themselves agree to 1e-7 only: deep against tol = 1e-10, tol0 = 1e-13, 12 levels
+            # 1.15e-7, the trapezoid (N = 8192, tol = 1e-10) 1.2e-8 from deep. Before the two-wave chains the default
+            # call stopped at the same level as deep and matched it exactly; now it ends 5.9e-8 from deep (6.4e-18
+            # absolute, within its energy_abs_tol).
+            @test ref ≈ deep rtol = 2e-7
         end
     end
 end
