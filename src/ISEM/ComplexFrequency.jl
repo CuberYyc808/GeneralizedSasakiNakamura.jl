@@ -684,6 +684,16 @@ function _principal_small_frequency_expansion_match(params, branch, requested)
     return match_route(coefficients, branch; controls)
 end
 
+# Error fields of a principal-MST route: the amplitude errors of its real-r match (and its second-pass verdict when
+# it is not certified). Without them the certificate read the missing incidence and reflection errors as Inf and
+# rejected every negative-imaginary-axis frequency with |omega| <= 0.1 (estimated_error=Inf).
+function _principal_match_errors(matched)
+    incidence_error, reflection_error = amplitude_errors(matched)
+    matched.certified && return (; incidence_error, reflection_error)
+    return (; incidence_error, reflection_error, certified=false,
+        estimated_error=matched.estimated_error, uncertified_stages=matched.uncertified_stages)
+end
+
 # Replace the incidence and reflection amplitudes of a route on the principal
 # small-frequency-expansion (principal MST) axis by the matched GSN amplitudes, unless small_frequency_expansion=false was requested.
 function _principal_small_frequency_expansion_overlay(route, requested)
@@ -702,7 +712,7 @@ function _principal_small_frequency_expansion_overlay(route, requested)
         control_small_frequency_expansion=true,
         amplitude_backend=:principal_mst_logscaled,
         amplitude_patch_count=route_patch_count(matched),
-    ))
+    ), _principal_match_errors(matched))
     controls = merge(route.plan.controls, (;
         small_frequency_expansion=true,
         rescue_source=:principal_mst_logscaled,
@@ -851,6 +861,7 @@ function _complex_principal_small_frequency_expansion_route(
         control_large_frequency_expansion=false,
         amplitude_backend=:principal_mst_logscaled,
         amplitude_patch_count=patch_count,
+        _principal_match_errors(matched)...,
     )
     evaluator = ComplexSmallFrequencyExpansionEvaluator(matched, complex_params)
     return ComplexRoute(
