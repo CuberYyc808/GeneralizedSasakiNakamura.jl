@@ -201,6 +201,8 @@ function mst_nu_generic(p::GSNParameters, seed; tol=nothing)
     nu0 = C(seed)
     depth = NU_CF_DEPTH_INITIAL
     g0 = _characteristic(p, eps_, kappa, tau, nu0, depth)
+    # A seed on a pole of the recurrence coefficients gives no finite value at any depth.
+    isfinite(g0) || error("MST generic: the characteristic function is not finite at the seed $(ComplexF64(nu0)).")
     while depth < NU_CF_DEPTH_MAX
         g1 = _characteristic(p, eps_, kappa, tau, nu0, 2depth)
         abs(g1 - g0) <= tolerance * max(one(R), abs(g1)) && break
