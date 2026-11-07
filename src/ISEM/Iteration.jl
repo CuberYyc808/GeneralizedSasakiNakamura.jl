@@ -1373,6 +1373,13 @@ function select_infinity_endpoint(
         _select_infinity_endpoint_order(
             coefficients, match_x, order; controls, certificate)
     catch err
+        # At tiny real omega the y coefficients grow like omega^-n and the recurrence loses credibility before any
+        # endpoint is selected ((-2, 5, -5) at omega = 2.5e-8, a = 0.998); the dimensionless Y = y / omega
+        # representation is taken instead when it meets the same endpoint target.
+        if err isa ErrorException && startswith(err.msg, "ISEM GSN infinity recurrence lost floating-point credibility")
+            scaled = _scaled_y_infinity_selection(coefficients, order)
+            scaled !== nothing && scaled.score <= _INFINITY_ENDPOINT_TARGET && return scaled
+        end
         can_escalate && err isa EndpointCertificateError || rethrow()
         _select_infinity_endpoint_order(
             coefficients, match_x, 32; controls, certificate)
