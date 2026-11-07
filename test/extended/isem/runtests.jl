@@ -49,6 +49,7 @@ include(joinpath(@__DIR__, "legacy_fallback.jl"))
 include(joinpath(@__DIR__, "horizon_seed_cap.jl"))
 include(joinpath(@__DIR__, "certificate_semantics.jl"))
 include(joinpath(@__DIR__, "low_frequency_infinity.jl"))
+include(joinpath(@__DIR__, "negative_axis_low_frequency.jl"))
 
 # ---------------------------------------------------------------------------------------------------
 # Near the positive imaginary axis, a = 0, omega = eps + 0.3i: a junction that puts the infinity ray through
