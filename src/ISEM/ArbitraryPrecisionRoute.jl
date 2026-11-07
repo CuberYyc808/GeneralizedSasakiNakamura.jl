@@ -32,7 +32,7 @@ using ..RadialFunctions: TeukolskySolution, TeukolskyRadialEvaluator, TeukolskyT
 import ..RadialFunctions: gsn_radial_function, teukolsky_radial_function, y_radial_function,
     _teukolsky_pair_with_error
 using ..TeukolskyTransformation: d2R, GSN_to_Y_solution_from_matrix
-using ..ManoSuzukiTakasugiInfinity: mano_suzuki_takasugi_nu, mano_suzuki_takasugi_nu_complex
+using ..ManoSuzukiTakasugiInfinity: mano_suzuki_takasugi_nu_complex, _mano_suzuki_takasugi_nu_offset
 using ..ManoSuzukiTakasugiGeneric: MSTGenericData, mst_generic_data, mst_nu_generic,
     mst_up_state, mst_down_state
 using StaticArrays: SA
@@ -339,26 +339,31 @@ function _default_match_x(p::GSNParameters, tolerance, infinity_mode::Symbol)
     return max(R(1 // 2), x_from_r(p, R(max(r0 / 2, Float64(r_plus(p)) + 2))))
 end
 
-# Binary64 seeds of the renormalized angular momentum from the Float64 MST module, in the order to try:
-# at the frequency itself, then (the Float64 routine rejects some frequencies within 1e-15 of the
-# positive imaginary axis) at the frequency with its real part moved to 1e-6 and 1e-3 of |omega|,
-# which changes nu by that much and still seeds the generic iteration; `l` last.
+# Seeds of the renormalized angular momentum from the Float64 MST module, in the order to try, in the
+# working complex type: at the frequency itself, then (the Float64 routine rejects some frequencies within
+# 1e-15 of the positive imaginary axis) at the frequency with its real part moved to 1e-6 and 1e-3 of
+# |omega|, which changes nu by that much and still seeds the generic iteration; `l` last.
+# At a real frequency the seed is l + (nu - l) with the offset from the Float64 module added in the
+# working type: at |omega| ~ 1e-10, nu - l ~ 1e-20 and l + offset rounds to l in binary64, where the
+# coefficients beta_n, alpha_n, gamma_n of n = -l, -l - 1 have poles and the characteristic function is NaN.
 function _nu_seeds(p::GSNParameters)
+    C = _complex_type(p)
     a = Float64(p.a)
     omega = ComplexF64(p.omega)
     lambda = ComplexF64(p.lambda)
-    seeds = ComplexF64[]
+    seeds = C[]
     shifts = isreal(p.omega) ? (omega,) :
         (omega, ComplexF64(1e-6 * abs(omega), imag(omega)), ComplexF64(1e-3 * abs(omega), imag(omega)))
     for w in shifts
         try
-            seed = isreal(p.omega) ? ComplexF64(mano_suzuki_takasugi_nu(p.s, p.l, p.m, a, real(w), lambda)) :
-                ComplexF64(mano_suzuki_takasugi_nu_complex(p.s, p.l, p.m, a, w, lambda))
+            seed = isreal(p.omega) ?
+                C(p.l) + C(_mano_suzuki_takasugi_nu_offset(p.s, p.l, p.m, a, real(w), lambda)) :
+                C(mano_suzuki_takasugi_nu_complex(p.s, p.l, p.m, a, w, lambda))
             isfinite(seed) && push!(seeds, seed)
         catch
         end
     end
-    push!(seeds, ComplexF64(p.l))
+    push!(seeds, C(p.l))
     return seeds
 end
 
@@ -674,10 +679,13 @@ function _extend_mst_chain!(route::ArbitraryPrecisionRadialRoute, which::Symbol,
     end
 end
 
-# Cancellation of a difference u - v: (|u| + |v|) / |u - v|, as a Float64 (1 when there is none).
+# Cancellation of a difference u - v: (|u| + |v|) / |u - v|, as a Float64 (1 when there is none). A
+# difference that cancels completely (u - v = 0 in the working precision) has lost at least every bit of
+# that precision and is measured as 1 / eps, which the rebuild loop covers and then measures again.
 function _cancellation(u, v)
     R = real(typeof(u))
-    return Float64(max((abs(u) + abs(v)) / max(abs(u - v), floatmin(R)), one(R)))
+    total = abs(u) + abs(v)
+    return Float64(max(total / max(abs(u - v), eps(R) * total, floatmin(R)), one(R)))
 end
 
 # Buffers of the ordinary-point expansions: packed P/Q values and the A, B Taylor coefficients.
