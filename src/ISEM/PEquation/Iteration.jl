@@ -12,6 +12,10 @@ export iterate_inf_in, iterate_inf_out, iterate_zero_in, iterate_zero_out,
 
 _TruncatioN = 40
 _TOLERANCE = 1e-13
+# Patch budget of the real-axis walks (as ComplexRational._MAX_PATCHES). Converging walks take
+# <= ~1190 patches (a >= 1e-3, |omega| >= 1e-12); at a ~ 0 and tiny |omega| the infinity walk
+# starts near |x| ~ 1e21 with steps ~ 1e5 and would otherwise append patches without bound.
+const _MAX_PATCHES = 2048
 
 # The contour horizon series is started inside its estimated convergence radius,
 # closer in for large |lambda|; for |lambda| < 1 dividing by sqrt|lambda| would
@@ -31,6 +35,8 @@ function iterate_inf_in(xm, s, epsilon, tau, kappa, lambda, N = _TruncatioN, tol
     push!(x_list, x_min)
 
     while x_min < xm
+        length(coeffs_list) < _MAX_PATCHES ||
+            Base.error("P-equation real-axis patch limit $_MAX_PATCHES reached at x = $x_min, target $xm.")
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, x_min, P, P_prime, N)
         Δx = min(convergence_radius_x0_right(x_min, s, epsilon, tau, kappa, lambda, coeffs_ord, tol), convergence_radius_x0_left(x_min, s, epsilon, tau, kappa, lambda, coeffs_ord, tol))
         if !(isfinite(Δx)) || Δx <= 0
@@ -74,6 +80,8 @@ function iterate_inf_out(xm, s, epsilon, tau, kappa, lambda, N = _TruncatioN, to
     push!(x_list, x_min)
 
     while x_min < xm
+        length(coeffs_list) < _MAX_PATCHES ||
+            Base.error("P-equation real-axis patch limit $_MAX_PATCHES reached at x = $x_min, target $xm.")
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, x_min, P, P_prime, N)
         Δx = min(convergence_radius_x0_right(x_min, s, epsilon, tau, kappa, lambda, coeffs_ord, tol), convergence_radius_x0_left(x_min, s, epsilon, tau, kappa, lambda, coeffs_ord, tol))
         if !(isfinite(Δx)) || Δx <= 0
@@ -119,6 +127,8 @@ function iterate_zero_in(xm, s, epsilon, tau, kappa, lambda, N = _TruncatioN, to
     P, P_prime, _ = evaluate_zero_in(x_max, coeffs_zero)
 
     while x_max > xm
+        length(coeffs_list) < _MAX_PATCHES ||
+            Base.error("P-equation real-axis patch limit $_MAX_PATCHES reached at x = $x_max, target $xm.")
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, x_max, P, P_prime, N)
         Δx = min(convergence_radius_x0_left(x_max, s, epsilon, tau, kappa, lambda, coeffs_ord, tol), convergence_radius_x0_right(x_max, s, epsilon, tau, kappa, lambda, coeffs_ord, tol))
         if !(isfinite(Δx)) || Δx <= 0
@@ -161,6 +171,8 @@ function iterate_zero_out(xm, s, epsilon, tau, kappa, lambda, N = _TruncatioN, t
     P, P_prime, _ = evaluate_zero_out(x_max, s, epsilon, tau, coeffs_zero)
 
     while x_max > xm
+        length(coeffs_list) < _MAX_PATCHES ||
+            Base.error("P-equation real-axis patch limit $_MAX_PATCHES reached at x = $x_max, target $xm.")
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, x_max, P, P_prime, N)
         Δx = min(convergence_radius_x0_left(x_max, s, epsilon, tau, kappa, lambda, coeffs_ord, tol), convergence_radius_x0_right(x_max, s, epsilon, tau, kappa, lambda, coeffs_ord, tol))
         if !(isfinite(Δx)) || Δx <= 0
