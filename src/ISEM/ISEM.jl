@@ -372,20 +372,22 @@ function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
             return teukolsky_from_gsn_matrix(r) * X_func.GSN_solution(rs)
         end
         Xsoln = r -> X_func.GSN_solution(rstar_from_r(a, r))[1]
+        # teukolsky_state(r) is already the Teukolsky image of X, so Y carries no transmission factor:
+        # Y = e^{-i phi} R / r^2 (s = -2) and e^{i phi} Delta^2 R / r^2 (s = +2), as on the non-extremal route.
         function Ysoln(r)
             radial = teukolsky_state(r)
             R, dRdr = radial
             phase = _extremal_y_phase(r, a, m, omega)
             phase_derivative = _y_phase_derivative(r, a, m, omega)
             if s == -2
-                prefactor = branch_transmission_amplitude * exp(-im * phase)
+                prefactor = exp(-im * phase)
                 Y = prefactor * R / r^2
                 dYdr = prefactor * (dRdr / r^2 - 2R / r^3 -
                     im * phase_derivative * R / r^2)
             else
                 delta = _kerr_delta(r, a)
                 delta_derivative = 2r - 2
-                prefactor = branch_transmission_amplitude * exp(im * phase)
+                prefactor = exp(im * phase)
                 Y = prefactor * delta^2 * R / r^2
                 dYdr = prefactor * (
                     delta^2 * dRdr / r^2 +
