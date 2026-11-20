@@ -341,6 +341,42 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
+# 8a'. OUT and DOWN solved directly at real frequency (0.10): marched from their own end (OUT from the
+#      horizon, DOWN from infinity) and matched to the pair of the other end, by ISEM, the ODE methods and
+#      the exact-extremal solver. They must agree with the IN + UP combination of the same method.
+#      Measured (2026-11-20): ISEM <= 3e-13, linear <= 2.5e-12, Riccati <= 2.3e-10 (X), |a| = 1 <= 2e-13.
+# ---------------------------------------------------------------------------------------------------
+@testset "OUT and DOWN solved directly" begin
+    combined(Xin, Xup, bc) = begin
+        Bt, Bi, Br = Xin.transmission_amplitude, Xin.incidence_amplitude, Xin.reflection_amplitude
+        Ct, Ci, Cr = Xup.transmission_amplitude, Xup.incidence_amplitude, Xup.reflection_amplitude
+        bc == DOWN ?
+            (Bt / Bi - Br * Cr / (Bi * Ct), -Br * Ci / (Bi * Ct), rs -> (Xin(rs) - Br / Ct * Xup(rs)) / Bi) :
+            (Ct / Ci - Br * Cr / (Bt * Ci), -Bi * Cr / (Bt * Ci), rs -> (Xup(rs) - Cr / Bt * Xin(rs)) / Ci)
+    end
+    direct(X) = !(X.numerical_GSN_solution isa NamedTuple && haskey(X.numerical_GSN_solution, :fundamental_solutions))
+    for (s, l, m, a, w, method, rtol) in (
+            (-2, 2, 2, 0.5, 0.3, "ISEM", 1e-11), (2, 3, 1, 0.9, 0.3, "ISEM", 1e-11), (0, 2, 2, 0.0, -0.7, "ISEM", 1e-11),
+            (-2, 2, 2, 0.7, 0.3, "linear", 1e-10), (2, 3, 1, 0.7, 0.3, "linear", 1e-10),
+            (-2, 2, 2, 0.7, 0.3, "Riccati", 1e-8),
+            (2, 2, 2, 1.0, 0.3, "auto", 1e-10), (-2, 3, -1, 1.0, 0.3, "auto", 1e-10))
+        Xin = quietly(() -> GSN_radial(s, l, m, a, w, IN; method))
+        Xup = quietly(() -> GSN_radial(s, l, m, a, w, UP; method))
+        for bc in (DOWN, OUT)
+            X = quietly(() -> GSN_radial(s, l, m, a, w, bc; method))
+            incidence, reflection, Xc = combined(Xin, Xup, bc)
+            @test X.boundary_condition == bc && X.transmission_amplitude == 1
+            @test direct(X)
+            @test isapprox(X.incidence_amplitude, incidence; rtol)
+            @test isapprox(X.reflection_amplitude, reflection; rtol)
+            for rs in (-20.0, 0.0, 30.0)
+                @test isapprox(X(rs), Xc(rs); rtol=10rtol)
+            end
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
 # 8b. Superradiant threshold omega = m Omega_H (non-extremal): ISEM builds UP with the logarithmic
 #     horizon companion, so the amplitudes are threshold-log connection coefficients. Check the
 #     solutions through the Teukolsky Wronskian Delta^(s+1) (R_in R_up' - R_up R_in'), which must be
