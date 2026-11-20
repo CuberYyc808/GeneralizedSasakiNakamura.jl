@@ -10,15 +10,12 @@ using ..ConvolutionIntegrals
 
 include("SubmissionScope.jl")
 
-export recommended_mode_grid_sizes
 export circular_mode_flux
 export circular_mode_summation
 export eccentric_mode_summation
 export inclined_mode_flux
 export inclined_mode_summation
 export generic_mode_summation
-
-_next_pow2_at_least(n::Integer) = max(1, 2 ^ (ceil(Int, log2(max(1, n))) + 1))
 
 function _fit_shell_estimate(model, idxs, vals, next_index, p0, fallback)
     isempty(vals) && return fallback
@@ -653,19 +650,6 @@ function _record_current_mode!(h5, record::Bool, boundary::AbstractString, n::In
     bgrp["CarterConstantFlux"] = get(mode, "CarterConstantFlux", NaN)
     _record_adaptive_levin_metadata!(bgrp, mode)
     return nothing
-end
-
-# Power-of-two trapezoidal grid sizes (N, K) for mode (m, n, k): about `scale` points per unit of the largest
-# harmonic index, at least minN and minK. Also returns the unrounded targets.
-function recommended_mode_grid_sizes(m::Integer, n::Integer, k::Integer; minN::Int = 256, minK::Int = 64, scale::Int = 10)
-    targetN = max(minN - 1, scale * max(abs(m), abs(n)))
-    targetK = max(minK - 1, scale * max(abs(m), abs(k)))
-    return (
-        N = _next_pow2_at_least(targetN),
-        K = _next_pow2_at_least(targetK),
-        targetN = targetN,
-        targetK = targetK,
-    )
 end
 
 # Classify the orbit as the public ISEM route does (1e-12 tolerance), before allocating a mode cache.
@@ -3030,7 +3014,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
     return merge(result, (state = merge(state, (result = result,)),))
 end
 
-function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
+function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
     nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
@@ -3061,10 +3045,6 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
     p0 = [1e-3, 0.0, 0.1]
     mode_index = Ref(0)
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
-    progress_start = time()
-    progress_last_time = Ref(progress_start)
-    progress_last_index = Ref(0)
-    progress_io = progress_path === nothing ? nothing : _public_track_resource!(scope, open(progress_path, "w"))
 
     fit_estimate = (idxs, vals, n, fallback) -> begin
         length(vals) < 3 && return fallback
@@ -3101,15 +3081,6 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             record_h5["meta/sample_tol"] = sample_tol
             record_h5["meta/neg_branch_scale"] = neg_branch_scale
             record_h5["meta/levin_max_depth"] = levin_max_depth
-        end
-        if progress_io !== nothing
-            println(progress_io, join((
-                "mode_index", "batch_modes", "batch_seconds", "batch_modes_per_s", "elapsed_seconds",
-                "boundary", "s", "l", "m", "n", "k", "energy_flux", "N_sample", "K_sample",
-                "adaptive_max_depth", "adaptive_max_leaf_depth", "adaptive_accepted_segments",
-                "quadrature", "record_bytes"
-            ), '\t'))
-            flush(progress_io)
         end
 
         # resume (see _with_auto_caps): the state of a pass with the same lmax and kmax and a smaller nmax that stopped at
@@ -3210,42 +3181,6 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
 
         record_mode = (s, l, m, n, k, mode) -> begin
             _record_current_mode_generic!(record_h5, record, s == -2 ? "I" : "H", n, k, m, l, mode_index, mode, N0, K0)
-            if progress_interval > 0 && mode_index[] % progress_interval == 0
-                now_t = time()
-                batch_modes = mode_index[] - progress_last_index[]
-                batch_seconds = now_t - progress_last_time[]
-                batch_rate = batch_seconds > 0 ? batch_modes / batch_seconds : Inf
-                record_bytes = record && record_path !== nothing && isfile(record_path) ? filesize(record_path) : 0
-                line = join((
-                    mode_index[],
-                    batch_modes,
-                    batch_seconds,
-                    batch_rate,
-                    now_t - progress_start,
-                    s == -2 ? "I" : "H",
-                    s,
-                    l,
-                    m,
-                    n,
-                    k,
-                    get(mode, "EnergyFlux", NaN),
-                    get(mode, "N_sample", N0),
-                    get(mode, "K_sample", K0),
-                    get(mode, "AdaptiveLevinMaxDepth", ""),
-                    get(mode, "AdaptiveLevinMaxLeafDepth", ""),
-                    get(mode, "AdaptiveLevinAcceptedSegments", ""),
-                    get(mode, "Quadrature", ""),
-                    record_bytes,
-                ), '\t')
-                println(line)
-                flush(stdout)
-                if progress_io !== nothing
-                    println(progress_io, line)
-                    flush(progress_io)
-                end
-                progress_last_index[] = mode_index[]
-                progress_last_time[] = now_t
-            end
             return nothing
         end
 
@@ -3283,7 +3218,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         pf_inf = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_inf) : nothing
         pf_hor = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_hor) : nothing
         inf, hor = _run_boundaries(() -> _generic_branch_summation!(-2, branch_ctx(-2), pf_inf),
-            () -> _generic_branch_summation!(2, branch_ctx(2), pf_hor), mode_parallelism > 1 && !record && progress_interval == 0)
+            () -> _generic_branch_summation!(2, branch_ctx(2), pf_hor), mode_parallelism > 1 && !record)
         total_modes = inf.total_modes + hor.total_modes
 
         if record
@@ -3374,19 +3309,18 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         pf_inf === nothing || _walk_discard!(pf_inf)
         pf_hor === nothing || _walk_discard!(pf_hor)
         record && _public_close_resource!(scope, record_h5)
-        progress_io !== nothing && _public_close_resource!(scope, progress_io)
     end
 end
 
 # Total generic-orbit fluxes, summed over n, k, m and l shells with the stopping rules described in
 # Teukolsky_pointparticle_flux. Equatorial and e = 0 orbits are passed to the eccentric and inclined summations.
-function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
     caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn, resume
             with_submission_operation(scope) do
-                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
+                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
         end
     end
