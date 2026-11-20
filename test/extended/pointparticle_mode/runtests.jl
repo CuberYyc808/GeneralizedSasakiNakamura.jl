@@ -50,11 +50,15 @@ CIRCULAR_A0 = (
             end
         end
     end
-    # All convolution methods agree at p = 10 (measured: auto -4.3e-12, legacy trapezoidal +2.8e-11).
-    for method in ("isem_trapezoidal", "isem_levin", "trapezoidal", "levin")
+    # Both convolution methods agree at p = 10 (measured: auto -4.3e-12); the ODE-based "trapezoidal" and
+    # "levin" were removed in 0.10 and are rejected with the list of supported methods.
+    for method in ("isem_trapezoidal", "isem_levin")
         mode = quietly(() -> mode_inf(2, 2, 0, 0, 0.0, 10.0, 0.0, 1.0; method=method))
         @test mode.method.method == method
         @test relerr(mode.energy_flux, CIRCULAR_A0[1].Einf) <= 1e-9
+    end
+    for method in ("trapezoidal", "levin")
+        @test_throws ArgumentError mode_inf(2, 2, 0, 0, 0.0, 10.0, 0.0, 1.0; method=method)
     end
 end
 

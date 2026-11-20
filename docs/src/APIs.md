@@ -368,8 +368,6 @@ Method choices:
 | `"auto"` | selects `"isem_trapezoidal"` |
 | `"isem_trapezoidal"` | ISEM radial solution with adaptive trapezoidal convolution |
 | `"isem_levin"` | ISEM radial solution with Levin convolution (circular equatorial orbits need no convolution) |
-| `"trapezoidal"` | `Y` obtained by numerically integrating its radial equation, with trapezoidal convolution on one fixed `N × K` grid; `tol`, `Nmax`, `Kmax` and `sample_tol` do not apply |
-| `"levin"` | as `"trapezoidal"`, with Levin convolution |
 
 It returns a `TeukolskyPointParticleMode` with the fields:
 
@@ -381,9 +379,9 @@ It returns a `TeukolskyPointParticleMode` with the fields:
 | `angular_momentum_flux` | angular-momentum flux of the mode |
 | `Carter_const_flux` | Carter-constant flux of the mode |
 | `trajectory` | geodesic data used by the convolution |
-| `Y_solution` | the radial function `Y` used by the convolution: a `YRadialFunction` for the ISEM methods, except that `"isem_trapezoidal"` (the default) stores a `Dict` of `Y` values sampled on its grid for eccentric and generic orbits; a numerically integrated solution for `"trapezoidal"` and `"levin"` |
+| `Y_solution` | the radial function `Y` used by the convolution: a `YRadialFunction` for the ISEM methods, except that `"isem_trapezoidal"` (the default) stores a `Dict` of `Y` values sampled on its grid for eccentric and generic orbits |
 | `SWSH` | spin-weighted spheroidal harmonic data |
-| `method` | named tuple of the settings used: `method`, `radial_method` (always `"ISEM"`, also for `"trapezoidal"` and `"levin"`), `radial_sfe` (the small-frequency-expansion setting of the radial solve), the starting grid sizes `N` and `K`, and `truncation_floor` |
+| `method` | named tuple of the settings used: `method`, `radial_method` (always `"ISEM"`), `radial_sfe` (the small-frequency-expansion setting of the radial solve), the starting grid sizes `N` and `K`, and `truncation_floor` |
 
 The particle mass $\mu$ is not an input: amplitudes are per unit $\mu$ and
 fluxes per unit $\mu^2$. The mode frequency

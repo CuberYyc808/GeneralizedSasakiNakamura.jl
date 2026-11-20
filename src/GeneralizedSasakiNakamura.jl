@@ -1550,23 +1550,11 @@ function (teuk_func::TeukolskyRadialFunction)(r)
 end
 
 
-include("Inhomogeneous/AsymptoticExpansionCoefficientsY.jl")
-include("Inhomogeneous/InitialConditionsY.jl")
-include("Inhomogeneous/SolutionsY.jl")
 include("Inhomogeneous/GridSampling.jl")
 include("Inhomogeneous/ConvolutionIntegrals.jl")
 include("Inhomogeneous/ModeSummation.jl")
 include("Inhomogeneous/ArbitraryPrecisionModes.jl")
 
-
-function Base.show(io::IO, ::MIME"text/plain", ysol::SolutionsY.YSolutionResult)
-    println(io, "YSolution(")
-    print(io, "    basis = "); show(io, ysol.basis_type); println(io, ",")
-    print(io, "    mode = "); show(io, "text/plain", ysol.mode); println(io, ",")
-    println(io, "    rin = $(ysol.asymptotic.rin),")
-    println(io, "    rout = $(ysol.asymptotic.rout),")
-    print(io, ")")
-end
 
 struct PointParticleMode
     s::Int # spin weight
@@ -2182,7 +2170,6 @@ It also computes the energy, angular momentum and Carter constant fluxes at infi
 
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`).
 Use `method = "isem_trapezoidal"` for the ISEM trapezoidal path and `method = "isem_levin"` for the ISEM Levin path.
-Legacy non-ISEM paths remain available as `method = "trapezoidal"` and `method = "levin"`; they evaluate one fixed `N × K` grid.
 Both ISEM convolution paths use `ISEM` for their homogeneous radial input.
 `N` and `K` are the starting sizes of the radial and polar sampling grids (uniform grids for the trapezoidal paths, Chebyshev nodes for the Levin paths);
 `N, K ≤ 0` select the defaults, `N = 256` and `K = 64` (`K = 32` for the Levin paths). `N`, `K`, `Nmax` and `Kmax` must be powers of 2.
@@ -2223,14 +2210,9 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
     elseif method == "isem_levin"
         N = N <= 0 ? 256 : N
         K = K <= 0 ? 32 : K
-    elseif method == "trapezoidal"
-        N = N <= 0 ? 256 : N
-        K = K <= 0 ? 64 : K
-    elseif method == "levin"
-        N = N <= 0 ? 256 : N
-        K = K <= 0 ? 32 : K
     else
-        error("Currently supported methods are \"auto\", \"isem_trapezoidal\", \"isem_levin\", \"trapezoidal\", and \"levin\".")
+        throw(ArgumentError("unsupported method \"$method\": the supported methods are \"auto\", " *
+            "\"isem_trapezoidal\" and \"isem_levin\" (the ODE-based \"trapezoidal\" and \"levin\" were removed in 0.10)"))
     end
 
     scope, owned = ModeSummation.ensure_public_submission(submission, a, p, e, x;
@@ -2247,10 +2229,6 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
             output = ConvolutionIntegrals.convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, cache=cache, trajectory=ModeSummation.submission_orbit!(scope))
         elseif method == "isem_levin"
             output = ConvolutionIntegrals.convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k; N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, adaptive_max_depth=levin_max_depth, adaptive=levin_adaptive, cache=cache, trajectory=ModeSummation.submission_orbit!(scope))
-        elseif method == "trapezoidal"
-            output = ConvolutionIntegrals.convolution_integral_trapezoidal(a, p, e, x, s, l, m, n, k; N=N, K=K)
-        elseif method == "levin"
-            output = ConvolutionIntegrals.convolution_integral_levin(a, p, e, x, s, l, m, n, k; N=N, K=K)
         end
             output
           end
@@ -2312,7 +2290,6 @@ It also computes the energy, angular momentum and Carter constant fluxes at infi
 
 The numerical method to compute the convolution integral is specified by `method` (default: `auto`).
 Use `method = "isem_trapezoidal"` for the ISEM trapezoidal path and `method = "isem_levin"` for the ISEM Levin path.
-Legacy non-ISEM paths remain available as `method = "trapezoidal"` and `method = "levin"`.
 Both ISEM convolution paths use `ISEM` for their homogeneous radial input.
 `N` and `K` are the starting sizes of the radial and polar sampling grids (uniform grids for the trapezoidal paths, Chebyshev nodes for the Levin paths);
 `N, K ≤ 0` select the defaults. `N`, `K`, `Nmax` and `Kmax` must be powers of 2.
