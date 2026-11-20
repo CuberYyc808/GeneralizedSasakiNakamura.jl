@@ -313,11 +313,13 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
-# 8. OUT / DOWN combinations (main-module combiners): amplitudes from the IN/UP formulas of
-#    _combine_gsn_down/out and finite solutions.
+# 8. OUT / DOWN against the IN/UP formulas, and finite solutions. At complex omega OUT and DOWN are the
+#    combination itself (rtol 1e-12); at real omega they are solved directly since 0.10, so the check
+#    compares two independent solutions: measured 1.3e-12 for (-2, 2, 2, 0.7, 0.5), rtol 1e-11.
 # ---------------------------------------------------------------------------------------------------
 @testset "OUT and DOWN boundary conditions" begin
     for (s, l, m, a, w) in ((-2, 2, 2, 0.7, 0.5), (2, 3, -1, 0.3, 1.1 - 0.1im), (0, 2, 0, 0.9, 0.25))
+        rtol = isreal(w) ? 1e-11 : 1e-12
         Xin = GSN_radial(s, l, m, a, w, IN)
         Xup = GSN_radial(s, l, m, a, w, UP)
         Xdown = GSN_radial(s, l, m, a, w, DOWN)
@@ -326,10 +328,10 @@ end
         Ct, Ci, Cr = Xup.transmission_amplitude, Xup.incidence_amplitude, Xup.reflection_amplitude
         @test Xdown.boundary_condition == DOWN && Xout.boundary_condition == OUT
         @test Xdown.transmission_amplitude == 1 && Xout.transmission_amplitude == 1
-        @test isapprox(Xdown.incidence_amplitude, Bt / Bi - Br * Cr / (Bi * Ct); rtol=1e-12)
-        @test isapprox(Xdown.reflection_amplitude, -Br * Ci / (Bi * Ct); rtol=1e-12)
-        @test isapprox(Xout.incidence_amplitude, Ct / Ci - Br * Cr / (Bt * Ci); rtol=1e-12)
-        @test isapprox(Xout.reflection_amplitude, -Bi * Cr / (Bt * Ci); rtol=1e-12)
+        @test isapprox(Xdown.incidence_amplitude, Bt / Bi - Br * Cr / (Bi * Ct); rtol)
+        @test isapprox(Xdown.reflection_amplitude, -Br * Ci / (Bi * Ct); rtol)
+        @test isapprox(Xout.incidence_amplitude, Ct / Ci - Br * Cr / (Bt * Ci); rtol)
+        @test isapprox(Xout.reflection_amplitude, -Bi * Cr / (Bt * Ci); rtol)
         for rs in (-10.0, 5.0, 40.0)
             @test isfinite(Xdown(rs)) && isfinite(Xout(rs))
         end
