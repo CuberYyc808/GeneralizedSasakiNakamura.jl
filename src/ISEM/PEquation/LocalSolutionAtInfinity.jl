@@ -292,9 +292,4 @@ function error_inf_out(rho, s, epsilon, tau, kappa, lambda, coeffs, z)
     return _relative_residual(term1, term2, term3)
 end
 
-@inline evaluate_inf_in_rho(rho, s, epsilon, tau, coeffs, z) = evaluate_inf_in(rho, s, epsilon, tau, coeffs, z)
-@inline evaluate_inf_out_rho(rho, s, epsilon, tau, kappa, coeffs, z) = evaluate_inf_out(rho, s, epsilon, tau, kappa, coeffs, z)
-@inline error_inf_in_rho(rho, s, epsilon, tau, kappa, lambda, coeffs, z) = error_inf_in(rho, s, epsilon, tau, kappa, lambda, coeffs, z)
-@inline error_inf_out_rho(rho, s, epsilon, tau, kappa, lambda, coeffs, z) = error_inf_out(rho, s, epsilon, tau, kappa, lambda, coeffs, z)
-
 end

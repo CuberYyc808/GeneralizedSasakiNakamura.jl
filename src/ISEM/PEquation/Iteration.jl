@@ -232,8 +232,8 @@ function iterate_inf_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trunc
     function evaluate_P(rho_eval)
         if rho_eval > rho_list[1]
             if rho_eval >= R0
-                P0, P0p, P0pp = evaluate_inf_in_rho(rho_eval, s, epsilon, tau, coeffs_inf, z)
-                err = error_inf_in_rho(rho_eval, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
+                P0, P0p, P0pp = evaluate_inf_in(rho_eval, s, epsilon, tau, coeffs_inf, z)
+                err = error_inf_in(rho_eval, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
                 return (P0, P0p, P0pp, err)
             end
             error("rho = $rho_eval is outside the computed domain rho <= $(rho_list[1]).")
@@ -302,8 +302,8 @@ function iterate_inf_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trun
     function evaluate_P(rho_eval)
         if rho_eval > rho_list[1]
             if rho_eval >= seed_R0
-                P0, P0p, P0pp = evaluate_inf_out_rho(rho_eval, s, epsilon, tau, kappa, coeffs_inf, z)
-                err = error_inf_out_rho(rho_eval, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
+                P0, P0p, P0pp = evaluate_inf_out(rho_eval, s, epsilon, tau, kappa, coeffs_inf, z)
+                err = error_inf_out(rho_eval, s, epsilon, tau, kappa, lambda, coeffs_inf, z)
                 return (P0, P0p, P0pp, err)
             end
             error("rho = $rho_eval is outside the computed domain rho <= $(rho_list[1]).")
