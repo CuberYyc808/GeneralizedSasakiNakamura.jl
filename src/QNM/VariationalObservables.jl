@@ -60,7 +60,6 @@ function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial,
     horizon_tortoise === :toggle && (complex_horizon = !extreme && !complex_horizon)
     # The extremal horizon endpoint is the GSN horizon recurrence with the closed-form normalization
     # (ExtremalRadial), in binary64 like the IVP.
-    bits = 53
     setup_start=time_ns()
     series=if extreme && abs(root.mode.s)==2 && abs(2wf-root.mode.m*af)<0.1
         lambda,dlambda=_qnm_lambda_tangent(root.mode,af,wf)
@@ -79,11 +78,11 @@ function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial,
     coarse = _qnm_variational_excitation(root; tol=1e-12, horizon_scale=0.4,
         horizon_order=40, infinity_order=60, infinity_radius=25.0, match_radius=match, horizon_ray=extreme,
         extremal_scale=24.0, extremal_radius=0.2, extremal_order=40,
-        extremal_precision=bits,horizon_tortoise=complex_horizon,potential_series=coarse_series)
+        horizon_tortoise=complex_horizon,potential_series=coarse_series)
     fine = _qnm_variational_excitation(root; tol=1e-13, horizon_scale=0.8,
         horizon_order=80, infinity_order=60, infinity_radius=25.0, match_radius=match,
         horizon_ray=extreme, extremal_scale=32.0, extremal_radius=0.15,
-        extremal_order=64, extremal_precision=bits,horizon_tortoise=complex_horizon,potential_series=series)
+        extremal_order=64, horizon_tortoise=complex_horizon,potential_series=series)
     drift(x,y) = abs(x-y)/max(abs(x), abs(y), floatmin(Float64))
     refinement = maximum((drift(coarse.alpha,fine.alpha),
         drift(coarse.reflection,fine.reflection),drift(coarse.B_gsn,fine.B_gsn)))

@@ -2,7 +2,7 @@ using ForwardDiff
 using StaticArrays
 using OrdinaryDiffEq
 using ..GeneralizedSasakiNakamura: Potentials, InitialConditions,
-    AsymptoticExpansionCoefficients, ExtremalRadial, Solutions
+    AsymptoticExpansionCoefficients, ExtremalRadial
 
 struct QNMFrequencyTangent end
 _frequency_dual(z, dz=one(z)) = complex(
@@ -172,15 +172,6 @@ function _qnm_tangent_propagate(u,s,m,a,w,lambda,r0,r1,tol; tortoise=false,serie
     return sol.u[end],sol.destats.nf
 end
 
-function _qnm_extremal_wide_jet(s,m,a,w0,lambda0,dlambda,rh,extremal_order,extremal_precision)
-    setprecision(BigFloat,extremal_precision) do
-        wb=_frequency_dual(Complex{BigFloat}(w0))
-        lb=_frequency_dual(Complex{BigFloat}(lambda0),Complex{BigFloat}(dlambda))
-        jet=_qnm_horizon_jet(s,m,BigFloat(a),wb,lb,Complex{BigFloat}(rh),extremal_order)
-        SVector{4,ComplexF64}(jet)
-    end
-end
-
 """
 One frequency: propagate the IN state and its tangent, and the two infinity
 bases and their tangents, then differentiate M*c = y at a fixed matching point.
@@ -191,7 +182,7 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
         infinity_order=32,infinity_radius=100.0,match_radius=3.0,horizon_scale=0.15,
         infinity_coordinate=:tortoise,extremal_scale=nothing,
         extremal_radius=0.03,extremal_order=64,horizon_ray=false,
-        extremal_precision=53,horizon_tortoise=false,potential_order=16,potential_series=:auto)
+        horizon_tortoise=false,potential_order=16,potential_series=:auto)
     mode=root.mode
     s,m,a,w0=mode.s,mode.m,Float64(root.a),ComplexF64(root.omega)
     s in -2:2 || throw(ArgumentError("variational GSN supports integer spin -2 through 2"))
@@ -248,13 +239,7 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
     t0=time_ns()
     series=potential_series===:auto ?
         _qnm_horizon_potential_series(s,m,a,w0,lambda0,dlambda,potential_order) : potential_series
-    h=if abs(a)==1 && extremal_precision>53
-        # Barrier: the BigFloat jet is compiled only when this extremal branch runs.
-        Base.inferencebarrier(_qnm_extremal_wide_jet)(
-            s,m,a,w0,lambda0,dlambda,rh,extremal_order,extremal_precision)::SVector{4,ComplexF64}
-    else
-        _qnm_horizon_jet(s,m,a,w,lambda,rh,abs(a)==1 ? extremal_order : horizon_order)
-    end
+    h=_qnm_horizon_jet(s,m,a,w,lambda,rh,abs(a)==1 ? extremal_order : horizon_order)
     incoming=_qnm_infinity_jet(s,m,a,w,lambda,ri,infinity_order,-1)
     outgoing=_qnm_infinity_jet(s,m,a,w,lambda,ri,infinity_order,1)
     endpoint_s=(time_ns()-t0)/1e9
