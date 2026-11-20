@@ -251,17 +251,6 @@ function _kg_from_presampled_master(KG_sample::Dict)
     return kg
 end
 
-function _cached_eccentric_cheby_sample!(cache::EccentricFluxCache, KG_master::Dict, N::Int)
-    _check_mode_geometry(cache, KG_master)
-    return get!(cache.levin_samples, N) do
-        owner = cache.geometry_owner
-        owner === nothing && return kerr_geo_eccentric_sample_cheby(_kg_from_presampled_master(KG_master), N)
-        _submission_geometry_lookup!(owner, :cheby_samples, N, KG_master) do
-            kerr_geo_eccentric_sample_cheby(_kg_from_presampled_master(KG_master), N)
-        end
-    end
-end
-
 function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::Int)
     _check_mode_geometry(cache, KG_master)
     return get!(cache.samples, K) do
@@ -338,78 +327,6 @@ function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Di
     else
         error("Spin weight s must be either 2 or -2.")
     end
-end
-
-function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample)
-    KG = kerr_geo_orbit(a, p, e, x)
-    Frequencies = KG["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    ϒr = Frequencies["ϒr"]
-    ϒθ = Frequencies["ϒθ"]
-    ϒφ = Frequencies["ϒϕ"]
-    omega = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
-    if _skip_radiative_mode(s, a, m, omega)
-        result = _zero_radiative_mode(omega, KG; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        return result
-    end
-    KG_samp = kerr_geo_generic_sample_cheby(KG, N_sample, K_sample)
-    KG_trap = kerr_geo_generic_sample(KG, N_sample, K_sample)
-    carter_samp = carter_ingredients_sample(KG_trap, a, m, omega)
-    carter_factor = trapezoidal_1d_integral(carter_samp)
-
-    result = if s == 2
-        SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        SH_p2_samp = swsh_sample(SH_p2, KG_samp)
-        Yup_soln = _isem_y_solution(s, l, m, a, omega;
-            lambda = SH_p2.lambda)
-        Yup_samp = y_sample_p2_isem(Yup_soln, KG_samp)
-        rphase = _radial_phase_vector(KG_samp, omega, m, n)
-        θphase = _polar_phase_vector(KG_samp, omega, m, k)
-        Jpp_grid_up, Jpm_grid_up, Jmp_grid_up, Jmm_grid_up, drphase_up, dθphase_up, rphaseL_up, rphaseR_up, θphaseL_up, θphaseR_up, prefactor_up = integrand_generic_sample_cheby_p2(KG_samp, Yup_samp, SH_p2_samp, n, k)
-        integralpp_up = levin_2d_integral_local_phase(Jpp_grid_up, drphase_up, dθphase_up, rphase, θphase)
-        integralpm_up = levin_2d_integral_local_phase(Jpm_grid_up, drphase_up, - dθphase_up, rphase, -θphase)
-        integralmp_up = levin_2d_integral_local_phase(Jmp_grid_up, -drphase_up, dθphase_up, -rphase, θphase)
-        integralmm_up = levin_2d_integral_local_phase(Jmm_grid_up, -drphase_up, -dθphase_up, -rphase, -θphase)
-        integral_up = (integralpp_up + integralpm_up + integralmp_up + integralmm_up) * prefactor_up
-        hf = horizon_factor(omega, a, m)
-        Dict(
-            "Amplitude" => integral_up,
-            "omega" => omega,
-            "EnergyFlux" => hf * abs2(integral_up),
-            "AngularMomentumFlux" => hf * m * abs2(integral_up) / omega,
-            "CarterConstantFlux" => 2 * hf * abs2(integral_up) * (carter_factor + k * ϒθ) / omega,
-            "Trajectory" => KG,
-            "YSolution" => Yup_soln,
-            "SWSH" => SH_p2
-        )
-    elseif s == -2
-        SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
-        Yin_soln = _isem_y_solution(s, l, m, a, omega;
-            lambda = SH_m2.lambda)
-        Yin_samp = y_sample_m2_isem(Yin_soln, KG_samp)
-        SH_m2_samp = swsh_sample(SH_m2, KG_samp)
-        rphase = _radial_phase_vector(KG_samp, omega, m, n)
-        θphase = _polar_phase_vector(KG_samp, omega, m, k)
-        Jpp_grid_in, Jpm_grid_in, Jmp_grid_in, Jmm_grid_in, drphase_in, dθphase_in, rphaseL_in, rphaseR_in, θphaseL_in, θphaseR_in, prefactor_in = integrand_generic_sample_cheby_m2(KG_samp, Yin_samp, SH_m2_samp, n, k)
-        integralpp_in = levin_2d_integral_local_phase(Jpp_grid_in, drphase_in, dθphase_in, rphase, θphase)
-        integralpm_in = levin_2d_integral_local_phase(Jpm_grid_in, drphase_in, -dθphase_in, rphase, -θphase)
-        integralmp_in = levin_2d_integral_local_phase(Jmp_grid_in, -drphase_in, dθphase_in, -rphase, θphase)
-        integralmm_in = levin_2d_integral_local_phase(Jmm_grid_in, -drphase_in, -dθphase_in, -rphase, -θphase)
-        integral_in = (integralpp_in + integralpm_in + integralmp_in + integralmm_in) * prefactor_in
-        Dict(
-            "Amplitude" => integral_in,
-            "omega" => omega,
-            "EnergyFlux" => abs2(integral_in)/(4.0pi*omega^2),
-            "AngularMomentumFlux" => m * abs2(integral_in) / (4.0pi * omega^3),
-            "CarterConstantFlux" => abs2(integral_in) * (carter_factor + k * ϒθ) / (2.0pi*omega^3),
-            "Trajectory" => KG,
-            "YSolution" => Yin_soln,
-            "SWSH" => SH_m2
-        )
-    else
-        error("Spin weight s must be either 2 or -2.")
-    end
-    return result
 end
 
 const _INHOMOGENEOUS_ORDINARY_MIN_OMEGA = 0.05
@@ -532,88 +449,6 @@ function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s
     elseif s == -2
         integral = GridSampling._generic_integral_sample_m2_fast(
             KG_samp, Y_samp, SH_samp, n, k)
-        return Dict(
-            "Amplitude" => integral,
-            "omega" => ω,
-            "EnergyFlux" => abs2(integral) / (4.0pi * ω^2),
-            "AngularMomentumFlux" => m * abs2(integral) / (4.0pi * ω^3),
-            "CarterConstantFlux" => abs2(integral) * (carter_factor + k * ϒθ) / (2.0pi * ω^3),
-            "Trajectory" => KG_samp,
-            "YSolution" => Y_samp,
-            "SWSH" => SH_samp,
-        )
-    else
-        error("Spin weight s must be either 2 or -2.")
-    end
-end
-
-function _generic_flux_from_cheby_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s::Int, l::Int, m::Int, n::Int, k::Int, a::Float64, ω::Float64, ϒθ::Float64, carter_factor::Float64, cache = nothing)
-    N_sample = KG_samp["N_sample"]::Int
-    K_sample = KG_samp["K_sample"]::Int
-    phase_key = (s, N_sample, K_sample, m, n, k)
-    if s == 2
-        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
-        basis_plus = _glevin_basis!(cache, KG_samp, s, Float64(a), 1)
-        basis_minus = _glevin_basis!(cache, KG_samp, s, Float64(a), -1)
-        radial_factor_vec = _cached_generic_levin_phase_factor!(cache, (:internal_radial_factor, phase_key)) do
-            exp.(1im .* _internal_radial_phase(KG_samp, s, a, ω, m).phase_values)
-        end
-        radial_factor = reshape(radial_factor_vec, :, 1)
-        θfactor = _cached_generic_levin_phase_factor!(cache, (:theta, phase_key)) do
-            θphase_data = _glevin_theta(basis_plus, m, n, k)
-            _levin_1d_local_phase_factor(θphase_data.derivative, θphase_data.phase)
-        end
-        θfactor_neg = _cached_generic_levin_phase_factor!(cache, (:theta_neg, phase_key)) do
-            _conjugate_levin_1d_local_phase_factor(θfactor)
-        end
-        rfactor_plus = _cached_generic_levin_phase_factor!(cache, (:radial_plus, phase_key)) do
-            rphase_plus = _glevin_radial(basis_plus, m, n, k)
-            _levin_1d_local_phase_factor_from_values(rphase_plus)
-        end
-        rfactor_minus = _cached_generic_levin_phase_factor!(cache, (:radial_minus, phase_key)) do
-            rphase_minus = _glevin_radial(basis_minus, m, n, k)
-            _levin_1d_local_phase_factor_from_values(rphase_minus)
-        end
-        integralpp, integralmp = levin_2d_integral_local_phase_pair_batched_radial_values_factored(Jpp ./ radial_factor, Jmp ./ radial_factor, θfactor, rfactor_plus, rfactor_minus)
-        integralpm, integralmm = levin_2d_integral_local_phase_pair_batched_radial_values_factored(Jpm ./ radial_factor, Jmm ./ radial_factor, θfactor_neg, rfactor_plus, rfactor_minus)
-        integral = (integralpp + integralpm + integralmp + integralmm) * prefactor
-        hf = horizon_factor(ω, a, m)
-        return Dict(
-            "Amplitude" => integral,
-            "omega" => ω,
-            "EnergyFlux" => hf * abs2(integral),
-            "AngularMomentumFlux" => hf * m * abs2(integral) / ω,
-            "CarterConstantFlux" => 2 * hf * abs2(integral) * (carter_factor + k * ϒθ) / ω,
-            "Trajectory" => KG_samp,
-            "YSolution" => Y_samp,
-            "SWSH" => SH_samp,
-        )
-    elseif s == -2
-        Jpp, Jpm, Jmp, Jmm, drphase, dθphase, _, _, _, _, prefactor = integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
-        basis_plus = _glevin_basis!(cache, KG_samp, s, Float64(a), 1)
-        basis_minus = _glevin_basis!(cache, KG_samp, s, Float64(a), -1)
-        radial_factor_vec = _cached_generic_levin_phase_factor!(cache, (:internal_radial_factor, phase_key)) do
-            exp.(1im .* _internal_radial_phase(KG_samp, s, a, ω, m).phase_values)
-        end
-        radial_factor = reshape(radial_factor_vec, :, 1)
-        θfactor = _cached_generic_levin_phase_factor!(cache, (:theta, phase_key)) do
-            θphase_data = _glevin_theta(basis_plus, m, n, k)
-            _levin_1d_local_phase_factor(θphase_data.derivative, θphase_data.phase)
-        end
-        θfactor_neg = _cached_generic_levin_phase_factor!(cache, (:theta_neg, phase_key)) do
-            _conjugate_levin_1d_local_phase_factor(θfactor)
-        end
-        rfactor_plus = _cached_generic_levin_phase_factor!(cache, (:radial_plus, phase_key)) do
-            rphase_plus = _glevin_radial(basis_plus, m, n, k)
-            _levin_1d_local_phase_factor_from_values(rphase_plus)
-        end
-        rfactor_minus = _cached_generic_levin_phase_factor!(cache, (:radial_minus, phase_key)) do
-            rphase_minus = _glevin_radial(basis_minus, m, n, k)
-            _levin_1d_local_phase_factor_from_values(rphase_minus)
-        end
-        integralpp, integralmp = levin_2d_integral_local_phase_pair_batched_radial_values_factored(Jpp ./ radial_factor, Jmp ./ radial_factor, θfactor, rfactor_plus, rfactor_minus)
-        integralpm, integralmm = levin_2d_integral_local_phase_pair_batched_radial_values_factored(Jpm ./ radial_factor, Jmm ./ radial_factor, θfactor_neg, rfactor_plus, rfactor_minus)
-        integral = (integralpp + integralpm + integralmp + integralmm) * prefactor
         return Dict(
             "Amplitude" => integral,
             "omega" => ω,
@@ -757,18 +592,6 @@ function _cached_generic_sample!(cache::GenericM2FluxCache, KG_master::Dict, N::
     end
 end
 
-function _cached_generic_cheby_sample!(cache::GenericM2FluxCache, KG_master::Dict, N::Int, K::Int)
-    _check_mode_geometry(cache, KG_master)
-    key = (N, K)
-    return get!(cache.levin_samples, key) do
-        owner = cache.geometry_owner
-        owner === nothing && return kerr_geo_generic_sample_cheby(_kg_from_presampled_master(KG_master), N, K)
-        _submission_geometry_lookup!(owner, :cheby_samples, key, KG_master) do
-            kerr_geo_generic_sample_cheby(_kg_from_presampled_master(KG_master), N, K)
-        end
-    end
-end
-
 function _cached_generic_levin_phase_factor!(build::Function, cache, key::Tuple)
     cache isa GenericM2FluxCache || return build()
     if cache.walk_factors !== nothing && (key[1] === :adaptive_radial || key[1] === :adaptive_radial_in)
@@ -787,40 +610,6 @@ function _glevin_freqs(KG_samp::Dict)
     return (Ωφ = freqs["ϒϕ"] / Γ, Ωr = freqs["ϒr"] / Γ, Ωθ = freqs["ϒθ"] / Γ)
 end
 
-function _glevin_basis_build(KG_samp::Dict, s::Int, a::Float64, sign::Int)
-    Ω = _glevin_freqs(KG_samp)
-    qr = _radial_phase_nodes(KG_samp)
-    qθ = _cheby_phase_nodes_pi(length(KG_samp["Δtθ"]))
-    r = KG_samp["r"]
-    rs = KG_samp["rs"]
-    κ = sqrt(1.0 - a^2)
-    rp = 1.0 + κ
-    rm = 1.0 - κ
-    log_term = log.((r .- rp) ./ (r .- rm))
-    σrs = 1.0
-    σlog = -1.0
-    radial_base = sign .* KG_samp["Δtr"] .+ σrs .* rs
-    return GenericLevinPhaseBasis(
-        Ω.Ωφ .* KG_samp["Δtθ"] .- KG_samp["Δφθ"],
-        Ω.Ωr .* KG_samp["Δtθ"],
-        Ω.Ωθ .* KG_samp["Δtθ"] .+ qθ,
-        Ω.Ωφ .* KG_samp["dtθ"] .- KG_samp["dφθ"],
-        Ω.Ωr .* KG_samp["dtθ"],
-        Ω.Ωθ .* KG_samp["dtθ"] .+ 1.0,
-        Ω.Ωφ .* radial_base .- sign .* KG_samp["Δφr"] .+ σlog .* a .* log_term ./ (2.0κ),
-        Ω.Ωr .* radial_base .+ sign .* qr,
-        Ω.Ωθ .* radial_base,
-    )
-end
-
-function _glevin_basis!(cache, KG_samp::Dict, s::Int, a::Float64, sign::Int)
-    cache isa GenericM2FluxCache || return _glevin_basis_build(KG_samp, s, a, sign)
-    key = (KG_samp["N_sample"]::Int, KG_samp["K_sample"]::Int, s, sign)
-    return get!(cache.levin_phase_bases, key) do
-        _glevin_basis_build(KG_samp, s, a, sign)
-    end
-end
-
 function _glevin_theta(basis::GenericLevinPhaseBasis, m::Int, n::Int, k::Int)
     return (
         phase = m .* basis.theta_m .+ n .* basis.theta_n .+ k .* basis.theta_k,
@@ -830,30 +619,6 @@ end
 
 function _glevin_radial(basis::GenericLevinPhaseBasis, m::Int, n::Int, k::Int)
     return m .* basis.radial_m .+ n .* basis.radial_n .+ k .* basis.radial_k
-end
-
-function _paired_pow2_refinement_levels(N0::Int, K0::Int, Nmax::Int, Kmax::Int)
-    N0 <= Nmax || return Tuple{Int, Int}[]
-    K0 <= Kmax || return Tuple{Int, Int}[]
-    levels = Tuple{Int, Int}[]
-    N = N0
-    K = K0
-    while true
-        push!(levels, (N, K))
-        (N >= Nmax && K >= Kmax) && break
-        N = min(2N, Nmax)
-        K = min(2K, Kmax)
-    end
-    return levels
-end
-
-function prewarm_generic_levin_samples!(cache::GenericM2FluxCache, KG_master::Dict; N0::Int, K0::Int, Nmax::Int, Kmax::Int)
-    for (N, K) in _paired_pow2_refinement_levels(N0, K0, Nmax, Kmax)
-        _cached_generic_cheby_sample!(cache, KG_master, N, K)
-        _levin_1d_local_plan(N, DEFAULT_LEVIN_LOCAL_ORDER)
-        _levin_1d_local_plan(K, DEFAULT_LEVIN_LOCAL_ORDER)
-    end
-    return cache
 end
 
 struct GenericAdaptiveLevin2DKey
@@ -1247,28 +1012,6 @@ end
 
 @inline function _low_flux_cutoff(max_flux::Float64, tol::Float64)
     return min(0.1 * max(max_flux, eps(Float64)) * tol, 1e-16)
-end
-
-@inline function _levin_low_flux_budget(max_flux::Float64, tol::Float64, mode_abs_floor::Float64)
-    return max(mode_abs_floor, max(max_flux, eps(Float64)) * tol)
-end
-
-@inline function _levin_low_flux_stable(current::Float64, previous::Float64, floor::Float64)
-    ac = abs(current)
-    ap = abs(previous)
-    max(ac, ap) <= floor && return true
-    minv = min(ac, ap)
-    minv <= floor && return false
-    return max(ac, ap) / minv <= 2.0
-end
-
-@inline function _same_order_or_smaller(current::Float64, previous::Float64, floor::Float64)
-    ac = abs(current)
-    ap = abs(previous)
-    max(ac, ap) <= floor && return true
-    minv = min(ac, ap)
-    minv <= floor && return false
-    return ac <= 10.0 * ap
 end
 
 @inline function _suspect_min_sample(min_stop::Int, max_stop::Int, excess::Float64, level100::Int, level1e4::Int, level1e8::Int)
@@ -1804,96 +1547,6 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
     return res
 end
 
-function generic_mode_flux_from_master_cached_levin!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 256, K0::Int = 64, Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, confirm_low_flux::Bool = true)
-    _check_mode_geometry(cache, KG_master)
-    if !(s == -2 || s == 2)
-        error("Spin weight s must be either 2 or -2.")
-    end
-    ispow2(N0) || throw(ArgumentError("N0 must be a power of 2"))
-    ispow2(K0) || throw(ArgumentError("K0 must be a power of 2"))
-    ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
-    ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
-    N0 <= Nmax || throw(ArgumentError("N0 must not exceed Nmax"))
-    K0 <= Kmax || throw(ArgumentError("K0 must not exceed Kmax"))
-
-    Frequencies = KG_master["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    ϒr = Frequencies["ϒr"]
-    ϒθ = Frequencies["ϒθ"]
-    ϒφ = Frequencies["ϒϕ"]
-    a = KG_master["a"]
-    ω = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
-    if _skip_radiative_mode(s, a, m, ω)
-        res = _zero_radiative_mode(ω, KG_master; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        res["N_sample_requested"] = N0
-        res["K_sample_requested"] = K0
-        res["N_sample"] = N0
-        res["K_sample"] = K0
-        res["Quadrature"] = "levin"
-        return res
-    end
-
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
-    flux_scale = max(max_flux, eps(Float64))
-    effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
-    low_flux_budget = _levin_low_flux_budget(Float64(max_flux), Float64(tol), mode_abs_floor)
-
-    N = N0
-    K = K0
-    res = nothing
-    pending_low_flux_check = false
-    while true
-        KG_cheby = _cached_generic_cheby_sample!(cache, KG_master, N, K)
-        Ysamp = if s == -2
-            threaded_sampling ? GridSampling.y_sample_m2_isem_threaded(Ysol, KG_cheby) : GridSampling.y_sample_m2_isem(Ysol, KG_cheby)
-        else
-            threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_cheby) : GridSampling.y_sample_p2_isem(Ysol, KG_cheby)
-        end
-        SHsamp = threaded_sampling ? GridSampling.swsh_sample_threaded(SH, KG_cheby) : GridSampling.swsh_sample(SH, KG_cheby)
-        KG_trap = _cached_generic_sample!(cache, KG_master, min(N, Nmax), min(K, Kmax))
-        carter_factor = _generic_carter_factor_sample(KG_trap, m, ω)
-        res2 = _generic_flux_from_cheby_sample(KG_cheby, Ysamp, SHsamp, s, l, m, n, k, a, ω, ϒθ, carter_factor, cache)
-        absE = abs(res2["EnergyFlux"])
-        if res === nothing
-            # As in the eccentric route, a value below the floor needs the next refinement to confirm it.
-            res = res2
-            if !confirm_low_flux && absE < low_flux_budget
-                break
-            end
-            pending_low_flux_check = absE < low_flux_budget
-        else
-            relE = _relative_energy_change(res2["EnergyFlux"], res["EnergyFlux"])
-            excess = abs(res2["EnergyFlux"]) / flux_scale
-            factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
-            low_flux_confirmed = absE < low_flux_budget && (!confirm_low_flux || (pending_low_flux_check && _same_order_or_smaller(res2["EnergyFlux"], res["EnergyFlux"], mode_abs_floor)))
-            below_floor = mode_abs_floor > 0.0 && absE < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
-            res = res2
-            if below_floor || low_flux_confirmed || factor * relE <= effective_sample_tol
-                break
-            end
-            pending_low_flux_check = absE < low_flux_budget
-        end
-        (N >= Nmax && K >= Kmax) && break
-        N = min(2N, Nmax)
-        K = min(2K, Kmax)
-    end
-
-    if zero_low_flux && mode_abs_floor > 0.0 && abs(res["EnergyFlux"]) < mode_abs_floor
-        res["Amplitude"] = 0.0 + 0.0im
-        res["EnergyFlux"] = 0.0
-        res["AngularMomentumFlux"] = 0.0
-        res["CarterConstantFlux"] = 0.0
-        res["LowFluxZeroed"] = true
-    end
-    res["N_sample_requested"] = N0
-    res["K_sample_requested"] = K0
-    res["N_sample"] = N
-    res["K_sample"] = K
-    res["Quadrature"] = "levin"
-    return res
-end
-
 const GENERIC_LEVIN_LOCAL_MIN_LEVEL = 3
 const GENERIC_LEVIN_LOCAL_BUDGET_FRACTION = 0.1
 const GENERIC_LEVIN_TOL_MULTIPLIER = 3.0
@@ -2084,38 +1737,10 @@ function _generic_adaptive_levin_result(amp::ComplexF64, KG_master::Dict, Ysol, 
     end
 end
 
-function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing, confirm_low_flux::Bool = true, adaptive::Bool = true, adaptive_local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH, adaptive_max_depth::Int = 8, adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
+function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing, adaptive_local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH, adaptive_max_depth::Int = 8, adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
     _check_mode_geometry(cache, KG_master)
     levin_cache = cache isa GenericM2FluxCache ? cache : GenericFluxCache()
-    if adaptive
-        return generic_mode_flux_from_master_cached_adaptive_levin!(
-            levin_cache,
-            KG_master,
-            s,
-            l,
-            m,
-            n,
-            k;
-            sample_tol = sample_tol,
-            tol = tol,
-            max_flux = max_flux,
-            mode_abs_floor = mode_abs_floor,
-            zero_low_flux = zero_low_flux,
-            threaded_sampling = threaded_sampling,
-            confirm_low_flux = confirm_low_flux,
-            local_r_intervals = adaptive_local_r_intervals,
-            local_theta_intervals = adaptive_local_theta_intervals,
-            min_depth = adaptive_min_depth,
-            max_depth = adaptive_max_depth,
-            depth_tol_max = adaptive_tol_max,
-        )
-    end
-    Nmax = min(Nmax, DEFAULT_LEVIN_NMAX)
-    Kmax = min(Kmax, DEFAULT_LEVIN_KMAX)
-    N0 = min(max(N_sample, 128), Nmax)
-    K0 = min(max(K_sample, 32), Kmax)
-    prewarm_generic_levin_samples!(levin_cache, KG_master; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax)
-    return generic_mode_flux_from_master_cached_levin!(
+    return generic_mode_flux_from_master_cached_adaptive_levin!(
         levin_cache,
         KG_master,
         s,
@@ -2123,33 +1748,18 @@ function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k,
         m,
         n,
         k;
-        N0 = N0,
-        K0 = K0,
-        Nmax = Nmax,
-        Kmax = Kmax,
         sample_tol = sample_tol,
         tol = tol,
         max_flux = max_flux,
         mode_abs_floor = mode_abs_floor,
         zero_low_flux = zero_low_flux,
         threaded_sampling = threaded_sampling,
-        confirm_low_flux = confirm_low_flux,
+        local_r_intervals = adaptive_local_r_intervals,
+        local_theta_intervals = adaptive_local_theta_intervals,
+        min_depth = adaptive_min_depth,
+        max_depth = adaptive_max_depth,
+        depth_tol_max = adaptive_tol_max,
     )
-end
-
-function convolution_integral_generic_adaptive_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64 = 128, K_sample::Int64 = 32; kwargs...)
-    return convolution_integral_generic_levin_isem(KG_master, s, l, m, n, k, N_sample, K_sample; adaptive = true, kwargs...)
-end
-
-function convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, cache=nothing, trajectory=nothing, geometry_owner=nothing, kwargs...)
-    route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
-    KG_master = route.master
-    KG_master === nothing && (KG_master = GridSampling.kerr_geo_generic_sample_dense(route.KG, Nmax, Kmax))
-    return convolution_integral_generic_levin_isem(KG_master, s, l, m, n, k, N_sample, K_sample; Nmax = Nmax, Kmax = Kmax, cache=route.cache, kwargs...)
-end
-
-function convolution_integral_generic_adaptive_levin_isem(a, p, e, x, s, l, m, n, k, N_sample::Int64 = 128, K_sample::Int64 = 32; kwargs...)
-    return convolution_integral_generic_levin_isem(a, p, e, x, s, l, m, n, k, N_sample, K_sample; adaptive = true, kwargs...)
 end
 
 function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache=nothing, geometry_owner=nothing)
@@ -2486,60 +2096,6 @@ function _levin_1d_local_segment(f_vals::Vector{<:Number}, gprime_vals::Vector{<
     return pvals[end] * exp(1im * g_right) - pvals[1] * exp(1im * g_left)
 end
 
-function _levin_1d_local_segment_batch(rhs::Matrix{ComplexF64}, gprime_vals::AbstractVector{ComplexF64}, g_left::Number, g_right::Number, D::Matrix{Float64})
-    n, nrhs = size(rhs)
-    n <= 1 && return zeros(ComplexF64, nrhs)
-    A = D .+ 1im .* Diagonal(gprime_vals)
-    F = qr(A, Val(true))
-    R = F.R
-    piv = F.p
-    diagR = abs.(diag(R))
-    Anorm = maximum(diagR)
-    tol_sing = Anorm * 1e-12
-    out = zeros(ComplexF64, nrhs)
-    if !all(diagR .< tol_sing)
-        rank = count(≥(tol_sing), diagR)
-        y = _q_columns(F, rank)' * rhs
-        sol = R[1:rank, 1:rank] \ y
-        exp_left = exp(1im * g_left)
-        exp_right = exp(1im * g_right)
-        @inbounds for row in 1:rank
-            pidx = piv[row]
-            if pidx == 1
-                for j in 1:nrhs
-                    out[j] -= sol[row, j] * exp_left
-                end
-            elseif pidx == n
-                for j in 1:nrhs
-                    out[j] += sol[row, j] * exp_right
-                end
-            end
-        end
-    end
-    return out
-end
-
-function _levin_1d_local_segment_factor_batch(rhs::Matrix{ComplexF64}, segment::Levin1DLocalSegmentFactor)
-    _, nrhs = size(rhs)
-    out = zeros(ComplexF64, nrhs)
-    segment.rank == 0 && return out
-    y = segment.qadj * rhs
-    sol = segment.r \ y
-    @inbounds for row in 1:segment.rank
-        pidx = segment.piv[row]
-        if pidx == 1
-            for j in 1:nrhs
-                out[j] -= sol[row, j] * segment.exp_left
-            end
-        elseif pidx == segment.n
-            for j in 1:nrhs
-                out[j] += sol[row, j] * segment.exp_right
-            end
-        end
-    end
-    return out
-end
-
 function _cheby_phase_nodes_pi(n::Int)
     n <= 1 && return zeros(Float64, n)
     return [π * (cos(π * k / (n - 1)) + 1.0) / 2.0 for k in 0:n-1]
@@ -2652,24 +2208,6 @@ function _levin_1d_local_phase_factor_from_values(g_vals::Vector{<:Number}; loca
     return Levin1DLocalPhaseFactor(plan.perm, factors)
 end
 
-function _conjugate_levin_1d_local_phase_factor(factor::Levin1DLocalPhaseFactor)
-    factors = Levin1DLocalSegmentFactor[]
-    sizehint!(factors, length(factor.segments))
-    for segment in factor.segments
-        push!(factors, Levin1DLocalSegmentFactor(
-            segment.idx,
-            conj.(segment.qadj),
-            conj.(segment.r),
-            segment.piv,
-            segment.rank,
-            segment.n,
-            conj(segment.exp_left),
-            conj(segment.exp_right),
-        ))
-    end
-    return Levin1DLocalPhaseFactor(factor.perm, factors)
-end
-
 function _levin_1d_columns_factored(F::AbstractMatrix{<:Number}, factor::Levin1DLocalPhaseFactor)
     nr, nc = size(F)
     Fp = F[factor.perm, :]
@@ -2711,77 +2249,6 @@ function _levin_1d_integral_local_phase_factored(f_vals::Vector{<:Number}, facto
         end
     end
     return total
-end
-
-function levin_2d_integral_local_phase(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_vals::Vector{<:Number}, g2_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n, k = size(f_vals)
-    @assert length(g1_prime_vals) == n "g1_prime_vals length must match x-dimension n ($(length(g1_prime_vals)) ≠ $n)"
-    @assert length(g2_prime_vals) == k "g2_prime_vals length must match y-dimension k ($(length(g2_prime_vals)) ≠ $k)"
-    @assert length(g1_vals) == n "g1_vals length must match x-dimension n ($(length(g1_vals)) ≠ $n)"
-    @assert length(g2_vals) == k "g2_vals length must match y-dimension k ($(length(g2_vals)) ≠ $k)"
-    if n >= 8 && k >= 8
-        return levin_2d_integral_local_phase_batched(f_vals, g1_prime_vals, g2_prime_vals, g1_vals, g2_vals; local_order = local_order)
-    end
-    h_vals = Vector{ComplexF64}(undef, n)
-    @inbounds for i in 1:n
-        h_vals[i] = levin_1d_integral_local_phase(collect(@view f_vals[i, :]), collect(g2_prime_vals), collect(g2_vals); local_order = local_order)
-    end
-    return levin_1d_integral_local_phase(h_vals, collect(g1_prime_vals), collect(g1_vals); local_order = local_order)
-end
-
-function levin_2d_integral_local_phase_batched(f_vals::Matrix{<:Number}, g1_prime_vals::Vector{<:Number}, g2_prime_vals::Vector{<:Number}, g1_vals::Vector{<:Number}, g2_vals::Vector{<:Number}; local_order::Int = DEFAULT_LEVIN_LOCAL_ORDER)
-    n, k = size(f_vals)
-    plan2 = _levin_1d_local_plan(k, local_order)
-    gp2 = Vector{ComplexF64}(undef, k)
-    g2 = Vector{ComplexF64}(undef, k)
-    @inbounds for i in 1:k
-        src = plan2.perm[i]
-        gp2[i] = g2_prime_vals[src]
-        g2[i] = g2_vals[src]
-    end
-    h_vals = zeros(ComplexF64, n)
-    for segment in plan2.segments
-        idx = segment.idx
-        rhs = Matrix{ComplexF64}(undef, length(idx), n)
-        @inbounds for (ii, jj) in enumerate(idx)
-            srcj = plan2.perm[jj]
-            for row in 1:n
-                rhs[ii, row] = f_vals[row, srcj]
-            end
-        end
-        h_vals .+= _levin_1d_local_segment_batch(rhs, @view(gp2[idx]), g2[first(idx)], g2[last(idx)], segment.D)
-    end
-    return levin_1d_integral_local_phase(h_vals, collect(g1_prime_vals), collect(g1_vals); local_order = local_order)
-end
-
-function levin_2d_integral_local_phase_pair_batched_radial_values_factored(f1::Matrix{<:Number}, f2::Matrix{<:Number}, theta_factor::Levin1DLocalPhaseFactor, radial_factor1::Levin1DLocalPhaseFactor, radial_factor2::Levin1DLocalPhaseFactor)
-    n, k = size(f1)
-    size(f2) == (n, k) || throw(ArgumentError("paired 2D Levin inputs must have the same size"))
-    length(theta_factor.perm) == k || throw(ArgumentError("theta factor length must match y-dimension"))
-    length(radial_factor1.perm) == n || throw(ArgumentError("first radial factor length must match x-dimension"))
-    length(radial_factor2.perm) == n || throw(ArgumentError("second radial factor length must match x-dimension"))
-    h1 = zeros(ComplexF64, n)
-    h2 = zeros(ComplexF64, n)
-    for segment in theta_factor.segments
-        idx = segment.idx
-        rhs = Matrix{ComplexF64}(undef, length(idx), 2n)
-        @inbounds for (ii, jj) in enumerate(idx)
-            srcj = theta_factor.perm[jj]
-            for row in 1:n
-                rhs[ii, row] = f1[row, srcj]
-                rhs[ii, n + row] = f2[row, srcj]
-            end
-        end
-        vals = _levin_1d_local_segment_factor_batch(rhs, segment)
-        @inbounds for row in 1:n
-            h1[row] += vals[row]
-            h2[row] += vals[n + row]
-        end
-    end
-    return (
-        _levin_1d_integral_local_phase_factored(h1, radial_factor1),
-        _levin_1d_integral_local_phase_factored(h2, radial_factor2),
-    )
 end
 
 """
@@ -2917,77 +2384,6 @@ function convolution_integral_eccentric_trapezoidal_isem(a, p, e, s, l, m, n, N_
     return convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N_sample; Nmax = Nmax, cache=route.cache, kwargs...)
 end
 
-function convolution_integral_eccentric_levin_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
-    _check_mode_geometry(cache, KG_sample)
-    ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
-    ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
-    N_sample <= Nmax || throw(ArgumentError("N_sample must not exceed Nmax"))
-    Frequencies = KG_sample["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    ϒr = Frequencies["ϒr"]
-    ϒφ = Frequencies["ϒϕ"]
-    a = KG_sample["a"]
-    ω = (m * ϒφ + n * ϒr) / Γ
-    if _skip_radiative_mode(s, a, m, ω)
-        res = _zero_radiative_mode(ω, KG_sample; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        res["N_sample_requested"] = N_sample
-        res["N_sample"] = N_sample
-        res["Quadrature"] = "levin"
-        return res
-    end
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
-    levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
-    flux_scale = max(Float64(max_flux), eps(Float64))
-    effective_sample_tol = min(sample_tol, 3.0 * sqrt(Float64(tol)))
-    low_flux_budget = _levin_low_flux_budget(Float64(max_flux), Float64(tol), mode_abs_floor)
-
-    N = N_sample
-    res = nothing
-    pending_low_flux_check = false
-    while true
-        KG_cheby = _cached_eccentric_cheby_sample!(levin_cache, KG_sample, N)
-        Ysamp = if s == 2
-            threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_cheby) : y_sample_p2_isem(Ysol, KG_cheby)
-        else
-            threaded_sampling ? GridSampling.y_sample_m2_isem_threaded(Ysol, KG_cheby) : y_sample_m2_isem(Ysol, KG_cheby)
-        end
-        res2 = _eccentric_flux_from_cheby_sample(KG_cheby, Ysamp, SH, s, a, ω, m, n; cache = levin_cache)
-        absE = abs(res2["EnergyFlux"])
-        if res === nothing
-            # The first grid can miss a narrow periapsis burst; a value below the floor is only accepted
-            # when the next refinement confirms it.
-            res = res2
-            pending_low_flux_check = absE < low_flux_budget
-        else
-            relE = _relative_energy_change(res2["EnergyFlux"], res["EnergyFlux"])
-            excess = abs(res2["EnergyFlux"]) / flux_scale
-            factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
-            low_flux_confirmed = pending_low_flux_check && absE < low_flux_budget && _levin_low_flux_stable(res2["EnergyFlux"], res["EnergyFlux"], mode_abs_floor)
-            below_floor = mode_abs_floor > 0.0 && absE < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
-            res = res2
-            if below_floor || low_flux_confirmed || factor * relE <= effective_sample_tol
-                break
-            end
-            pending_low_flux_check = absE < low_flux_budget
-        end
-        N >= Nmax && break
-        N = min(2N, Nmax)
-    end
-
-    if zero_low_flux && mode_abs_floor > 0.0 && abs(res["EnergyFlux"]) < mode_abs_floor
-        res["Amplitude"] = 0.0 + 0.0im
-        res["EnergyFlux"] = 0.0
-        res["AngularMomentumFlux"] = 0.0
-        res["CarterConstantFlux"] = 0.0
-        res["LowFluxZeroed"] = true
-    end
-    res["N_sample_requested"] = N_sample
-    res["N_sample"] = N
-    res["Quadrature"] = "levin"
-    return res
-end
-
 function _eccentric_flux_from_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m, n)
     if s == 2
         S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
@@ -3038,69 +2434,6 @@ function _internal_radial_phase(KG_samp::Dict, s::Int, a, ω, m)
     log_term = log.((r .- rp) ./ (r .- rm))
     ψ = ω .* rs .- a .* m .* log_term ./ (2.0κ)
     return (phase_values = ψ, phase_factor = exp.(1im .* ψ))
-end
-
-function _cached_eccentric_factored_levin_factor!(cache::EccentricFluxCache, N::Int, m::Int, n::Int, ω, sign::Int, phase_values::Vector{<:Number})
-    key = (N, m, n, sign, _omega_key(ω))
-    return get!(cache.levin_factored_phase_factors, key) do
-        _levin_1d_local_phase_factor_from_values(phase_values)
-    end
-end
-
-function _eccentric_levin_integral_factored(f_vals::Vector{<:Number}, phase_factor::Vector{<:Number}, phase_values::Vector{<:Number}, cache, N::Int, m::Int, n::Int, ω, sign::Int)
-    smooth_vals = f_vals ./ phase_factor
-    if cache isa EccentricFluxCache
-        factor = _cached_eccentric_factored_levin_factor!(cache, N, m, n, ω, sign, phase_values)
-        return _levin_1d_integral_local_phase_factored(smooth_vals, factor)
-    end
-    factor = _levin_1d_local_phase_factor_from_values(phase_values)
-    return _levin_1d_integral_local_phase_factored(smooth_vals, factor)
-end
-
-function _eccentric_flux_from_cheby_sample(KG_samp::Dict, Ysamp::Dict, SH, s, a, ω, m, n; cache = nothing)
-    N = KG_samp["N_sample"]::Int
-    if s == 2
-        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
-        S2 = (m^2 + (a * ω)^2 - 2 - 2 * a * ω * m - SH.lambda) * S0
-        Jp, Jm, _, _, _, prefactor = integrand_eccentric_sample_cheby_p2(KG_samp, Ysamp, (S0, S1, S2), n)
-        phase = _eccentric_radial_phase(KG_samp, cache, m, n, ω)
-        rphase = phase.rphase
-        internal_phase = _internal_radial_phase(KG_samp, s, a, ω, m)
-        integral = (_eccentric_levin_integral_factored(Jp, internal_phase.phase_factor, rphase .+ internal_phase.phase_values, cache, N, m, n, ω, 1) +
-                    _eccentric_levin_integral_factored(Jm, internal_phase.phase_factor, .-rphase .+ internal_phase.phase_values, cache, N, m, n, ω, -1)) * prefactor
-        hf = horizon_factor(ω, a, m)
-        return Dict(
-            "Amplitude" => integral,
-            "omega" => ω,
-            "EnergyFlux" => hf * abs2(integral),
-            "AngularMomentumFlux" => hf * m * abs2(integral) / ω,
-            "CarterConstantFlux" => 0.0,
-            "Trajectory" => KG_samp,
-            "YSolution" => Ysamp,
-            "SWSH" => SH
-        )
-    elseif s == -2
-        S0, S1 = value_and_theta_derivative(SH, π/2, 0.0)
-        S2 = (m^2 + (a * ω)^2 + 2 - 2 * a * ω * m - SH.lambda) * S0
-        Jp, Jm, _, _, _, prefactor = integrand_eccentric_sample_cheby_m2(KG_samp, Ysamp, (S0, S1, S2), n)
-        phase = _eccentric_radial_phase(KG_samp, cache, m, n, ω)
-        rphase = phase.rphase
-        internal_phase = _internal_radial_phase(KG_samp, s, a, ω, m)
-        integral = (_eccentric_levin_integral_factored(Jp, internal_phase.phase_factor, rphase .+ internal_phase.phase_values, cache, N, m, n, ω, 1) +
-                    _eccentric_levin_integral_factored(Jm, internal_phase.phase_factor, .-rphase .+ internal_phase.phase_values, cache, N, m, n, ω, -1)) * prefactor
-        return Dict(
-            "Amplitude" => integral,
-            "omega" => ω,
-            "EnergyFlux" => abs2(integral) / (4.0pi * ω^2),
-            "AngularMomentumFlux" => m * abs2(integral) / (4.0pi * ω^3),
-            "CarterConstantFlux" => 0.0,
-            "Trajectory" => KG_samp,
-            "YSolution" => Ysamp,
-            "SWSH" => SH
-        )
-    else
-        error("Spin weight s must be either 2 or -2.")
-    end
 end
 
 struct AdaptiveEccentricLevinLeaf
@@ -4253,7 +3586,7 @@ end
 """
     convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 32, Nmax = DEFAULT_LEVIN_NMAX,
         Kmax = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol = 1e-3, max_flux = 1.0, mode_abs_floor = 1e-16,
-        zero_low_flux = false, threaded_sampling = false, adaptive = true, adaptive_local_n, adaptive_min_depth,
+        zero_low_flux = false, threaded_sampling = false, adaptive_local_n, adaptive_min_depth,
         adaptive_max_depth = 8, adaptive_tol_max, cache = nothing, trajectory = nothing, geometry_owner = nothing)
 
 Flux of the (s, l, m, n, k) mode of the bound Kerr geodesic (a, p, e, x) using the ISEM radial solution and Levin
@@ -4273,7 +3606,6 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
         mode_abs_floor::Float64 = 1e-16,
         zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
-        adaptive::Bool = true,
         adaptive_local_n::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
         adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH,
         adaptive_max_depth::Int = 8,
@@ -4301,28 +3633,14 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
         if k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
-        if adaptive
-            return convolution_integral_eccentric_adaptive_levin_isem(
-                route.master === nothing ? KG : route.master, s, l, m, n;
-                tol = tol,
-                tol0 = sample_tol,
-                local_n = adaptive_local_n,
-                min_depth = adaptive_min_depth,
-                max_depth = adaptive_max_depth,
-                depth_tol_max = adaptive_tol_max,
-                mode_abs_floor = mode_abs_floor,
-                zero_low_flux = zero_low_flux,
-                threaded_sampling = threaded_sampling, cache=route.cache,
-            )
-        end
-        master = route.master
-        master === nothing && (master = kerr_geo_eccentric_sample_dense(KG, Nmax))
-        return convolution_integral_eccentric_levin_isem(
-            master, s, l, m, n, N;
-            Nmax = Nmax,
+        return convolution_integral_eccentric_adaptive_levin_isem(
+            route.master === nothing ? KG : route.master, s, l, m, n;
             tol = tol,
-            sample_tol = sample_tol,
-            max_flux = max_flux,
+            tol0 = sample_tol,
+            local_n = adaptive_local_n,
+            min_depth = adaptive_min_depth,
+            max_depth = adaptive_max_depth,
+            depth_tol_max = adaptive_tol_max,
             mode_abs_floor = mode_abs_floor,
             zero_low_flux = zero_low_flux,
             threaded_sampling = threaded_sampling, cache=route.cache,
@@ -4330,7 +3648,7 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
     else
         master = route.master
         master === nothing && (master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax))
-        return convolution_integral_generic_levin_isem(master, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, adaptive = adaptive, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max, cache=route.cache)
+        return convolution_integral_generic_levin_isem(master, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max, cache=route.cache)
     end
 end
 

@@ -2183,7 +2183,7 @@ The keyword `lifecycle_observer` is a diagnostic hook and is not guaranteed to b
 Return a `TeukolskyPointParticleMode` holding the mode information, the Teukolsky amplitude, the three fluxes,
 the trajectory, the Y solution, the spin-weighted spheroidal harmonic and the method settings used.
 """
-function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8, levin_adaptive::Bool = true, stop_requested=nothing, lifecycle_observer=nothing)
+function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing, lifecycle_observer=nothing)
     # A non-binary64 floating-point orbit (BigFloat, Double64) takes the arbitrary-precision route
     # (ArbitraryPrecisionModes); the binary64 routes take any other real input converted to Float64.
     if _arbitrary_precision_orbit(a, p, e, x)
@@ -2228,7 +2228,7 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
         if method == "isem_trapezoidal"
             output = ConvolutionIntegrals.convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, cache=cache, trajectory=ModeSummation.submission_orbit!(scope))
         elseif method == "isem_levin"
-            output = ConvolutionIntegrals.convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k; N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, adaptive_max_depth=levin_max_depth, adaptive=levin_adaptive, cache=cache, trajectory=ModeSummation.submission_orbit!(scope))
+            output = ConvolutionIntegrals.convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k; N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, adaptive_max_depth=levin_max_depth, cache=cache, trajectory=ModeSummation.submission_orbit!(scope))
         end
             output
           end
@@ -2298,8 +2298,8 @@ The other keywords are those of `Teukolsky_pointparticle_mode`.
 Return a `GSNPointParticleMode`, whose amplitude is the Teukolsky amplitude divided by the GSN-to-Teukolsky
 transmission conversion factor (`Btrans` for `s = +2`, `Ctrans` for `s = -2`).
 """
-function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8, levin_adaptive::Bool = true, stop_requested=nothing, lifecycle_observer=nothing)
-    Teukolsky_mode = Teukolsky_pointparticle_mode(s, l, m, n, k, a, p, e, x; method=method, N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, truncation_floor=truncation_floor, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, levin_max_depth=levin_max_depth, levin_adaptive=levin_adaptive, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, zero_low_flux::Bool = false, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing, lifecycle_observer=nothing)
+    Teukolsky_mode = Teukolsky_pointparticle_mode(s, l, m, n, k, a, p, e, x; method=method, N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, truncation_floor=truncation_floor, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux, threaded_sampling=threaded_sampling, levin_max_depth=levin_max_depth, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
     if iszero(Teukolsky_mode.amplitude)
         T_to_SN = one(Teukolsky_mode.amplitude)
     elseif s == 2
