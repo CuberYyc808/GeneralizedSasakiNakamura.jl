@@ -76,7 +76,7 @@ using .PEquation: PEquation
 export BoundaryCondition, IN, UP, OUT, DOWN
 export NormalizationConvention, UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
 export Mode, GSNRadialFunction, TeukolskyRadialFunction
-export YRadialFunction, Y_radial
+export YRadialFunction, Y_radial, Y_rstar
 
 # Frequencies within this distance of zero count as zero when choosing the mirror mode.
 const _STATIC_OMEGA_TOL = 1e-12
@@ -124,8 +124,12 @@ end
 Callable auxiliary ISEM radial solution returned by `Y_radial`: `Y(r)` evaluates the solution at radius `r`.
 Stores the mode, boundary condition, asymptotic amplitudes, the evaluators of the underlying P, Teukolsky and X
 solutions where available, and the normalization convention.
+
+The type parameter is the type of `Y_solution`. `YRadialFunction(fields...)` holds it as an abstract `Function`
+(`YRadialFunction{Function}`); `Y_radial` returns the concrete parameter where `Y_rstar` evaluates the solution
+itself, so that `Y_rstar(Y, rstar)` is inferred from the type of `Y`.
 """
-struct YRadialFunction
+struct YRadialFunction{F<:Function}
     mode::Mode
     boundary_condition::BoundaryCondition
     transmission_amplitude
@@ -135,9 +139,15 @@ struct YRadialFunction
     Teukolsky_solution::Union{Function, Missing}
     X_solution::Union{Function, Missing}
     Y_scalar_solution::Function
-    Y_solution::Function
+    Y_solution::F
     normalization_convention::NormalizationConvention
+    YRadialFunction{F}(mode, bc, trans, inc, ref, P, T, X, Yscalar, Y, convention) where {F<:Function} =
+        new{F}(mode, bc, trans, inc, ref, P, T, X, Yscalar, Y, convention)
 end
+# Inside the package every YRadialFunction is a YRadialFunction{Function}, the layout it had before the parameter:
+# code that takes one is compiled once, not once per type of route.
+YRadialFunction(mode, bc, trans, inc, ref, P, T, X, Yscalar, Y, convention) =
+    YRadialFunction{Function}(mode, bc, trans, inc, ref, P, T, X, Yscalar, Y, convention)
 
 function Base.show(io::IO, ::MIME"text/plain", y_func::YRadialFunction)
     println(io, "YRadialFunction(")
@@ -166,6 +176,13 @@ end
 _conjugate_or_missing(x) = x === missing ? missing : conj(x)
 _conjugate_solution_value(x) = x isa Tuple ? map(_conjugate_solution_value, x) : _conjugate_or_missing(x)
 _conjugate_solution_function(f) = f === missing ? missing : (args...; kwargs...) -> _conjugate_solution_value(f(args...; kwargs...))
+
+# Y_solution of the mirror mode of an RstarYSolution (conjugated values): a type of its own, so that Y_rstar reaches
+# the solution. Every other Y_solution is conjugated by _conjugate_solution_function.
+struct ConjugatedYSolution{F} <: Function
+    solution::F
+end
+(y::ConjugatedYSolution)(r) = _conjugate_solution_value(y.solution(r))
 
 struct ConjugatedTeukolskySolution{F,P,R}
     full_value::F
@@ -228,6 +245,8 @@ end
 _conjugate_solution_function(f::Certification.UncertifiedSolution) =
     Certification.UncertifiedSolution(_conjugate_solution_function(f.solution),
         f.estimated_error, f.stages)
+_conjugate_y_solution(f) = _conjugate_solution_function(f)
+_conjugate_y_solution(f::RadialFunctions.RstarYSolution) = ConjugatedYSolution(f)
 function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
     mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return YRadialFunction(
@@ -240,7 +259,7 @@ function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
         _conjugate_teukolsky_solution(f.Teukolsky_solution),
         _conjugate_solution_function(f.X_solution),
         _conjugate_solution_function(f.Y_scalar_solution),
-        _conjugate_solution_function(f.Y_solution),
+        _conjugate_y_solution(f.Y_solution),
         f.normalization_convention,
     )
 end
@@ -448,7 +467,7 @@ function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
 end
 
 """
-    Y_radial(s, l, m, a, omega, boundary_condition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
+    Y_radial(s, l, m, a, omega, boundary_condition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, lambda=nothing)
 
 Construct the auxiliary radial function Y used by the point-particle convolution integrals for the mode
 `(s, l, m, a, omega)` and return a `YRadialFunction`; only `s = -2` with `IN` and `s = +2` with `UP` are
@@ -465,16 +484,33 @@ the result. Explicit high orders are not smooth in `omega`: at N = 320 Y moves b
 neighbouring frequencies (most near the horizon), and some frequencies fail with "no certified seed"; the default
 order is the one to use in production.
 
-`Y.Y_solution(r)` returns `(Y, dY/dr, X, err)` with `err` always `0`, which is not an accuracy estimate. The field
-is an abstract `Function`; in hot loops annotate the result, e.g.
-`Y.Y_solution(r)::Tuple{ComplexF64, ComplexF64, ComplexF64, Float64}` for binary64 input.
+`lambda` is the spheroidal eigenvalue of the mode, at the precision of `a` and `omega`; when omitted it is computed
+from `(s, l, m, a omega)`. A caller that already has it passes it to avoid the second computation. It is used on the
+ISEM route at real `omega` only (a supplied eigenvalue would change the route choice at complex `omega`); the
+`"Riccati"` and `"linear"` methods and exact-extremal spins compute their own.
+
+`Y.Y_solution(r)` returns `(Y, dY/dr, X, err)` with `err` always `0`, which is not an accuracy estimate.
+`Y_rstar(Y, rstar)` evaluates `(Y, dY/dr, X)` at the tortoise coordinate. On the ISEM route for `s = -2`, `IN`, real
+`omega` and binary64 input it keeps the precision of Y near the horizon (see `Y_rstar`); there the returned
+`YRadialFunction` carries the type of `Y_solution` and `Y_rstar` is inferred.
 """
-function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
+Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, lambda=nothing) =
+    _typed_by_y_solution(_y_radial(s, l, m, a, omega, boundary_condition; method, xm, N, tol, sfe, lfe, lambda))
+
+# Y typed by its Y_solution where Y_rstar evaluates the solution itself; every other Y as it is.
+_typed_by_y_solution(f::YRadialFunction) = _typed_by_y_solution(f, f.Y_solution)
+_typed_by_y_solution(f::YRadialFunction, y) = f
+_typed_by_y_solution(f::YRadialFunction, y::Union{RadialFunctions.RstarYSolution, ConjugatedYSolution}) =
+    YRadialFunction{typeof(y)}(f.mode, f.boundary_condition, f.transmission_amplitude, f.incidence_amplitude,
+        f.reflection_amplitude, f.P_solution, f.Teukolsky_solution, f.X_solution, f.Y_scalar_solution, y,
+        f.normalization_convention)
+
+function _y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::BoundaryCondition; method="auto", xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing, lambda=nothing)
     GeneralizedSasakiNakamura._check_radial_options(method, xm)
     if a < zero(a)
-        positive = Y_radial(
+        positive = _y_radial(
             s, l, -m, -a, omega, boundary_condition;
-            method, xm, N, tol, sfe, lfe)
+            method, xm, N, tol, sfe, lfe, lambda)
         return _spin_reflect_y_radial_function(positive, m, a)
     end
     if _is_static_frequency(omega)
@@ -485,7 +521,8 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
             s, l, m, a, omega, boundary_condition;
             method=method == "auto" ? "ISEM" : method, tol=tol, allow_complex=true)
     elseif _is_reflected_lhp_frequency(omega)
-        positive_func = Y_radial(s, l, -m, a, -conj(omega), boundary_condition; method=method, xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
+        positive_func = _y_radial(s, l, -m, a, -conj(omega), boundary_condition; method=method, xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe,
+            lambda=lambda === nothing ? nothing : conj(lambda))
         return _conjugate_y_radial_function(positive_func, m, omega)
     end
 
@@ -493,7 +530,7 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
         _validate_y_branch(s, boundary_condition)
         branch = boundary_condition == IN ? :IN : :UP
         build() = y_radial_function(radial_route(s, l, m, a, omega, branch;
-            N=N, xm=xm, tol=tol,
+            N=N, xm=xm, tol=tol, lambda=isreal(omega) ? lambda : nothing,
             small_frequency_expansion=sfe === nothing ? :auto : sfe,
             large_frequency_expansion=lfe === nothing ? :auto : lfe))
         isreal(omega) && return build()
@@ -515,6 +552,33 @@ function Y_radial(s::Int, l::Int, m::Int, a, omega, boundary_condition::Boundary
 end
 
 (y_func::YRadialFunction)(coord) = y_func.Y_scalar_solution(coord)
+
+"""
+    Y_rstar(Y::YRadialFunction, rstar)
+    Y_rstar(Y::YRadialFunction, rstars::AbstractVector)
+
+`(Y, dY/dr, X)` at the tortoise coordinate `rstar`, or a vector of them for a vector of `rstar`.
+
+For `s = -2`, `IN` and real `omega` on the ISEM route (`method = "auto"` or `"ISEM"`, binary64 input), `r - r_+` is
+taken from `rstar` with its full relative precision. Near the horizon, where Y comes from its horizon series (it has
+one for `sqrt(1 - a^2) > 1e-3`), Y is then good to about `eps` times its condition number
+`|r* dlog Y/dr*| ~ 2 |r*| |kappa / r_+ - i k|`, where `Y.Y_solution(r)` carries the rounding of `r`, a relative
+`eps r_+ / (r - r_+)`, and fails once `r` rounds to `r_+`. For a `Y` returned by `Y_radial` the result type there,
+`NTuple{3, ComplexF64}`, is inferred from the type of `Y`. Every other Y is evaluated at
+`r = r_from_rstar(a, rstar)` by `Y.Y_solution`.
+"""
+Y_rstar(Y::YRadialFunction, rstar::Union{Real,AbstractVector}) = _y_rstar(Y.Y_solution, Y.mode.a, rstar)
+
+# The vector form goes through this method once, so that the loop is compiled for the type of the solution also when
+# the YRadialFunction does not carry it.
+_y_rstar(y, a, rstars::AbstractVector) = [_y_rstar(y, a, rstar) for rstar in rstars]
+
+_y_rstar(y::RadialFunctions.RstarYSolution, a, rstar::Real) = RadialFunctions.y_at_rstar(y, rstar)
+_y_rstar(y::ConjugatedYSolution, a, rstar::Real) = map(conj, _y_rstar(y.solution, a, rstar))
+function _y_rstar(y, a, rstar::Real)
+    Y, dY, X = y(r_from_rstar(a, rstar))
+    return (Y, dY, X)
+end
 
 
 # ISEM.certificate(x) -> (certified, estimated_error, uncertified_stages); see Certification.

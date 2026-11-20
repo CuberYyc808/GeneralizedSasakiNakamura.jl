@@ -261,7 +261,9 @@ $Y = e^{+i\phi}\Delta^2 R^{\rm up}/r^2$ for `s = +2`, where
 $d\phi/dr = K/\Delta$ and $K = (r^2 + a^2)\omega - am$. Only these two branches
 exist, `omega` must be nonzero, and there is no tuple form. The keywords are
 `method`, `tol`, `xm`, `N`, `sfe` and `lfe`, with the meanings given for
-`Teukolsky_radial`. With `method = "auto"` or `"ISEM"`, $Y$ is built with ISEM
+`Teukolsky_radial`, and `lambda`, the spheroidal eigenvalue when the caller
+already has it, at the precision of `a` and `omega` (used on the ISEM route at
+real `omega` and $|a| < 1$). With `method = "auto"` or `"ISEM"`, $Y$ is built with ISEM
 (with the exact-extremal solver at $|a| = 1$), and a failure throws an error
 without falling back; `"linear"` and `"Riccati"` build it from a numerically
 integrated GSN function and accept complex `omega` only at $|a| = 1$.
@@ -280,10 +282,15 @@ The returned `YRadialFunction` is callable at the Boyer–Lindquist $r$:
 | `Y(r)` | $Y(r)$ |
 | `Y.Y_solution(r)` | `(Y, dY/dr, X, err)`, where `X` is the GSN function at $r_*(r)$ and `err` is always `0` (not an accuracy estimate) |
 | `Y.X_solution(r)` | the GSN function at $r_*(r)$ |
+| `Y_rstar(Y, rstar)` | `(Y, dY/dr, X)` at the tortoise coordinate; a vector of them for a vector of `rstar` |
 
-The `Y_solution` field is an abstract `Function`; in hot loops, annotate the
-result, e.g. `Y.Y_solution(r)::Tuple{ComplexF64, ComplexF64, ComplexF64, Float64}`
-for binary64 input.
+`Y_rstar` takes $r - r_+$ from $r_*$ with full relative precision for `s = -2`,
+`IN` and real `omega` on the ISEM route with binary64 input, so near the horizon
+(for $\sqrt{1 - a^2} > 10^{-3}$) $Y$ keeps its accuracy where `Y.Y_solution(r)`
+is limited by the rounding of $r$ and fails once $r$ rounds to $r_+$; there
+`Y_radial` returns a `YRadialFunction` typed by its `Y_solution`, and the result
+type of `Y_rstar` is inferred. Other solutions are evaluated at
+`r_from_rstar(a, rstar)`.
 
 Its amplitudes are the Teukolsky amplitudes of the solution obtained from the
 GSN function: `transmission_amplitude` is the GSN-to-Teukolsky conversion
@@ -296,6 +303,7 @@ the conversion factor times it.
 
 ```@docs
 Y_radial
+Y_rstar
 YRadialFunction
 ```
 

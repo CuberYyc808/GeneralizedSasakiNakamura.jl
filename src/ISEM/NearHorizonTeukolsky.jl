@@ -6,7 +6,7 @@ export TeukolskyTaylorChain, TeukolskyInwardChain, teukolsky_taylor_chain, teuko
 #     Delta^2 R'' + (s + 1) Delta Delta' R' + [K^2 - 2 i s (r - 1) K + Delta (4 i s omega r - lambda)] R = 0,
 # multiplied out so that the three coefficients are polynomials in r of degree <= 4. About r0, R(r0 + t) = sum c_n t^n
 # follows from a recurrence of at most five terms; the series converges for |t| < r0 - r_+, the distance to the nearest
-# singular point (r_- lies further away, infinity is irregular). Used by RadialFunctions.near_horizon_y for Y of
+# singular point (r_- lies further away, infinity is irregular). Used by RadialFunctions.RstarYSolution for Y of
 # s = -2 IN at real omega between the horizon series and the matching point, where the converted Y = C11 X + C12 X'
 # cancels by 1e4 - 4e4 and passes the error of X on enlarged (G-005).
 #

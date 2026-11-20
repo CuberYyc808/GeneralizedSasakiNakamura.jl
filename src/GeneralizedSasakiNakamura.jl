@@ -25,7 +25,7 @@ using PrecompileTools: @setup_workload, @compile_workload
 export GSN_radial, Teukolsky_radial # Homogeneous solutions
 export GSN_pointparticle_mode, Teukolsky_pointparticle_mode, Teukolsky_pointparticle_flux # Inhomogeneous solutions
 export BoundaryCondition, NormalizationConvention, Mode, GSNRadialFunction, TeukolskyRadialFunction, YRadialFunction
-export Y_radial
+export Y_radial, Y_rstar
 export ISEM
 
 # Default values
@@ -185,6 +185,7 @@ include("ISEM/ISEM.jl")
 
 const YRadialFunction = ISEM.YRadialFunction
 const Y_radial = ISEM.Y_radial
+const Y_rstar = ISEM.Y_rstar
 
 _is_auto_method(method) = method == "auto"
 _is_isem_method(method) = method == "ISEM"

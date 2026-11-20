@@ -534,7 +534,7 @@ end
 # 12. High frequency: the reflected amplitude from the complex path (ISEM.ComplexPathAmplitudes), standalone and
 #     through the route (Matching._complex_path_reflection, taken where the route's |B_ref / B_inc| < 1e-6, or < 1e-2 at
 #     horizon exponent r_+ k / kappa < 10), and Y at large r from the two infinity series
-#     (RadialFunctions.TwoWaveYSolution). The reflection is compared relative to itself; |dB_ref / B_inc| <= 1e-30 counts as exact (it moves R(r) at r = 1e4 by 1e-14), which is where the
+#     (RadialFunctions.RstarYSolution). The reflection is compared relative to itself; |dB_ref / B_inc| <= 1e-30 counts as exact (it moves R(r) at r = 1e4 by 1e-14), which is where the
 #     Float64 path floor sits for B_ref / B_inc ~ 1e-60 - 1e-74 at omega = 10. Superradiant modes (k <= 0) keep the
 #     route's value and are not tested here.
 # ---------------------------------------------------------------------------------------------------

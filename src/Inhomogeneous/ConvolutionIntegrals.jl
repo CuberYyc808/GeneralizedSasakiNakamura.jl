@@ -4057,7 +4057,7 @@ end
 
 const TWO_WAVE_TOL = 1e-12
 
-# The two Teukolsky infinity solutions over the whole orbit when Y is a TwoWaveYSolution: its series (cin, cout) at
+# The two Teukolsky infinity solutions over the whole orbit when Y is an RstarYSolution: its series (cin, cout) at
 # r >= r_series, from where they reach TWO_WAVE_TOL, and inward Taylor chains of R_in and R_out started from them at r_series
 # down to r_low (the periapsis). The 40-term series above stop near r = 15 at omega = 5.2, and below them the
 # segments took the direct Y, whose in wave the out phase leaves unresolved: at (a, p, e) = (0.9, 3.9, 0.95),
@@ -4065,7 +4065,7 @@ const TWO_WAVE_TOL = 1e-12
 # at r = 8 - 16 and with the near-horizon Teukolsky chain Y at r = 2 - 4 to 3e-14; the converted Y differs by 6e-11
 # at r = 6 (its X -> Y conversion amplifies the rounding of X there). nothing if a chain cannot be built.
 function _y_two_wave_chains(Yf, m::Int, lambda, r_low)
-    Yf isa ISEM.RadialFunctions.TwoWaveYSolution || return nothing
+    Yf isa ISEM.RadialFunctions.RstarYSolution || return nothing
     (r_low isa Real && isfinite(r_low)) || return nothing
     RF = ISEM.RadialFunctions
     a, ω = Yf.a, Yf.omega
@@ -4092,7 +4092,7 @@ function _y_two_wave_chains(Yf, m::Int, lambda, r_low)
     # inward, where |Y_in| + |Y_out| stays within TWO_WAVE_CANCELLATION times the largest |Y| of the last
     # TWO_WAVE_CANCELLATION_WINDOW scanned radii (a sustained growth, not a near-node of Y where two comparable waves
     # interfere) and, at every TWO_WAVE_CHECK_EVERY-th radius, their Y agrees with the route's Y to the latter's
-    # conversion error (max(1e-9, 10 eps (2 omega r)^4), see TwoWaveYSolution); below it the segments take the direct Y,
+    # conversion error (max(1e-9, 10 eps (2 omega r)^4), see RstarYSolution); below it the segments take the direct Y,
     # which is not oscillatory there.
     A_in, A_out = Yf.incidence, Yf.reflection
     κ = sqrt(1 - a^2)

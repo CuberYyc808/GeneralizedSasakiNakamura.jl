@@ -11,7 +11,7 @@ include(joinpath(@__DIR__, "..", "common", "helpers.jl"))
 
 @testset "exports" begin
     exported = (
-        :r_from_rstar, :rstar_from_r, :GSN_radial, :Teukolsky_radial, :Y_radial,
+        :r_from_rstar, :rstar_from_r, :GSN_radial, :Teukolsky_radial, :Y_radial, :Y_rstar,
         :GSN_pointparticle_mode, :Teukolsky_pointparticle_mode, :Teukolsky_pointparticle_flux,
         :BoundaryCondition, :NormalizationConvention, :Mode, :GSNRadialFunction, :TeukolskyRadialFunction,
         :YRadialFunction, :ISEM, :IN, :UP, :OUT, :DOWN, :UNIT_GSN_TRANS, :UNIT_TEUKOLSKY_TRANS,

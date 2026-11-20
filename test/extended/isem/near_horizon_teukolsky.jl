@@ -21,7 +21,7 @@ _nh_route(l, m, a, omega) = D.radial_route(-2, l, m, a, omega, :IN; small_freque
     for p in G005_POINTS
         route = _nh_route(p...)
         y, mismatch = D.RadialFunctions._route_y_solution_checked(route, D.RadialFunctions._route_y_amplitudes(route))
-        @test y isa D.RadialFunctions.NearHorizonY && y.kind === :chain
+        @test y isa D.RadialFunctions.RstarYSolution && y.chain !== nothing
         @test mismatch <= 1e-9
         for r in (y.r_start, y.r_check)
             @test y(r * (1 - 1e-12))[1] ≈ y(r * (1 + 1e-12))[1] rtol=1e-9
@@ -52,4 +52,48 @@ end
         Y = Y_radial(-2, l, m, a, omega, IN)
         @test Y.Y_solution(r)[1] / Y.transmission_amplitude ≈ reference rtol=1e-11
     end
+end
+
+@testset "Y_rstar: Y at the tortoise coordinate" begin
+    # Y_rstar against Y_solution(r_from_rstar(r*)) where r is far enough from r_+ to hold r*. Both take the same piece
+    # below r_check (horizon series, Taylor chain) and from r_two on (two infinity series), where they differ by the
+    # rounding of r, about eps |r dlog Y/dr|, and X by that of x next to 1; between r_check and r_two both convert X,
+    # which passes the rounding of its inputs on enlarged (to 1e-9 at (2, 1, 0.9, 1.2595)).
+    # Deep in the horizon region Y_solution has no digits left; there Y ~ exp((2 kappa / r_+ - 2 i k) r*) exactly, and
+    # Y_rstar is continuous where its pieces hand over.
+    # Y_radial types Y by its solution, also for the mirror mode (omega < 0), so that Y_rstar is inferred; inside the
+    # package a YRadialFunction keeps the untyped layout. lambda = the computed eigenvalue changes nothing.
+    for (l, m, a, omega) in ((2, 2, 0.9, 0.6), (2, -2, 0.9, 0.6), (3, 1, 0.5, 1.3), G005_POINTS[3], (2, 2, 0.9, 0.01))
+        for w in (omega, -omega)
+            Y = Y_radial(-2, l, m, a, w, IN)
+            y = w > 0 ? Y.Y_solution : Y.Y_solution.solution
+            @test y isa D.RadialFunctions.RstarYSolution && y.chain !== nothing
+            S = w > 0 ? D.RadialFunctions.RstarYSolution : D.ConjugatedYSolution
+            @test Y isa YRadialFunction{<:S}
+            @test Base.return_types(Y_rstar, (typeof(Y), Float64)) == [NTuple{3,ComplexF64}]
+            @test D.y_radial_function(D.radial_route(-2, l, m, a, w, :IN)) isa YRadialFunction{Function}
+            for rs in (-5.0, -1.0, 0.0, 3.0, 10.0, 40.0)
+                r = r_from_rstar(a, rs)
+                old = Y.Y_solution(r)
+                new = Y_rstar(Y, rs)
+                tol = r < y.r_check ? 1e-13 : r < y.r_two ? 1e-8 : 1e-11
+                @test all(abs(new[i] / old[i] - 1) <= tol for i in 1:3)
+            end
+            kappa = sqrt(1 - a^2); rplus = 1 + kappa; k = w - m * a / (2rplus)
+            @test Y_rstar(Y, -400.0)[1] / Y_rstar(Y, -300.0)[1] ≈ exp(-100 * (2kappa / rplus - 2im * k)) rtol=1e-11
+            for r in (y.r_start, y.r_check, y.r_two)
+                isfinite(r) || continue
+                rs = rstar_from_r(a, r)
+                @test Y_rstar(Y, rs - 1e-9)[1] ≈ Y_rstar(Y, rs + 1e-9)[1] rtol=1e-7
+            end
+            @test Y_rstar(Y, [-5.0, 3.0]) == [Y_rstar(Y, -5.0), Y_rstar(Y, 3.0)]
+            @test Y_rstar(Y_radial(-2, l, -m, -a, w, IN), -50.0) == Y_rstar(Y, -50.0)
+            Yl = Y_radial(-2, l, m, a, w, IN; lambda=Y.mode.lambda)
+            @test Yl.incidence_amplitude == Y.incidence_amplitude && Yl.Y_solution(3.0) == Y.Y_solution(3.0)
+        end
+    end
+    # Other solutions are evaluated at r_from_rstar(a, rstar) and stay untyped.
+    Yup = Y_radial(2, 2, 2, 0.7, 0.5, UP)
+    @test Yup isa YRadialFunction{Function}
+    @test Y_rstar(Yup, 3.0) == Yup.Y_solution(r_from_rstar(0.7, 3.0))[1:3]
 end
