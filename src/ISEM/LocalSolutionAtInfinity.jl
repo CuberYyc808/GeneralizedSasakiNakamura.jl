@@ -42,11 +42,13 @@ function _infinity_coefficients!(
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("coefficient buffer is too short."))
     C = eltype(coeffs)
-    rho = convert(C, rho)
-    sigma = convert(C, sigma)
-    p(j) = j == 0 ? -2 * sigma : (j == 1 ? 2 * rho - a_power(-1) : -a_power(j - 2))
-    q(j) = b_power(j - 2) + sigma * a_power(j) - rho * a_power(j - 1) +
-        (j == 0 ? rho^2 - rho : zero(C))
+    # New names instead of reassigning the arguments: closures over a reassigned argument box it, which made
+    # every p(j), q(j) call in the O(order^2) loop below a dynamic dispatch.
+    rhoc = convert(C, rho)
+    sigmac = convert(C, sigma)
+    p(j) = j == 0 ? -2 * sigmac : (j == 1 ? 2 * rhoc - a_power(-1) : -a_power(j - 2))
+    q(j) = b_power(j - 2) + sigmac * a_power(j) - rhoc * a_power(j - 1) +
+        (j == 0 ? rhoc^2 - rhoc : zero(C))
     coeffs[1] = one(C)
     p0 = p(0)
     if !isfinite(real(p0)) || !isfinite(imag(p0)) || abs(p0) <= floatmin(real(C))
