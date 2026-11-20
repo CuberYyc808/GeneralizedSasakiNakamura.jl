@@ -1088,29 +1088,10 @@ const GENERIC_CARTER_MIN_INTERVALS = 64
 # <Lz / sin^2 theta> - a E, so <Lz / sin^2 theta> = Upsilon_phi + a E - <Phi_r>_r with
 # Phi_r = a (E (r^2 + a^2) - a Lz) / Delta averaged over the smooth radial cycle. A trapezoid of Lz cot^2 theta
 # misses the spike of width ~x near the pole of a nearly polar orbit. Cached in the sample Dict.
-function _generic_lz_cot2_average(KG_samp::Dict)
-    cached = get(KG_samp, "LzCot2Average", nothing)
-    cached === nothing || return cached
-    a = KG_samp["a"]
-    E = KG_samp["E"]
-    Lz = KG_samp["Lz"]
-    value = if iszero(Lz)
-        0.0
-    else
-        F = KG_samp["Frequencies"]
-        r_of = KG_samp["Trajectory"][2]
-        qr0 = KG_samp["InitialPhases"][2]
-        qr = range(0, pi; length = 257)
-        Φr = map(qr) do q
-            r = r_of((q - qr0) / F["ϒr"])
-            a * (E * (r^2 + a^2) - a * Lz) / (r^2 - 2r + a^2)
-        end
-        Φr_mean = (sum(Φr) - (first(Φr) + last(Φr)) / 2) / (length(Φr) - 1)
-        F["ϒϕ"] + a * E - Φr_mean - Lz
-    end
-    KG_samp["LzCot2Average"] = value
-    return value
-end
+# The orbit's <L_z cot^2 theta>: stored in the dense master when it is built (GridSampling), computed here for a
+# sample that does not carry it; never written into a shared sample.
+_generic_lz_cot2_average(KG_samp::Dict) =
+    get(() -> GridSampling.generic_lz_cot2_average(KG_samp), KG_samp, "LzCot2Average")
 
 function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
     lz_cot2 = _generic_lz_cot2_average(KG_samp)
