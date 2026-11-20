@@ -37,8 +37,6 @@ _DEFAULT_rsout = 1000
 _DEFAULT_horizon_expansion_order = 3
 _DEFAULT_infinity_expansion_order = 6
 
-_DEFAULT_rhoin = -5000
-_DEFAULT_rhoout = 5000
 _DEFAULT_horizon_expansion_order_for_cplx_freq = 25
 _DEFAULT_infinity_expansion_order_for_cplx_freq = 25
 

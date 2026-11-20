@@ -3,7 +3,7 @@ module Potentials
 using ..Kerr
 using ..Transformation
 
-export sF, sU, sF_delta, sU_delta, sW, VT, radial_Teukolsky_equation
+export sF, sU, sF_delta, sU_delta, sW
 
 const I = 1im # Mathematica being Mathematica
 
@@ -179,31 +179,6 @@ function sU(s::Int, m::Int, a, omega, lambda, r)
     else
         # Throw an error, this spin weight is not supported
         throw(DomainError(s, "Currently only spin weight s of 0, +/-1, +/-2 are supported"))
-    end
-end
-
-function VT(s::Int, m::Int, a, omega, lambda, r)
-    _K = K(m, a, omega, r)
-    _Delta = Delta(a, r)
-    return lambda - 4im*s*omega*r - (_K^2 - 2im*s*(r-1)*_K)/_Delta
-end
-
-function radial_Teukolsky_equation(s, m, a, omega, lambda, r, R, dRdr, d2Rdr2)
-    Delta(a, r)*d2Rdr2(r) + (2*(s+1)*(r-1))*dRdr(r) - VT(s, m, a, omega, lambda, r)*R(r)
-end
-
-function VSN(s::Int, m::Int, a, omega, lambda, r)
-    _eta(x) = eta(s, m, a, omega, lambda, x)
-    _drdrstar(x) = Delta(a, x)/(x^2 + a^2)
-    _d2rdrstar2(x) = (2*(x^2 - a^2))/((x^2 + a^2)^2)
-
-    _detadrstar(x) = _drdrstar(x)*eta_prime(s, m, a, omega, lambda, x)
-    _d2etadrstar2(x) = _drdrstar(x)*(eta_prime(s, m, a, omega, lambda, x)*_d2rdrstar2(x) + _drdrstar(x)*eta_primeprime(s, m, a, omega, lambda, x))
-
-    _sU(x) = sU(s, m, a, omega, lambda, x)
-
-    return begin
-        _sU(r) - ( 0.5/_eta(r) * _d2etadrstar2(r) - 0.75/(_eta(r)^2)*(_detadrstar(r))^2 )
     end
 end
 

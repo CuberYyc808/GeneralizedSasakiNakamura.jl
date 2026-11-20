@@ -375,8 +375,8 @@ function _infinity_decomposition(s, m, a, omega, lambda, state, r, rs, order)
     return (ingoing=coefficients[1], outgoing=coefficients[2])
 end
 
-# Piecewise Taylor solution in r: each patch holds a series about `center` valid on [left, right].
-# The solution returns (X, dX/dr*) for :gsn, or converts the Teukolsky pair with `transform`.
+# Piecewise Taylor solution in r of the GSN equation: each patch holds a series about `center` valid on
+# [left, right]; the solution returns (X, dX/dr*).
 struct ExtremalSeriesPatch{T,C}
     left::T
     right::T
@@ -384,11 +384,9 @@ struct ExtremalSeriesPatch{T,C}
     coefficients::C
 end
 
-struct ExtremalSeriesSolution{T,P,F}
+struct ExtremalSeriesSolution{T,P}
     a::T
     patches::P
-    representation::Symbol
-    transform::F
 end
 
 function _evaluate_polynomial(coefficients, z)
@@ -407,10 +405,7 @@ function (solution::ExtremalSeriesSolution)(rs)
         if patch.left <= r <= patch.right
             value, derivative = _evaluate_polynomial(
                 patch.coefficients, r - patch.center)
-            if solution.representation === :gsn
-                return SVector(value, _extremal_q(r) * derivative)
-            end
-            return solution.transform(r, SVector(value, derivative))
+            return SVector(value, _extremal_q(r) * derivative)
         end
     end
     throw(DomainError(rs, "requested point lies outside the extremal series solution"))
@@ -448,9 +443,7 @@ end
 
 # Propagates from rstart to rend with Taylor patches; each step is at most 0.22 (r - 1) and is halved
 # until the tail estimate is below tolerance.
-function _series_propagate(A, B, a, rstart, rend, state;
-        representation::Symbol, transform=identity, order::Int=_SERIES_ORDER,
-        tolerance=1e-12)
+function _series_propagate(A, B, a, rstart, rend, state; order::Int=_SERIES_ORDER, tolerance=1e-12)
     direction = sign(rend - rstart)
     direction == 0 && throw(ArgumentError("series interval must be nonzero"))
     patches = ExtremalSeriesPatch[]
@@ -479,7 +472,7 @@ function _series_propagate(A, B, a, rstart, rend, state;
         current = SVector(_evaluate_polynomial(coefficients, step)...)
         r = rnext
     end
-    return ExtremalSeriesSolution(a, patches, representation, transform)
+    return ExtremalSeriesSolution(a, patches)
 end
 
 # Coefficients of the GSN equation in r at |a| = 1, X'' + A X' + B X = 0 with A = F / q - q' / q, B = U / q^2,
@@ -505,38 +498,19 @@ end
 _extremal_gsn_ab(s, m, a, omega, lambda) = (r -> _extremal_gsn_a(s, m, a, omega, lambda, r),
     r -> _extremal_gsn_b(s, m, a, omega, lambda, r))
 
-# Series solution of the GSN equation in r (:gsn) or of the Teukolsky equation (:teukolsky, converted
-# back to GSN), started from the horizon state (IN) or the infinity state (UP).
-function _series_solution(s, m, a, omega, lambda, rsin, rsout,
-        boundary::Symbol, representation::Symbol, horizon_state, infinity_state;
+# Series solution of the GSN equation in r, started from the horizon state (IN) or the infinity state (UP).
+function _series_solution(s, m, a, omega, lambda, rsin, rsout, boundary::Symbol, horizon_state, infinity_state;
         order, tolerance)
     rin = Coordinates.r_from_rstar(a, rsin)
     rout = Coordinates.r_from_rstar(a, rsout)
-    q(r) = _extremal_q(r)
-    if representation === :gsn
-        A, B = _extremal_gsn_ab(s, m, a, omega, lambda)
-        initial = boundary === :IN ?
-            SVector(horizon_state[1], horizon_state[2] / q(rin)) :
-            SVector(infinity_state[1], infinity_state[2] / q(rout))
-        return _series_propagate(A, B, a,
-            boundary === :IN ? rin : rout,
-            boundary === :IN ? rout : rin,
-            initial; representation=:gsn, order, tolerance)
-    end
-
-    A = r -> -2 * (s + 1) * (r - 1) / Kerr.Delta(a, r)
-    B = r -> Potentials.VT(s, m, a, omega, lambda, r) / Kerr.Delta(a, r)
-    matrix(r) = Solutions.
-        Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(
-            s, m, a, omega, lambda, r)
-    initial_gsn = boundary === :IN ? horizon_state : infinity_state
-    initial_r = boundary === :IN ? rin : rout
-    initial = matrix(initial_r) * initial_gsn
-    transform = (r, radial) -> matrix(r) \ radial
+    A, B = _extremal_gsn_ab(s, m, a, omega, lambda)
+    initial = boundary === :IN ?
+        SVector(horizon_state[1], horizon_state[2] / _extremal_q(rin)) :
+        SVector(infinity_state[1], infinity_state[2] / _extremal_q(rout))
     return _series_propagate(A, B, a,
         boundary === :IN ? rin : rout,
         boundary === :IN ? rout : rin,
-        initial; representation=:teukolsky, transform, order, tolerance)
+        initial; order, tolerance)
 end
 
 # Numerical integration in r* of the linear GSN equation or of its Riccati form.
@@ -565,7 +539,7 @@ end
     solve_extremal_gsn(s, m, a, omega, lambda, boundary, rsin, rsout; method=:gsn_isem, kwargs...)
 
 Exact-extremal (`|a| = 1`) GSN solution with `boundary = :IN` or `:UP`, computed on `[rsin, rsout]` by
-`method` (`:gsn_isem` Taylor patches on the GSN equation, `:isem` patches on the Teukolsky equation,
+`method` (`:gsn_isem` Taylor patches on the GSN equation,
 `:linear` or `:riccati` ODE integration) and extended outside by the horizon and infinity
 expansions. Returns a NamedTuple with the solution, unit transmission amplitude, the incidence and
 reflection amplitudes and the horizon normalizations.
@@ -608,13 +582,9 @@ function solve_extremal_gsn(
             boundary, :riccati, horizon_state, infinity_state;
             data_type, ode_algorithm, tolerance)
         value
-    elseif method === :isem
-        _series_solution(s, m, a, omega, lambda, rsin, rsout,
-            boundary, :teukolsky, horizon_state, infinity_state;
-            order=series_order, tolerance)
     elseif method === :gsn_isem
         _series_solution(s, m, a, omega, lambda, rsin, rsout,
-            boundary, :gsn, horizon_state, infinity_state;
+            boundary, horizon_state, infinity_state;
             order=series_order, tolerance)
     else
         throw(ArgumentError("unsupported exact-extremal method $method"))

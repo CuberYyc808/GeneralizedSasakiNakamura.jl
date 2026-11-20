@@ -1,7 +1,6 @@
 module Solutions
 
 using OrdinaryDiffEq
-using ForwardDiff
 using HypergeometricFunctions
 using StaticArrays
 using ..Kerr
@@ -459,68 +458,6 @@ function Sasaki_Nakamura_function_from_Teukolsky_radial_function(s::Int, m::Int,
     return Xsoln
 end
 
-function d2Rdr2_from_Rsoln(s::Int, m::Int, a, omega, lambda, Rsoln, r)
-    #=
-    Using the radial Teukolsky equation we can solve for d2Rdr2 from R and dRdr using
-
-        d2Rdr2 = VT/\Delta R - (2(s+1)(r-M))/\Delta dRdr
-    =#
-    # NOTE DO NOT USE THE DOT PRODUCT IN LINEAR ALGEBRA
-    R, dRdr = Rsoln(r)
-    return (VT(s, m, a, omega, lambda, r)/Delta(a, r))*R - ((2*(s+1)*(r-1))/Delta(a,r))*dRdr
-end
-
-function scaled_Wronskian_Teukolsky(Rin_soln, Rup_soln, r, s, a)
-    # The scaled Wronskian is given by W = Delta^{s+1} * det([Rin Rup; Rin' Rup'])
-    Rin, Rin_prime = Rin_soln(r)
-    Rup, Rup_prime = Rup_soln(r)
-    return Delta(a, r)^(s+1) * (Rin*Rup_prime - Rup*Rin_prime)
-end
-
-function scaled_Wronskian_GSN(Xin_soln, Xup_soln, rs, s, m, a, omega, lambda)
-    r = r_from_rstar(a, rs)
-    Xin, dXindrs = Xin_soln(rs)
-    Xup, dXupdrs = Xup_soln(rs)
-    _eta = eta(s, m, a, omega, lambda, r)
-
-    return (Xin*dXupdrs - dXindrs*Xup)/_eta
-end
-
-function residual_from_Xsoln(s::Int, m::Int, a, omega, lambda, Xsoln)
-    # Compute the second derivative using autodiff instead of finite diff
-    X(rs) = Xsoln(rs)[1]
-    first_deriv(rs) = Xsoln(rs)[2]
-    second_deriv(rs) = ForwardDiff.derivative(first_deriv, rs)
-
-    _sF(rs) = sF(s, m, a, omega, lambda, r_from_rstar(a, rs))
-    _sU(rs) = sU(s, m, a, omega, lambda, r_from_rstar(a, rs))
-
-    return rs -> second_deriv(rs) - _sF(rs)*first_deriv(rs) - _sU(rs)*X(rs)
-end
-
-function residual_RiccatiEqn_from_Phisoln(s::Int, m::Int, a, omega, lambda, Phisoln)
-    Phi(rs) = Phisoln(rs)[1] # Does not matter actually!
-    first_deriv(rs) = Phisoln(rs)[2]
-    second_deriv(rs) = ForwardDiff.derivative(first_deriv, rs)
-
-    _sF(rs) = sF(s, m, a, omega, lambda, r_from_rstar(a, rs))
-    _sU(rs) = sU(s, m, a, omega, lambda, r_from_rstar(a, rs))
-
-    return rs -> second_deriv(rs) + 1im*_sU(rs) - _sF(rs)*first_deriv(rs) + 1im*(first_deriv(rs))^2
-end
-
-function residual_GSNEqn_from_Phisoln(s::Int, m::Int, a, omega, lambda, Phisoln)
-    # Compute the second derivative using autodiff instead of finite diff
-    X = (rs -> exp(1im*Phisoln(rs)[1]))
-    first_deriv = (rs -> 1im*exp(1im*Phisoln(rs)[1])*Phisoln(rs)[2])
-    second_deriv(rs) = ForwardDiff.derivative(first_deriv, rs)
-
-    _sF(rs) = sF(s, m, a, omega, lambda, r_from_rstar(a, rs))
-    _sU(rs) = sU(s, m, a, omega, lambda, r_from_rstar(a, rs))
-
-    return rs -> second_deriv(rs) - _sF(rs)*first_deriv(rs) - _sU(rs)*X(rs)
-end
-
 function CrefCinc_SN_from_Xup(s::Int, m::Int, a, omega, lambda, Xupsoln, rsin; order=0, dtype=_DEFAULTDATATYPE)
     p = omega - m*omega_horizon(a)
 
@@ -795,11 +732,6 @@ function x_from_r(a, r)
     =#
     gamma = sqrt(1 - a^2)
     return ((1+gamma)-r)/(2*gamma)
-end
-
-function r_from_x(a, x)
-    gamma = sqrt(1 - a^2)
-    return 1 + gamma - 2*gamma*x
 end
 
 function isnonpositiveinteger(x)
