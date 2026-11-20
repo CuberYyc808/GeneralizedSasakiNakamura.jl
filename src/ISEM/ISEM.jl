@@ -609,26 +609,11 @@ Certification.certificate(f::YRadialFunction) = f.Y_solution isa Certification.U
     Certification.certificate(f.Y_solution) : (true, missing, ())
 
 
-# Route of a second pass marked uncertified (see Certification); nothing when its amplitudes are not finite.
+# Copy of a route or result with some fields replaced, through the outer constructor.
 function _with_fields(route, replacements::NamedTuple)
     names = fieldnames(typeof(route))
     return Base.typename(typeof(route)).wrapper(
         (haskey(replacements, f) ? replacements[f] : getfield(route, f) for f in names)...)
 end
-function _mark_uncertified(route::Route, records)
-    all(isfinite, (route.incidence, route.reflection, route.solution_scale)) || return nothing
-    return _with_fields(route, (certified=false, estimated_error=Certification.estimated_error(records),
-        uncertified_stages=Certification.stages(records)))
-end
-function _mark_uncertified(route::ConjugatedRoute, records)
-    marked = _mark_uncertified(route.route, records)
-    return marked === nothing ? nothing : ConjugatedRoute(marked, route.params)
-end
-function _mark_uncertified(route::ComplexRoute, records)
-    all(isfinite, (route.transmission, route.incidence, route.reflection)) || return nothing
-    return _with_fields(route, (metadata=merge(route.metadata, (certified=false,
-        estimated_error=Certification.estimated_error(records), uncertified_stages=Certification.stages(records))),))
-end
-_mark_uncertified(route, records) = nothing
 
 end

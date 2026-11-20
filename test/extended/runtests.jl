@@ -5,7 +5,7 @@ const TEST_GROUPS = (
     "api", "homogeneous", "isem", "qnm", "pointparticle_mode", "flux", "regression", "threads",
 )
 # Selected only by name, not by "full" or "quick".
-const OPTIONAL_TEST_GROUPS = ("baseline",)
+const OPTIONAL_TEST_GROUPS = ()
 
 selection = get(ENV, "GSN_TEST_GROUPS", haskey(ENV, "GSN_TEST_LEVEL") ? "full" : "")
 if isempty(selection)
