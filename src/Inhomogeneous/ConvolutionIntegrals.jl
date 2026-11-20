@@ -500,7 +500,7 @@ end
         lambda = lambda,
         small_frequency_expansion = _inhomogeneous_small_frequency_expansion_control(l, a, omega),
         large_frequency_expansion = :auto)
-    hasproperty(route, :controls) && route.controls.small_frequency_expansion &&
+    route.controls.small_frequency_expansion &&
         _isem_wronskian_check(s, l, m, a, omega, check_radii isa Function ? check_radii() : check_radii; route = route)
     return ISEM.y_radial_function(route)
 end
