@@ -1192,54 +1192,7 @@ end
 # same (s, m, a, omega, lambda); when given, the recurrence is extended from the stored order
 # and the Ref is updated (see coefficient_sequence).
 function outgoing_coefficient_at_hor(s::Int, m::Int, a, omega, lambda, order::Int; data_type=_DEFAULTDATATYPE, workspace=nothing)
-
-    if order < 0
-        throw(DomainError(order, "Only positive expansion order is supported"))
-    end
-
-    if workspace !== nothing && workspace[] !== nothing
-        expansion_coeffs = workspace[].expansion_coeffs
-        Pcoeffs = workspace[].Pcoeffs
-        Qcoeffs = workspace[].Qcoeffs
-    else
-        # Cannot re-use the cached results, re-compute from zero
-        expansion_coeffs = [data_type(1.0)] # order 0
-        Pcoeffs = [data_type(PplusH(s, m, a, omega, lambda, 0))] # order 0
-        Qcoeffs = [data_type(0.0)] # order 0
-    end
-
-    if order > 0
-        # Compute series expansion coefficients for P and Q
-        _P(x) = PplusH(s, m, a, omega, lambda, x)
-        _Q(x) = QplusH(s, m, a, omega, lambda, x)
-        _P_taylor = taylor_expand(_P, 0, order=order)
-        _Q_taylor = taylor_expand(_Q, 0, order=order)
-
-        for i in length(Pcoeffs):order
-            append!(Pcoeffs, getcoeff(_P_taylor, i))
-            append!(Qcoeffs, getcoeff(_Q_taylor, i))       
-        end
-    end
-    # Define the indicial polynomial
-    indicial(nu) = nu*(nu - 1) + Pcoeffs[1]*nu + Qcoeffs[1]
-
-    if order > 0
-        # Evaluate the C coefficients
-        for i in length(expansion_coeffs):order
-            sum = 0.0
-            for r in 0:i-1
-                sum += expansion_coeffs[r+1]*(r*Pcoeffs[i-r+1] + Qcoeffs[i-r+1])
-            end
-            append!(expansion_coeffs, -sum/indicial(i))
-        end
-    end
-
-    workspace === nothing || (workspace[] = (
-        expansion_coeffs = expansion_coeffs,
-        Pcoeffs = Pcoeffs,
-        Qcoeffs = Qcoeffs
-    ))
-    return expansion_coeffs[order+1]
+    return _horizon_coefficient(PplusH, QplusH, s, m, a, omega, lambda, order, data_type, workspace)
 end
 
 function PminusH(s::Int, m::Int, a, omega, lambda, x)
@@ -1627,6 +1580,11 @@ end
 # same (s, m, a, omega, lambda); when given, the recurrence is extended from the stored order
 # and the Ref is updated (see coefficient_sequence).
 function ingoing_coefficient_at_hor(s::Int, m::Int, a, omega, lambda, order::Int; data_type=_DEFAULTDATATYPE, workspace=nothing)
+    return _horizon_coefficient(PminusH, QminusH, s, m, a, omega, lambda, order, data_type, workspace)
+end
+
+# Frobenius coefficients at the horizon from the series of P and Q (the two branches differ only in P, Q).
+function _horizon_coefficient(P::FP, Q::FQ, s::Int, m::Int, a, omega, lambda, order::Int, data_type, workspace) where {FP,FQ}
 
     if order < 0
         throw(DomainError(order, "Only positive expansion order is supported"))
@@ -1639,14 +1597,14 @@ function ingoing_coefficient_at_hor(s::Int, m::Int, a, omega, lambda, order::Int
     else
         # Cannot re-use the cached results, re-compute from zero
         expansion_coeffs = [data_type(1.0)] # order 0
-        Pcoeffs = [data_type(PminusH(s, m, a, omega, lambda, 0))] # order 0
+        Pcoeffs = [data_type(P(s, m, a, omega, lambda, 0))] # order 0
         Qcoeffs = [data_type(0.0)] # order 0
     end
 
     if order > 0
         # Compute series expansion coefficients for P and Q
-        _P(x) = PminusH(s, m, a, omega, lambda, x)
-        _Q(x) = QminusH(s, m, a, omega, lambda, x)
+        _P(x) = P(s, m, a, omega, lambda, x)
+        _Q(x) = Q(s, m, a, omega, lambda, x)
         _P_taylor = taylor_expand(_P, 0, order=order)
         _Q_taylor = taylor_expand(_Q, 0, order=order)
 
