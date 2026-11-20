@@ -2342,12 +2342,10 @@ end
 # otherwise. `_eikonal_horizon_pair` is the two-branch version.
 function _eikonal_horizon(
     coefficients::CoefficientSet, solution, branch::Symbol, seed_x::Float64, match_x::Float64, work::IterationScratch,
-    limit,
 )
     score = _eikonal_score(coefficients, seed_x, work)
     fast = score <= _EIKONAL_SLOW_VARIATION
-    certified = limit !== nothing &&
-        score <= _EIKONAL_CERTIFIED_VARIATION
+    certified = score <= _EIKONAL_CERTIFIED_VARIATION
     (fast || certified) || return nothing
     kind = _kind(:horizon, branch)
     raw, draw = _endpoint_pair(
@@ -2355,12 +2353,8 @@ function _eikonal_horizon(
     scale = endpoint_seed_scale(kind, coefficients.params)
     seed_value = scale * raw
     seed_derivative = scale * draw
-    result = limit === nothing ?
-        eikonal_path(
-            coefficients, seed_x, seed_value, seed_derivative, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
-            scratch=work.eikonal, large_frequency_expansion=work.large_frequency_expansion) :
-        fast ? eikonal_path(
+    limit = _INFINITY_EIKONAL_LIMIT
+    result = fast ? eikonal_path(
             coefficients, seed_x, seed_value, seed_derivative, match_x;
             avec=work.avec, bvec=work.bvec, pq=work.pq,
             scratch=work.eikonal, residual_limit=limit,
@@ -2428,12 +2422,11 @@ end
 
 function _eikonal_horizon_pair(
     coefficients::CoefficientSet, solution1, solution2, branch1::Symbol, branch2::Symbol, seed_x::Float64,
-    match_x::Float64, work::IterationScratch, limit,
+    match_x::Float64, work::IterationScratch,
 )
     score = _eikonal_score(coefficients, seed_x, work)
     fast = score <= _EIKONAL_SLOW_VARIATION
-    certified = limit !== nothing &&
-        score <= _EIKONAL_CERTIFIED_VARIATION
+    certified = score <= _EIKONAL_CERTIFIED_VARIATION
     (fast || certified) || return nothing
     kind1 = _kind(:horizon, branch1)
     kind2 = _kind(:horizon, branch2)
@@ -2447,13 +2440,8 @@ function _eikonal_horizon_pair(
     seed_derivative1 = scale1 * draw1
     seed_value2 = scale2 * raw2
     seed_derivative2 = scale2 * draw2
-    result = limit === nothing ?
-        eikonal_pair(
-            coefficients, seed_x, seed_value1, seed_derivative1,
-            seed_value2, seed_derivative2, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
-            scratch=work.eikonal, large_frequency_expansion=work.large_frequency_expansion) :
-        fast ? eikonal_pair(
+    limit = _INFINITY_EIKONAL_LIMIT
+    result = fast ? eikonal_pair(
             coefficients, seed_x, seed_value1, seed_derivative1,
             seed_value2, seed_derivative2, match_x;
             avec=work.avec, bvec=work.bvec, pq=work.pq,
@@ -2606,10 +2594,9 @@ function iterate_from_zero(
     if _eikonal_enabled(controls, coefficients, scratch)
         work = scratch === nothing ? _scratch(coefficients,
             getproperty(controls, :ordinary_order), controls) : scratch
-        limit = _INFINITY_EIKONAL_LIMIT
         basis = _eikonal_horizon(
             coefficients, endpoint_solution, normalized,
-            seed_x, match_x, work, limit)
+            seed_x, match_x, work)
         if basis === nothing && getproperty(controls, :large_frequency_expansion)
             basis = _hybrid_horizon(
                 coefficients, endpoint_solution, normalized,
@@ -2645,9 +2632,8 @@ function iterate_pair_from_zero(
             _eikonal_enabled(controls, coefficients, scratch)
         work = scratch === nothing ? _scratch(coefficients,
             getproperty(controls, :ordinary_order), controls) : scratch
-        limit = _INFINITY_EIKONAL_LIMIT
         bases = _eikonal_horizon_pair(
-            coefficients, solution1, solution2, normalized1, normalized2, seed_x, match_x, work, limit,
+            coefficients, solution1, solution2, normalized1, normalized2, seed_x, match_x, work,
         )
         if bases === nothing && getproperty(controls, :large_frequency_expansion)
             bases = _hybrid_horizon_pair(
