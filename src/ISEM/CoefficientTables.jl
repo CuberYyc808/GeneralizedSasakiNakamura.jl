@@ -6,7 +6,6 @@ export RationalCoefficients, EndpointCoefficientSet
 export OrdinaryCoefficientEvaluator, CoefficientSet
 export evaluate_ordinary_coefficients!
 export evaluate_ordinary_variable!
-export register_coefficient_backend!
 export gsn_coefficients
 
 # Numerator and denominator polynomial coefficients of one rational ODE coefficient; the element
@@ -89,35 +88,12 @@ struct CoefficientSet{P,H,I,O,M}
     metadata::M
 end
 
-const _BACKEND = Ref{Union{Nothing,Function}}(nothing)
+"""
+    gsn_coefficients(params::GSNParameters; controls=nothing)
 
-# Install the function that builds a CoefficientSet; returns the previous backend.
-function register_coefficient_backend!(backend::Function)
-    old = _BACKEND[]
-    _BACKEND[] = backend
-    return old
-end
-
-function _missing_backend()
-    error(
-        "ISEM GSN coefficient tables have not been migrated into the package yet. " *
-        "Register a generated backend with register_coefficient_backend! " *
-        "or add the stable generated tables to CoefficientTables.jl.",
-    )
-end
-
-# The CoefficientSet for `params` (or for `s, lambda, m, nu, omega`) from the registered
-# backend; `controls` selects the endpoint and ordinary-point bases.
-function gsn_coefficients(params::GSNParameters; controls=nothing)
-    backend = _BACKEND[]
-    backend === nothing && _missing_backend()
-    return backend(params; controls=controls)
-end
-
-function gsn_coefficients(s::Integer, lambda, m, nu, omega; controls=nothing)
-    backend = _BACKEND[]
-    backend === nothing && _missing_backend()
-    return backend(s, lambda, m, nu, omega; controls=controls)
-end
+The CoefficientSet for `params` from the generated tables (method defined in GeneratedBackend, which is included
+after this module because it builds these types); `controls` selects the ordinary-point basis.
+"""
+function gsn_coefficients end
 
 end

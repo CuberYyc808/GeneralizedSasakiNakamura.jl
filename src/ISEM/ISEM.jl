@@ -66,8 +66,6 @@ using .ComplexFrequency
 include("NegativeImaginaryAxisAmplitudes.jl")
 using .NegativeImaginaryAxisAmplitudes
 
-register_coefficient_backend!(GeneratedBackend.generated_coefficients)
-
 include("PEquation/PEquation.jl")
 using .PEquation: PEquation
 

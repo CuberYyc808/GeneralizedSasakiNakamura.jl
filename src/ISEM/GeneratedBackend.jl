@@ -1,13 +1,14 @@
 module GeneratedBackend
 
 using ..Parameters: GSNParameters
+import ..CoefficientTables
 using ..CoefficientTables:
     RationalCoefficients,
     EndpointCoefficientSet,
     OrdinaryCoefficientEvaluator,
     CoefficientSet
 
-export generated_coefficients, generated_backend_loaded
+export generated_backend_loaded
 
 # Lengths of the A numerator, A denominator, B numerator and B denominator
 # blocks in a packed generated coefficient vector.
@@ -227,11 +228,9 @@ function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega
     )
 end
 
-# Build the CoefficientSet for `params` (or for `s, lambda, m, nu, omega`) from the
-# generated tables: endpoint bases :hc / :ic and the ordinary basis from
-# `controls.ordinary_basis` (see `_ordinary_basis`). Registered as the default
-# coefficient backend in ISEM.jl.
-function generated_coefficients(params::GSNParameters; controls=nothing)
+# Build the CoefficientSet for `params` from the generated tables: endpoint bases :hc / :ic and the ordinary basis
+# from `controls.ordinary_basis` (see `_ordinary_basis`).
+function CoefficientTables.gsn_coefficients(params::GSNParameters; controls=nothing)
     return _construct_coefficients(
         params,
         params.s,
@@ -241,18 +240,6 @@ function generated_coefficients(params::GSNParameters; controls=nothing)
         params.omega;
         controls=controls,
     )
-end
-
-function generated_coefficients(s::Integer, lambda, m, nu, omega; controls=nothing)
-    lambda_t, _, nu_t, omega_t, _ = _table_arguments(lambda, m, nu, omega)
-    params = (
-        s=Int(s),
-        lambda=lambda_t,
-        m=Int(m),
-        nu=nu_t,
-        omega=omega_t,
-    )
-    return _construct_coefficients(params, s, lambda, m, nu_t, omega; controls=controls)
 end
 
 end
