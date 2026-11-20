@@ -2659,7 +2659,7 @@ function _solve_horizon_angle_at_match(
     angle_offset,
 )
     horizon_seed = nothing
-    endpoint_seconds = @elapsed horizon_seed =
+    horizon_seed =
         _select_rotated_horizon_path(
             coefficients,
             (locals.horizon_in,),
@@ -2670,7 +2670,7 @@ function _solve_horizon_angle_at_match(
             angle_offset,
         )
     horizon = nothing
-    propagation_seconds = @elapsed horizon = _propagate_on_path(
+    horizon = _propagate_on_path(
         coefficients,
         horizon_seed.path,
         horizon_seed.checks[1].state,
@@ -2681,7 +2681,7 @@ function _solve_horizon_angle_at_match(
     diagnostics = nothing
     incidence = zero(ComplexF64)
     reflection = zero(ComplexF64)
-    matching_seconds = @elapsed begin
+    begin
         denominator_result = abel_denominator(
             coefficients, :infinity, ComplexF64(selected.match_x))
         denominator_result.status == "OK" ||
@@ -2722,9 +2722,6 @@ function _solve_horizon_angle_at_match(
         burial_ratio=terms[2] / terms[1],
         incidence_error,
         reflection_error,
-        endpoint_us=1.0e6 * endpoint_seconds,
-        propagation_us=1.0e6 * propagation_seconds,
-        matching_us=1.0e6 * matching_seconds,
     ))
 end
 
@@ -3127,7 +3124,7 @@ function _solve_at_match(
 
     horizon_seed = nothing
     infinity_seed = nothing
-    endpoint_seconds = @elapsed begin
+    begin
         if branch == :IN
             horizon_seed = _select_horizon_path(
                 coefficients, (locals.horizon_in,), (:horizon_in,), p,
@@ -3171,7 +3168,7 @@ function _solve_at_match(
     infinity = nothing
     infinity_endpoint_match = nothing
     horizon_endpoint_match = nothing
-    propagation_seconds = @elapsed begin
+    begin
         if branch == :IN
             horizon = try
                 _propagate_on_path(
@@ -3307,7 +3304,7 @@ function _solve_at_match(
                 "$(infinity_horizon_winding) times around the horizon; " *
                 "the horizon solutions separate by exp($(amplification)).")
     end
-    matching_seconds = @elapsed begin
+    begin
         endpoint = branch == :IN ? :infinity : :horizon
         denominator_x = infinity_endpoint_match !== nothing ?
             infinity_endpoint_match.x :
@@ -3507,9 +3504,6 @@ function _solve_at_match(
         abel_ratio=normalization.ratio,
         abel_raw_error=pair_error,
         abel_error=normalization.corrected_error,
-        endpoint_us=1.0e6 * endpoint_seconds,
-        propagation_us=1.0e6 * propagation_seconds,
-        matching_us=1.0e6 * matching_seconds,
     )
 end
 
@@ -3820,7 +3814,7 @@ function complex_rational_build(
     settings = ComplexRationalSettings(order, tolerance)
 
     params = nothing
-    parameter_seconds = @elapsed params = gsn_parameters(
+    params = gsn_parameters(
         s, l, m, a, omega; lambda, nu)
     auto_near_real_match = xm === nothing &&
         _use_near_real_match(params.omega)
@@ -3836,10 +3830,10 @@ function complex_rational_build(
         params; N=order, xm=initial_match_x, tol=tolerance,
         small_frequency_expansion=false, large_frequency_expansion=false)
     coefficients = nothing
-    coefficient_seconds = @elapsed coefficients = _complex_horizon_closed_form(gsn_coefficients(
+    coefficients = _complex_horizon_closed_form(gsn_coefficients(
         params; controls=initial_controls))
     locals = nothing
-    local_seconds = @elapsed locals = _local_solutions(
+    locals = _local_solutions(
         coefficients, branch, order)
 
     junction_search = false
@@ -3890,13 +3884,12 @@ function complex_rational_build(
         junction_search ? :junction_search :
         xm !== nothing ? :explicit_x :
         auto_near_real_match ? :near_real_x07 : :rstar_zero
-    retry_seconds = 0.0
     if xm === nothing && branch == :UP &&
             params.kappa <= _MATCH_CONSENSUS_KAPPA_MAX &&
             initial.matching_condition > _MATCH_CONDITION_RETRY
         shifted_rstar = -log(25) / abs(imag(params.omega))
         shifted = nothing
-        retry_seconds = @elapsed shifted = try
+        shifted = try
             _solve_at_match(
                 coefficients, locals, branch, shifted_rstar, settings)
         catch caught
@@ -3910,7 +3903,7 @@ function complex_rational_build(
         end
     end
     matching_consensus = nothing
-    consensus_seconds = @elapsed matching_consensus = xm === nothing ?
+    matching_consensus = xm === nothing ?
         _matching_consensus_retry(
             coefficients, locals, branch, selected, settings) :
         (;
@@ -3929,7 +3922,7 @@ function complex_rational_build(
         match_policy = :branch_shift_consensus
     end
     horizon_stokes = nothing
-    stokes_seconds = @elapsed horizon_stokes = xm === nothing ?
+    horizon_stokes = xm === nothing ?
         _horizon_stokes_consensus_retry(
             coefficients, locals, branch, selected, params.omega -
                 params.m * params.a / (2 * _rplus(params)), settings) :
@@ -3947,7 +3940,7 @@ function complex_rational_build(
         match_policy = :horizon_stokes_consensus
     end
     balance_iterations = 0
-    balance_seconds = @elapsed if xm === nothing
+    if xm === nothing
         selected, balance_iterations = _balance_junction(
             coefficients, locals, branch, selected, settings, tolerance)
         balance_iterations > 0 && (match_policy = :balanced_junction)
@@ -3997,7 +3990,6 @@ function complex_rational_build(
         incidence_error=selected.incidence_error,
         reflection_error=selected.reflection_error,
         balance_iterations,
-        balance_us=1.0e6 * balance_seconds,
         horizon_path_kind=selected.horizon_seed.path.kind,
         horizon_direction=selected.horizon_seed.path.direction,
         horizon_angle_offset=selected.horizon_seed.path.angle_offset,
@@ -4021,26 +4013,17 @@ function complex_rational_build(
         abel_ratio=selected.abel_ratio,
         abel_raw_error=selected.abel_raw_error,
         abel_error=selected.abel_error,
-        parameter_us=1.0e6 * parameter_seconds,
-        coefficient_us=1.0e6 * coefficient_seconds,
-        local_us=1.0e6 * local_seconds,
-        endpoint_us=selected.endpoint_us,
-        propagation_us=selected.propagation_us,
-        matching_us=selected.matching_us,
-        retry_us=1.0e6 * retry_seconds,
         horizon_stokes_triggered=horizon_stokes.triggered,
         horizon_stokes_accepted=horizon_stokes.accepted,
         horizon_stokes_candidate_count=horizon_stokes.candidate_count,
         horizon_stokes_agreement=horizon_stokes.agreement,
         horizon_stokes_separation=horizon_stokes.separation,
         horizon_stokes_angle_offset=horizon_stokes.angle_offset,
-        horizon_stokes_us=1.0e6 * stokes_seconds,
         matching_consensus_triggered=matching_consensus.triggered,
         matching_consensus_accepted=matching_consensus.accepted,
         matching_consensus_candidate_count=matching_consensus.candidate_count,
         matching_consensus_agreement=matching_consensus.agreement,
         matching_consensus_separation=matching_consensus.separation,
-        matching_consensus_us=1.0e6 * consensus_seconds,
         endpoint_states=selected.endpoint_states,
     )
     return (;

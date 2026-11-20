@@ -33,7 +33,6 @@ import ..ManoSuzukiTakasugiInfinity:
     mano_suzuki_takasugi_physical_amplitudes,
     mano_suzuki_takasugi_physical_plan,
     mano_suzuki_takasugi_physical_state,
-    mano_suzuki_takasugi_negative_imaginary_axis_jump,
     negative_imaginary_axis_strength_fast
 import ..RadialFunctions:
     teukolsky_horizon_pair,
@@ -52,12 +51,8 @@ export ComplexParameters, ComplexControls
 export ComplexContour, ComplexRoutePlan, ComplexRoute
 export ComplexManoSuzukiTakasugiEvaluator
 export complex_parameters, complex_controls
-export complex_contour_parameters, complex_x_from_rho
-export complex_route, complex_route_plan_of, complex_route_patch_count
-export complex_amplitudes
-export complex_negative_imaginary_axis_jump
-export complex_route_state_r, complex_route_state_rstar
-export complex_route_evaluate_r, complex_route_evaluate_rstar
+export complex_contour_parameters
+export complex_route
 export complex_gsn_solution_rstar, complex_gsn_radial_function
 
 # Mode data of a complex-frequency route, (s, l, m, a, omega, lambda), with the derived
@@ -298,9 +293,6 @@ function complex_contour_parameters(params::ComplexParameters; rho_match=1.0)
         angle(dxdrho),
     )
 end
-
-# The contour point x = dxdrho * rho.
-complex_x_from_rho(contour::ComplexContour, rho::Real) = contour.dxdrho * rho
 
 function _isem_module()
     return parentmodule(@__MODULE__)
@@ -658,33 +650,6 @@ end
 @inline _principal_small_frequency_expansion_axis(omega) =
     iszero(real(omega)) && imag(omega) < 0 && abs(omega) <= 0.1
 
-function _principal_small_frequency_expansion_match(params, branch, requested)
-    order = requested.N === nothing ? 40 : requested.N
-    match_x = requested.xm === nothing ? 0.5 : requested.xm
-    tolerance = requested.tolerance === nothing ? 1.0e-14 :
-        requested.tolerance
-    direct_params = gsn_parameters(
-        params.s,
-        params.l,
-        params.m,
-        params.a,
-        params.omega;
-        lambda=params.lambda,
-    )
-    controls = gsn_controls(
-        direct_params;
-        horizon_order=order,
-        ordinary_order=order,
-        infinity_order=order,
-        xm=match_x,
-        tol=tolerance,
-        small_frequency_expansion=true,
-        large_frequency_expansion=false,
-    )
-    coefficients = gsn_coefficients(direct_params; controls)
-    return match_route(coefficients, branch; controls)
-end
-
 # Error fields of a principal-MST route: the amplitude errors of its real-r match (and its second-pass verdict when
 # it is not certified). Without them the certificate read the missing incidence and reflection errors as Inf and
 # rejected every negative-imaginary-axis frequency with |omega| <= 0.1 (estimated_error=Inf).
@@ -693,63 +658,6 @@ function _principal_match_errors(matched)
     matched.certified && return (; incidence_error, reflection_error)
     return (; incidence_error, reflection_error, certified=false,
         estimated_error=matched.estimated_error, uncertified_stages=matched.uncertified_stages)
-end
-
-# Replace the incidence and reflection amplitudes of a route on the principal
-# small-frequency-expansion (principal MST) axis by the matched GSN amplitudes, unless small_frequency_expansion=false was requested.
-function _principal_small_frequency_expansion_overlay(route, requested)
-    _principal_small_frequency_expansion_axis(route.params.omega) &&
-        requested.small_frequency_expansion !== false || return route
-    matched = _principal_small_frequency_expansion_match(route.params, route.branch, requested)
-    transmission = route.transmission
-    incidence = ComplexF64(matched.incidence)
-    reflection = ComplexF64(matched.reflection)
-    factors = route.plan.amplitudes.conversion_factors
-    teukolsky_transmission = ComplexF64(
-        factors.transmission * transmission)
-    teukolsky_incidence = ComplexF64(factors.incidence * incidence)
-    teukolsky_reflection = ComplexF64(factors.reflection * reflection)
-    metadata = merge(route.metadata, (;
-        control_small_frequency_expansion=true,
-        amplitude_backend=:principal_mst_logscaled,
-        amplitude_patch_count=route_patch_count(matched),
-    ), _principal_match_errors(matched))
-    controls = merge(route.plan.controls, (;
-        small_frequency_expansion=true,
-        rescue_source=:principal_mst_logscaled,
-    ))
-    amplitudes = (;
-        teukolsky=(
-            transmission=teukolsky_transmission,
-            incidence=teukolsky_incidence,
-            reflection=teukolsky_reflection,
-        ),
-        conversion_factors=factors,
-        raw_gsn_transmission=transmission,
-        gsn=(; transmission, incidence, reflection),
-    )
-    plan = ComplexRoutePlan(
-        route.plan.contour,
-        route.plan.matching,
-        controls,
-        amplitudes,
-        route.plan.patch_count + route_patch_count(matched),
-    )
-    return ComplexRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.p_solution,
-        route.state_evaluator,
-        metadata,
-        plan,
-        transmission,
-        incidence,
-        reflection,
-        teukolsky_transmission,
-        teukolsky_incidence,
-        teukolsky_reflection,
-    )
 end
 
 # GSN match with small-frequency-expansion (principal MST) endpoint solutions, used on the
@@ -1456,13 +1364,6 @@ end
         _p_consensus_pretrigger(route)
 end
 
-@inline function _route_pair_errors(
-    first::ComplexRoute,
-    second::ComplexRoute,
-)
-    return _amplitude_pair_errors(first, second)
-end
-
 @inline function _unit_pair_errors(
     first::ComplexRoute,
     second::ComplexRoute,
@@ -1634,7 +1535,7 @@ function _principal_small_frequency_expansion_build_fallback(
         nothing
     end
     if first !== nothing && confirmation !== nothing
-        _, _, amplitude_agreement = _route_pair_errors(first, confirmation)
+        _, _, amplitude_agreement = _amplitude_pair_errors(first, confirmation)
         state_agreement = try
             _principal_p_state_agreement(first, confirmation)
         catch caught
@@ -1866,9 +1767,6 @@ function _route_from_match(rational::ComplexRoute, candidate, policy, extra)
         abel_raw_error=candidate.abel_raw_error,
         abel_error=candidate.abel_error,
         split_mismatch=candidate.abel_error,
-        endpoint_us=candidate.endpoint_us,
-        propagation_us=candidate.propagation_us,
-        matching_us=candidate.matching_us,
         endpoint_states=candidate.endpoint_states,
         extra...,
     ))
@@ -1926,7 +1824,6 @@ function _up_initial_match_route(
     rational::ComplexRoute,
     candidates,
     metrics,
-    elapsed_us,
 )
     Base.@nospecialize rational candidates metrics
     return _route_from_match(rational, candidates.initial,
@@ -1945,7 +1842,6 @@ function _up_initial_match_route(
             up_initial_match_selected_separation=
                 metrics.selected_initial_separation,
             up_initial_match_split_mismatch=metrics.split_mismatch,
-            up_initial_match_consensus_us=elapsed_us,
             rational_match_policy=rational.metadata.match_policy,
             rational_match_x=rational.metadata.match_x,
             rational_matching_condition=rational.metadata.matching_condition,
@@ -1962,7 +1858,6 @@ end
 function _try_up_initial_match_consensus(rational::ComplexRoute)
     Base.@nospecialize rational
     _up_initial_match_pretrigger(rational) || return rational
-    started = time_ns()
     candidates = try
         complex_up_initial_match_candidates(rational.state_evaluator)
     catch caught
@@ -1971,9 +1866,8 @@ function _try_up_initial_match_consensus(rational::ComplexRoute)
     end
     metrics = _up_initial_match_metrics(rational, candidates)
     metrics.accepted || return rational
-    elapsed_us = (time_ns() - started) / 1.0e3
     return _up_initial_match_route(
-        rational, candidates, metrics, elapsed_us)
+        rational, candidates, metrics)
 end
 
 @inline function _offpole_match_plateau_pretrigger(
@@ -2114,7 +2008,6 @@ function _offpole_match_plateau_route(
     selected::ComplexRoute,
     candidates,
     metrics,
-    elapsed_us,
 )
     Base.@nospecialize rational selected candidates metrics
     return _route_from_match(rational, metrics.selected,
@@ -2136,7 +2029,6 @@ function _offpole_match_plateau_route(
             offpole_match_plateau_continuity_error=metrics.continuity_error,
             offpole_match_plateau_first_rstar=candidates.first_rstar,
             offpole_match_plateau_second_rstar=candidates.second_rstar,
-            offpole_match_plateau_us=elapsed_us,
             offpole_match_plateau_replaced_backend=
                 _metadata_value(selected.metadata, :backend, missing),
             offpole_match_plateau_rational_match_policy=
@@ -2154,7 +2046,6 @@ function _try_offpole_match_plateau(
 )
     Base.@nospecialize rational selected retry_cache
     _offpole_match_plateau_pretrigger(rational, selected) || return selected
-    started = time_ns()
     candidates = try
         complex_offpole_match_plateau_candidate(
             rational.state_evaluator, rational.branch, retry_cache)
@@ -2168,9 +2059,8 @@ function _try_offpole_match_plateau(
             _OFFPOLE_MATCH_PLATEAU_P_OVERRIDE_RATIO_MAX
         return selected
     end
-    elapsed_us = (time_ns() - started) / 1.0e3
     return _offpole_match_plateau_route(
-        rational, selected, candidates, metrics, elapsed_us)
+        rational, selected, candidates, metrics)
 end
 
 @inline function _up_horizon_in_order_pretrigger(route::ComplexRoute)
@@ -2230,7 +2120,6 @@ function _up_horizon_in_order_route(
     confirmation::ComplexRoute,
     candidate,
     metrics,
-    elapsed_us,
 )
     Base.@nospecialize rational confirmation candidate metrics
     factors = confirmation.plan.amplitudes.conversion_factors
@@ -2278,7 +2167,6 @@ function _up_horizon_in_order_route(
         up_horizon_in_order_reflection_separation=metrics.reflection_error,
         up_horizon_in_order_separation=metrics.separation,
         up_horizon_in_order_split_mismatch=metrics.split_mismatch,
-        up_horizon_in_order_us=elapsed_us,
         rational_patch_count=rational.plan.patch_count,
         rational_matching_condition=_metadata_value(
             rational.metadata, :matching_condition, missing),
@@ -2344,7 +2232,6 @@ function _try_up_horizon_in_order_consensus(
 )
     Base.@nospecialize rational
     _up_horizon_in_order_pretrigger(rational) || return rational
-    started = time_ns()
     order = rational.state_evaluator.settings.order
     tolerance = rational.plan.controls.tolerance
     order1 = order + _UP_HORIZON_IN_ORDER_DELTA
@@ -2403,9 +2290,8 @@ function _try_up_horizon_in_order_consensus(
         (order, order1, order2),
     )
     if metrics.accepted
-        elapsed_us = (time_ns() - started) / 1.0e3
         return _up_horizon_in_order_route(
-            rational, final_route, final_candidate, metrics, elapsed_us)
+            rational, final_route, final_candidate, metrics)
     end
 
     lower0 = order - _UP_HORIZON_IN_LOWER_BACKOFF
@@ -2445,13 +2331,11 @@ function _try_up_horizon_in_order_consensus(
         window=:lower,
     )
     lower_metrics.accepted || return rational
-    elapsed_us = (time_ns() - started) / 1.0e3
     return _up_horizon_in_order_route(
         rational,
         lower_routes[end],
         lower_candidates[end],
         lower_metrics,
-        elapsed_us,
     )
 end
 
@@ -2467,8 +2351,8 @@ function _p_up_dual_metrics(
     confirmation_order::Int,
 )
     incidence_error, reflection_error, separation =
-        _route_pair_errors(rational, confirmation)
-    _, _, agreement = _route_pair_errors(candidate, confirmation)
+        _amplitude_pair_errors(rational, confirmation)
+    _, _, agreement = _amplitude_pair_errors(candidate, confirmation)
     candidate_split_mismatch = _route_split_mismatch(candidate)
     confirmation_split_mismatch = _route_split_mismatch(confirmation)
     split_mismatch = max(
@@ -2509,8 +2393,8 @@ function _p_contour_metrics(
     confirmation_order::Int,
 )
     incidence_error, reflection_error, separation =
-        _route_pair_errors(rational, confirmation)
-    _, _, agreement = _route_pair_errors(candidate, confirmation)
+        _amplitude_pair_errors(rational, confirmation)
+    _, _, agreement = _amplitude_pair_errors(candidate, confirmation)
     candidate_split_mismatch = _route_split_mismatch(candidate)
     confirmation_split_mismatch = _route_split_mismatch(confirmation)
     split_mismatch = max(
@@ -3578,7 +3462,6 @@ function _pole_reciprocal_route(
     up_route::ComplexRoute,
     confirmation::ComplexRoute,
     metrics,
-    elapsed_us,
 )
     Base.@nospecialize original up_route confirmation metrics
     reflection = ComplexF64(metrics.reflection)
@@ -3625,7 +3508,6 @@ function _pole_reciprocal_route(
         pole_reciprocal_state_error=metrics.state_error,
         pole_reciprocal_separation=metrics.separation,
         pole_reciprocal_split_mismatch=metrics.split_mismatch,
-        pole_reciprocal_us=elapsed_us,
         pole_reciprocal_original_match_policy=
             _metadata_value(original.metadata, :match_policy, missing),
         pole_reciprocal_original_matching_condition=
@@ -3685,7 +3567,6 @@ function _try_exact_pole_reciprocal(
 )
     Base.@nospecialize route
     _pole_reciprocal_pretrigger(route) || return route
-    started = time_ns()
     evaluator = route.state_evaluator
     order = evaluator.settings.order
     tolerance = route.plan.controls.tolerance
@@ -3751,9 +3632,8 @@ function _try_exact_pole_reciprocal(
         separation,
         split_mismatch,
     )
-    elapsed_us = (time_ns() - started) / 1.0e3
     return _pole_reciprocal_route(
-        route, up_route, confirmation, metrics, elapsed_us)
+        route, up_route, confirmation, metrics)
 end
 
 function _apply_exact_pole_normalization(route::ComplexRoute)
@@ -4038,15 +3918,9 @@ function _complex_route_impl(
             rational_build = nothing
         end
         if build_error !== nothing
+            # The principal small-frequency axis returned above, so only a recognised trigger falls back to P.
             fallback_trigger = _rational_build_fallback_trigger(build_error)
-            principal_fallback = !pinned_controls &&
-                _principal_small_frequency_expansion_axis(ComplexF64(omega))
-            if pinned_controls ||
-                    (fallback_trigger === nothing && !principal_fallback)
-                throw(build_error)
-            end
-            fallback_trigger === nothing &&
-                (fallback_trigger = :principal_mst_evaluator_fallback)
+            (pinned_controls || fallback_trigger === nothing) && throw(build_error)
             p_logs = _RecordingLogger()
             p_failure = nothing
             fallback = try
@@ -4063,9 +3937,7 @@ function _complex_route_impl(
             end
             # P route without a usable match: take the deferred relaxed
             # rotation build, which then flows into the rational path below.
-            off_axis = !_principal_small_frequency_expansion_axis(
-                ComplexF64(omega))
-            relaxed = off_axis && _p_route_unmatched(fallback) ?
+            relaxed = _p_route_unmatched(fallback) ?
                 _relaxed_rotation_build(deferred_build, fallback) : nothing
             if relaxed !== nothing
                 rational_build = relaxed
@@ -4074,16 +3946,14 @@ function _complex_route_impl(
                     ErrorException(p_failure.msg * " It was the fallback " *
                         "after the two-ray rational build failed: " *
                         sprint(showerror, build_error))))
-                # Off the negative imaginary axis (whose P consensus below can
-                # still repair the match) an unmatched P result is an error.
-                off_axis && _p_route_unmatched(fallback) &&
+                # An unmatched P result is an error (the principal axis, where the P consensus could still
+                # repair the match, returned above).
+                _p_route_unmatched(fallback) &&
                     throw(_p_unmatched_error(fallback, build_error))
                 _replay_logs(p_logs)
                 fallback = _tag_p_build_fallback(
                     fallback, fallback_trigger, sprint(showerror, build_error))
                 p_original = fallback
-                fallback = _principal_small_frequency_expansion_overlay(
-                    fallback, fallback.controls)
                 fallback = _try_p_negative_imaginary_axis_build_consensus(
                     fallback, s, l, m, a, omega, branch)
                 fallback = _try_negative_imaginary_axis_partner(
@@ -4095,13 +3965,7 @@ function _complex_route_impl(
                     fallback, pole_normalization)
             end
         end
-        rational = _principal_small_frequency_expansion_overlay(
-            rational_build.route, rational_build.route.controls)
-        _metadata_value(
-            rational.metadata, :amplitude_backend, :complex_rational) ==
-            :principal_mst_logscaled &&
-            return _apply_exact_pole_normalization(
-                rational, pole_normalization)
+        rational = rational_build.route
         pinned_controls && return _apply_exact_pole_normalization(
             rational, pole_normalization)
         selected = _select_consensus_retry(
@@ -4245,122 +4109,6 @@ function complex_route(
         pole_normalization,
     )
 end
-
-# The route's ComplexRoutePlan and its total patch count (also for a conjugated route).
-complex_route_plan_of(route::ComplexRoute) = route.plan
-complex_route_patch_count(route::ComplexRoute) = route.plan.patch_count
-
-complex_route_plan_of(
-    route::ConjugatedRoute{R},
-) where {R<:ComplexRoute} = complex_route_plan_of(route.route)
-
-complex_route_patch_count(
-    route::ConjugatedRoute{R},
-) where {R<:ComplexRoute} = complex_route_patch_count(route.route)
-
-"""
-    complex_amplitudes(route)
-
-GSN asymptotic amplitudes of a complex-frequency route in unit-transmission
-normalization, with the names of the incidence and reflection amplitudes
-(`Binc`/`Bref` for IN, `Cinc`/`Cref` for UP).
-"""
-function complex_amplitudes(route::ComplexRoute)
-    names = route.branch == :IN ? (:Binc, :Bref) : (:Cinc, :Cref)
-    return (
-        transmission=route.transmission,
-        incidence=route.incidence,
-        reflection=route.reflection,
-        incidence_name=names[1],
-        reflection_name=names[2],
-    )
-end
-
-function complex_amplitudes(
-    route::ConjugatedRoute{R},
-) where {R<:ComplexRoute}
-    amplitudes = complex_amplitudes(route.route)
-    return merge(amplitudes, (
-        transmission=conj(amplitudes.transmission),
-        incidence=conj(amplitudes.incidence),
-        reflection=conj(amplitudes.reflection),
-    ))
-end
-
-"""
-    complex_negative_imaginary_axis_jump(route)
-
-Analytic (MST) jump of the amplitudes across the negative imaginary frequency
-axis for an IN route, from its unit-transmission Teukolsky amplitudes.
-"""
-function complex_negative_imaginary_axis_jump(route::ComplexRoute)
-    route.branch == :IN ||
-        throw(ArgumentError(
-            "the analytic NIA jump requires an IN route."))
-    transmission = ComplexF64(route.teukolsky_transmission)
-    _finite_complex(transmission) && !iszero(transmission) ||
-        throw(ArgumentError(
-            "the analytic NIA jump requires finite Teukolsky transmission."))
-    return mano_suzuki_takasugi_negative_imaginary_axis_jump(
-        route.params.s,
-        route.params.l,
-        route.params.m,
-        route.params.a,
-        route.params.omega,
-        route.params.lambda,
-        route.teukolsky_incidence / transmission,
-        route.teukolsky_reflection / transmission,
-    )
-end
-
-# GSN state (X, dXdrstar, error) of a route at a real radius r > rplus or at a real
-# tortoise coordinate rstar; conjugated for a ConjugatedRoute. The `evaluate`
-# variants return X alone.
-complex_route_state_r(route::ComplexRoute, r::Real) =
-    _state_at_r(route.state_evaluator, r)
-
-function complex_route_state_r(
-    route::ConjugatedRoute{R},
-    r::Real,
-) where {R<:ComplexRoute}
-    state = complex_route_state_r(route.route, r)
-    return (
-        X=conj(state.X),
-        dXdrstar=conj(state.dXdrstar),
-        error=state.error,
-    )
-end
-
-function complex_route_state_rstar(route::ComplexRoute, rstar::Real)
-    X, dXdrstar, error = route.state_evaluator(rstar)
-    return (X=X, dXdrstar=dXdrstar, error=error)
-end
-
-function complex_route_state_rstar(
-    route::ConjugatedRoute{R},
-    rstar::Real,
-) where {R<:ComplexRoute}
-    state = complex_route_state_rstar(route.route, rstar)
-    return (
-        X=conj(state.X),
-        dXdrstar=conj(state.dXdrstar),
-        error=state.error,
-    )
-end
-
-complex_route_evaluate_r(route::ComplexRoute, r::Real) =
-    complex_route_state_r(route, r).X
-complex_route_evaluate_rstar(route::ComplexRoute, rstar::Real) =
-    complex_route_state_rstar(route, rstar).X
-complex_route_evaluate_r(
-    route::ConjugatedRoute{R},
-    r::Real,
-) where {R<:ComplexRoute} = complex_route_state_r(route, r).X
-complex_route_evaluate_rstar(
-    route::ConjugatedRoute{R},
-    rstar::Real,
-) where {R<:ComplexRoute} =
-    complex_route_state_rstar(route, rstar).X
 
 # The callable rstar -> (X, dXdrstar, error) of a route.
 complex_gsn_solution_rstar(route::ComplexRoute) = route.state_evaluator
