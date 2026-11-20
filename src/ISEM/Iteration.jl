@@ -3,7 +3,8 @@ using ...Errors: absorbable
 
 using ..CoefficientTables: CoefficientSet
 using ..OrdinaryPointExpansion: direct_ab_value
-using ..ApparentSingularities: apparent_points, apparent_basis, apparent_jump, next_apparent, APPARENT_STEP_FRACTION
+using ..ApparentSingularities: ApparentPoint, apparent_points, apparent_basis, apparent_jump, next_apparent,
+    APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
 using ..LargeFrequencyExpansion: LargeFrequencyExpansionRouting, large_frequency_expansion_routing, large_frequency_expansion_ab!
 using ..NearExtreme: near_extreme_selected, near_extreme_march
@@ -340,6 +341,9 @@ struct IterationScratch{L<:Union{Nothing,LargeFrequencyExpansionRouting}}
     # branch of _local_ab! is not dispatched dynamically at every step.
     large_frequency_expansion::L
     closed_form_march::Bool
+    # Apparent singular points of the mode (one eigenvalue problem); each march works on its own copy, since it
+    # removes the points it has crossed.
+    apparent::Vector{ApparentPoint{ComplexF64}}
 end
 
 function IterationScratch(
@@ -361,6 +365,7 @@ function IterationScratch(
         buffer_order >= 2 ? [1.0 / ((n + 2) * (n + 1)) for n in 0:(buffer_order - 2)] : Float64[],
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
         large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing, closed_form_march,
+        apparent_points(coefficients.params),
     )
 end
 
@@ -1254,7 +1259,7 @@ function _build_basis_series(
         endpoint_reason,
     )
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (match_x - current_x) > 100eps(Float64)
         step_count += 1
         step_budget !== nothing && step_count > step_budget && return nothing
@@ -1409,7 +1414,7 @@ function _hybrid_state(
         end
     end
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
         crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
@@ -1610,7 +1615,7 @@ function _hybrid_pair(
         end
     end
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
         crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
@@ -1743,7 +1748,7 @@ function iterate_from_state(
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
         crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
@@ -1864,7 +1869,7 @@ function iterate_logscaled_from_state(
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (target_x - current_x) >
             100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
@@ -2062,7 +2067,7 @@ function iterate_pair_from_state(
     truncations1 = Truncation[]
     truncations2 = Truncation[]
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
         step_count += 1
         crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
@@ -2198,7 +2203,7 @@ function _build_pair_from_horizon_seed(
     _record_truncation!(truncations2, :horizon, kind2,
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
 
-    apparent = apparent_points(coefficients.params)
+    apparent = copy(work.apparent)
     while direction * (match_x - current_x) > 100eps(Float64)
         step_count += 1
         crossing = _apparent_crossing!(apparent, coefficients, current_x, match_x, direction,
