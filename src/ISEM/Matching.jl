@@ -16,7 +16,6 @@ using ..Iteration:
     Truncation,
     basis_patch_count,
     basis_state,
-    basis_value,
     endpoint_seed_scale,
     infinity_exponents,
     iterate_scaled_y,
@@ -59,7 +58,7 @@ using ..Parameters:
 
 export Route, ConjugatedRoute, RoutePlan, DirectBoundaryUnavailable
 export match_route, radial_route
-export evaluate_route, route_state, route_patch_count, route_plan_of, route_truncations
+export route_state, route_patch_count, route_plan_of, route_truncations
 
 const DENOMINATOR_REL_MIN = 1.0e-10
 const LOW_FREQUENCY_MIN_ORDER = 40
@@ -100,7 +99,7 @@ end
 Matched ISEM GSN solution for one branch (`:IN` or `:UP`): the horizon and
 infinity bases, the incidence and reflection coefficients at `match_x`, a common
 `solution_scale`, and optional bridges, endpoint plan and MST evaluation plan.
-Evaluate with `evaluate_route`, `route_state`, or by calling the route on `x`.
+Evaluate with `route_state`.
 """
 struct Route{P,C,HI,HO,IO,II,B,EB,EP,M}
     branch::Symbol
@@ -1264,10 +1263,6 @@ function _bridge_covers(basis::LogScaledBasis, x)
     return lo <= x <= hi
 end
 
-_bridge_value(basis::Basis, x) = basis_value(basis, x)
-_bridge_value(basis::ScaledBasis, x) =
-    basis.scale * basis_value(basis.basis, x)
-
 _bridge_state(basis::Basis, x) = basis_state(basis, x)
 function _bridge_state(basis::ScaledBasis, x)
     value, derivative = basis_state(basis.basis, x)
@@ -1376,64 +1371,6 @@ function _mano_suzuki_takasugi_evaluation_region(route::Route, x)
 end
 
 """
-    evaluate_route(route, x)
-
-Value of the route solution at the compactified coordinate `x`, taken from the
-basis, bridge, endpoint plan or MST evaluation that covers `x`.
-"""
-function evaluate_route(route::Route, x)
-    x = Float64(x)
-    if route.branch == :IN
-        if x <= route.match_x
-            return route.solution_scale *
-                basis_value(_required_basis(route.horizon_in, "horizon_in"), x)
-        end
-        route.bridge !== nothing && _bridge_covers(route.bridge, x) &&
-            return _bridge_value(route.bridge, x)
-        if route.endpoint_plan !== nothing &&
-                _endpoint_plan_covers(route.endpoint_plan, x)
-            return _endpoint_plan_state(route, x).X
-        end
-        if route.mst_plan !== nothing
-            if _logscaled_mano_suzuki_takasugi_eval(route.mst_plan)
-                return mano_suzuki_takasugi_pin_state(
-                    route.coefficients, route.mst_plan, x).X
-            end
-            return _mano_suzuki_takasugi_combined_in_state(route, x).X
-        end
-        return route.incidence * basis_value(_required_basis(route.infinity_in, "infinity_in"), x) +
-            route.reflection * basis_value(_required_basis(route.infinity_out, "infinity_out"), x)
-    end
-    if _mano_suzuki_takasugi_evaluation_region(route, x)
-        state = _certified_mano_suzuki_takasugi_out_state(route, x)
-        state === nothing || return state.X
-    end
-    if x <= route.match_x
-        route.bridge !== nothing && _bridge_covers(route.bridge, x) &&
-            return _bridge_value(route.bridge, x)
-        return route.reflection * basis_value(_required_basis(route.horizon_in, "horizon_in"), x) +
-            route.incidence * basis_value(_required_basis(route.horizon_out, "horizon_out"), x)
-    end
-    if route.endpoint_plan !== nothing &&
-            _endpoint_plan_covers(route.endpoint_plan, x)
-        return _endpoint_plan_state(route, x).X
-    end
-    route.endpoint_bridge !== nothing &&
-        _bridge_covers(route.endpoint_bridge, x) &&
-        return _bridge_value(route.endpoint_bridge, x)
-    if route.infinity_out isa LogScaledBasis &&
-            _bridge_covers(route.infinity_out, x)
-        return _physical_logscaled_basis_state(
-            route.infinity_out, x, route.solution_scale).X
-    end
-    return route.solution_scale *
-        basis_value(_required_basis(route.infinity_out, "infinity_out"), x)
-end
-
-evaluate_route(route::ConjugatedRoute, x) =
-    conj(evaluate_route(route.route, x))
-
-"""
     route_state(route, x; radius=nothing)
 
 Value and x-derivative `(X, dXdx)` of the route solution at the compactified
@@ -1515,8 +1452,6 @@ function route_state(route::ConjugatedRoute, x)
     return (X=conj(state.X), dXdx=conj(state.dXdx))
 end
 
-(route::Route)(x) = evaluate_route(route, x)
-(route::ConjugatedRoute)(x) = evaluate_route(route, x)
 
 """
     route_patch_count(route)

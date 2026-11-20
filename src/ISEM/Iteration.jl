@@ -62,7 +62,7 @@ export iterate_from_infinity, iterate_pair_from_infinity
 export iterate_from_state, iterate_pair_from_state
 export iterate_logscaled_from_state
 export iterate_scaled_y
-export basis_value, basis_state, basis_patch_count
+export basis_state, basis_patch_count
 export logscaled_state, logscaled_basis_state
 export materialize_logscaled_state
 
@@ -520,14 +520,6 @@ function _scaled_infinity_series_triple(coeffs, rho, Sigma, y, variable_scale)
     )
     inv_scale = inv(variable_scale)
     return value, -scale * derivative_Y * inv_scale, scale * second_Y * inv_scale^2
-end
-
-function _endpoint_value(kind::Symbol, coeffs, exponent1, exponent2, x, variable_scale=1.0 + 0.0im)
-    if _is_horizon(kind)
-        return horizon_series_value(coeffs, exponent1, x)
-    end
-    y = 1 - x
-    return _scaled_infinity_series_value(coeffs, exponent1, exponent2, y, variable_scale)
 end
 
 function _endpoint_pair(kind::Symbol, coeffs, exponent1, exponent2, coord, variable_scale=1.0 + 0.0im)
@@ -2885,15 +2877,6 @@ function _patch_index(patches, x)
     return 0
 end
 
-_patch_value(patch::Patch, x) = patch.scale *
-    poly_value(patch.coeffs, x - patch.center_x)
-_patch_value(patch::EikonalPatch, x) = eikonal_value(patch, x)
-_patch_value(patch::InfinityLargeFrequencyExpansionPatch, x) = large_frequency_expansion_infinity_value(patch, x)
-function _patch_value(patch::ScaledPatch, x)
-    y = (1.0 - Float64(x)) / patch.omega_scale
-    return patch.scale * poly_value(patch.coeffs, y - patch.center_y)
-end
-
 function _patch_state(patch::Patch, x)
     value, derivative = poly_pair(patch.coeffs, x - patch.center_x)
     return patch.scale * value, patch.scale * derivative
@@ -2910,28 +2893,6 @@ function _patch_state(patch::ScaledPatch, x)
         patch.coeffs, y - patch.center_y)
     return patch.scale * value,
         -patch.scale * derivative_y / patch.omega_scale
-end
-
-# Value of a basis at x: the endpoint series between the endpoint and the seed
-# (when valid), otherwise the patch covering x; errors outside the basis.
-function basis_value(basis::Basis, x)
-    x == basis.seed_x && return basis.seed_X
-    if basis.endpoint_valid && _is_horizon(basis.kind)
-        if x <= basis.seed_x
-            value = _endpoint_value(basis.kind, basis.endpoint_coeffs, basis.exponent1, basis.exponent2, x)
-            isempty(basis.endpoint_log_coeffs) || (value += _horizon_log_pair(basis, x)[1])
-            return basis.scale * value
-        end
-    elseif basis.endpoint_valid
-        x >= basis.seed_x && return basis.scale *
-            _endpoint_value(
-                basis.kind, basis.endpoint_coeffs, basis.exponent1, basis.exponent2, x, basis.endpoint_variable_scale,
-            )
-    end
-    patch_index = _patch_index(basis.patches, x)
-    patch_index > 0 && return _patch_value(basis.patches[patch_index], x)
-    isempty(basis.patches) && error("ISEM GSN basis has no patch for x=$x")
-    error("ISEM GSN basis does not cover x=$x")
 end
 
 # (X, dX/dx) of a basis at x: the endpoint series between the endpoint and the
