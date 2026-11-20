@@ -2,7 +2,7 @@ module ManoSuzukiTakasugiInfinity
 using ...Errors: absorbable
 
 using HypergeometricFunctions
-using SpecialFunctions: digamma, expint, gamma, loggamma, polygamma
+using SpecialFunctions: expint, gamma, loggamma, polygamma
 using StaticArrays: MVector, SVector
 
 using ...Transformation: eta_coefficient
@@ -43,7 +43,7 @@ end
 
 Base.showerror(io::IO, err::ManoSuzukiTakasugiCertificateError) = print(io, err.message)
 export alpha_mano_suzuki_takasugi, beta_mano_suzuki_takasugi, gamma_mano_suzuki_takasugi
-export rn_cf, ln_cf, mano_suzuki_takasugi_guess, mano_suzuki_takasugi_nu, mano_suzuki_takasugi_nu_complex
+export rn_cf, ln_cf, mano_suzuki_takasugi_nu, mano_suzuki_takasugi_nu_complex
 
 const I = 1im
 const CF_MAX = 200
@@ -739,8 +739,6 @@ struct HyperUBackend
     asymptotic_max::Int
     asymptotic_min_abs_z::Float64
     u11_limit_tol::Float64
-    integer_b_tol::Float64
-    integer_b_priority_max_abs_z::Float64
     near_integer_max_delta::Float64
     near_integer_max_abs_z::Float64
 end
@@ -751,8 +749,6 @@ const HYPER_U = HyperUBackend(
     120,
     5.0,
     1.0e-6,
-    1.0e-6,
-    12.0,
     1.0e-3,
     12.0,
 )
@@ -1347,60 +1343,6 @@ function _near_integer_u(a0, integer_b::Int, delta, z, backend::HyperUBackend)
     )
 end
 
-function _factorial_float(n::Integer)
-    n < 0 && throw(ArgumentError("factorial needs nonnegative n"))
-    value = 1.0
-    for k in 2:n
-        value *= k
-    end
-    return value
-end
-
-function _pochhammer_product(a, n::Integer)
-    n < 0 && throw(ArgumentError("pochhammer needs nonnegative n"))
-    value = ComplexF64(1)
-    ac = ComplexF64(a)
-    for k in 0:(n - 1)
-        value *= ac + k
-    end
-    return value
-end
-
-function _integer_snap(z, tol)
-    zc = ComplexF64(z)
-    abs(imag(zc)) <= tol || return nothing
-    rounded = round(Int, real(zc))
-    abs(real(zc) - rounded) <= tol || return nothing
-    return rounded
-end
-
-function _near_nonpositive_integer(z; tol=1.0e-14)
-    snapped = _integer_snap(z, tol)
-    snapped === nothing && return nothing
-    snapped <= 0 || return nothing
-    return -snapped
-end
-
-function _invgamma_complex(z)
-    zc = ComplexF64(z)
-    _near_nonpositive_integer(zc) !== nothing && return ComplexF64(0)
-    try
-        gz = gamma(zc)
-        if _finite_complex(gz) && !iszero(gz)
-            return inv(gz)
-        end
-    catch caught
-        absorbable(caught) || rethrow()
-    end
-    try
-        value = exp(-loggamma(zc))
-        _finite_complex(value) && return ComplexF64(value)
-    catch caught
-        absorbable(caught) || rethrow()
-    end
-    return ComplexF64(NaN + NaN * im)
-end
-
 function _onef1_series(a, b, z, backend::HyperUBackend)
     term = ComplexF64(1)
     total = ComplexF64(1)
@@ -1555,111 +1497,6 @@ function _u_one_one_limit(a, b, z, backend::HyperUBackend)
     end
 end
 
-# log U(a, n + 1, z) for a nonpositive integer a, where U is a polynomial in z.
-function _u_polynomial_a(a, n::Int, z, exact_b::Bool)
-    m = _near_nonpositive_integer(a)
-    m === nothing && return nothing
-    zc = ComplexF64(z)
-    total = ComplexF64(0)
-    for s in 0:m
-        term = binomial(m, s) * _pochhammer_product(n + s + 1, m - s) * (-zc)^s
-        total += term
-    end
-    value = (isodd(m) ? -1.0 : 1.0) * total
-    if !_finite_complex(value) || iszero(value)
-        return _hfail(:log_u_integer_b_polynomial, "polynomial route returned zero or nonfinite")
-    end
-    status = exact_b ? :OK : :WARN_LIMIT_APPROX
-    return HyperEval(log(value), :log_u_integer_b_polynomial, eps(Float64), m + 1, status, "")
-end
-
-# log U(a, n + 1, z) for integer n >= 0 from the logarithmic formula DLMF 13.2.9.
-function _u_positive_integer_b(a, n::Int, z, backend::HyperUBackend, exact_b::Bool)
-    n < 0 && return _hfail(:log_u_integer_b_limit, "positive-integer-b route requires n >= 0")
-    ac = ComplexF64(a)
-    zc = ComplexF64(z)
-
-    polynomial = _u_polynomial_a(ac, n, zc, exact_b)
-    polynomial !== nothing && return polynomial
-
-    try
-        finite_sum = ComplexF64(0)
-        for k in 1:n
-            finite_sum += _factorial_float(k - 1) *
-                _pochhammer_product(1 - ac + k, n - k) /
-                _factorial_float(n - k) * zc^(-k)
-        end
-        finite_part = _invgamma_complex(ac) * finite_sum
-        prefactor = (isodd(n + 1) ? -1.0 : 1.0) *
-            _invgamma_complex(ac - n) / _factorial_float(n)
-        if !_finite_complex(prefactor) || !_finite_complex(finite_part)
-            return _hfail(:log_u_integer_b_limit, "integer-b prefactor or finite sum is nonfinite")
-        end
-
-        coeff = ComplexF64(1)
-        zpow = ComplexF64(1)
-        series_sum = ComplexF64(0)
-        maxterm = 0.0
-        last_rel = Inf
-        iterations = 0
-        converged = false
-        logz = log(zc)
-        for k in 0:(backend.series_max - 1)
-            bracket = logz + digamma(ac + k) - digamma(1 + k) - digamma(n + k + 1)
-            term = coeff * zpow * bracket
-            series_sum += term
-            maxterm = max(maxterm, abs(term))
-            scale = max(abs(series_sum), abs(finite_part), floatmin(Float64))
-            last_rel = abs(term) / scale
-            iterations = k + 1
-            if k >= 2 && last_rel <= backend.reltol
-                converged = true
-                break
-            end
-            coeff *= (ac + k) / ((n + 1 + k) * (k + 1))
-            zpow *= zc
-        end
-
-        infinite_part = prefactor * series_sum
-        value = infinite_part + finite_part
-        if !_finite_complex(value) || iszero(value)
-            return _hfail(:log_u_integer_b_limit, "integer-b formula returned zero or nonfinite")
-        end
-        cancellation = (abs(infinite_part) + abs(finite_part)) / max(abs(value), floatmin(Float64))
-        relerr = max(last_rel,
-            eps(Float64) * cancellation * max(1.0, maxterm / max(abs(series_sum), floatmin(Float64))))
-        status =
-            !converged ? :WARN_MAXITER :
-            cancellation > 1.0e10 ? :WARN_CONDITIONED :
-            exact_b ? :OK : :WARN_LIMIT_APPROX
-        return HyperEval(log(value), :log_u_integer_b_limit, relerr, iterations, status,
-            "b_n=$(n), cancellation=$(cancellation)")
-    catch err
-        absorbable(err) || rethrow()
-        return _hfail(:log_u_integer_b_limit, sprint(showerror, err))
-    end
-end
-
-# log U for b within integer_b_tol of an integer; b <= 0 goes through
-# U(a, b, z) = z^(1 - b) U(a - b + 1, 2 - b, z).
-function _u_integer_b(a, b, z, backend::HyperUBackend)
-    bc = ComplexF64(b)
-    snapped_b = _integer_snap(bc, backend.integer_b_tol)
-    snapped_b === nothing && return _hfail(:log_u_integer_b_limit, "b outside integer tolerance")
-    exact_b = abs(bc - snapped_b) <= 1.0e-14
-    if snapped_b >= 1
-        return _u_positive_integer_b(a, snapped_b - 1, z, backend, exact_b)
-    end
-
-    shift_n = -snapped_b
-    shifted = _u_positive_integer_b(ComplexF64(a) + shift_n + 1, shift_n + 1, z, backend, exact_b)
-    _usable(shifted.status) || return shifted
-    route = shifted.route == :log_u_integer_b_polynomial ?
-        :log_u_integer_b_shift_polynomial : :log_u_integer_b_shift_limit
-    return HyperEval((shift_n + 1) * log(ComplexF64(z)) + shifted.value, route,
-        shifted.estimated_relerr, shifted.iterations, shifted.status, shifted.message)
-end
-
 # Large-|z| asymptotic series of U, stopped at its smallest term if it does not converge.
 function _u_asymptotic(a, b, z, backend::HyperUBackend)
     term = ComplexF64(1)
@@ -1691,15 +1528,10 @@ function _u_asymptotic(a, b, z, backend::HyperUBackend)
         backend.asymptotic_max, :WARN_MAXITER, "asymptotic maxiter")
 end
 
-# Ordering of U candidates: usable status, integer-b routes at small |z|, estimated
-# error, status, and a penalty for an unconverged asymptotic series at |z| < 10.
+# Ordering of U candidates: usable status, estimated error, status, and a penalty for an unconverged
+# asymptotic series at |z| < 10.
 function _u_rank(candidate::HyperEval, z, backend::HyperUBackend)
     usable_rank = _usable(candidate.status) ? 0 : 1
-    integer_priority =
-        (candidate.route in (:log_u_integer_b_limit, :log_u_integer_b_shift_limit,
-                             :log_u_integer_b_polynomial, :log_u_integer_b_shift_polynomial) &&
-         candidate.status in (:OK, :WARN_LIMIT_APPROX) &&
-         abs(z) <= backend.integer_b_priority_max_abs_z) ? -1 : 0
     relerr_rank = isfinite(candidate.estimated_relerr) ? candidate.estimated_relerr : Inf
     status_rank =
         candidate.status == :OK ? 0 :
@@ -1707,17 +1539,7 @@ function _u_rank(candidate::HyperEval, z, backend::HyperUBackend)
         candidate.status == :WARN_CONDITIONED ? 2 : 3
     asymptotic_penalty =
         (candidate.route in (:log_u_asymptotic_leastterm, :log_u_asymptotic_maxiter) && abs(z) < 10) ? 1 : 0
-    return (usable_rank, integer_priority, relerr_rank, status_rank, asymptotic_penalty)
-end
-
-function _preferred_integer_u(candidate::HyperEval, z, backend::HyperUBackend)
-    return candidate.route in (
-        :log_u_integer_b_limit,
-        :log_u_integer_b_shift_limit,
-        :log_u_integer_b_polynomial,
-        :log_u_integer_b_shift_polynomial,
-    ) && candidate.status in (:OK, :WARN_LIMIT_APPROX) &&
-        abs(z) <= backend.integer_b_priority_max_abs_z
+    return (usable_rank, relerr_rank, status_rank, asymptotic_penalty)
 end
 
 function _better_u(best, candidate::HyperEval, z, backend::HyperUBackend)
@@ -1726,9 +1548,8 @@ function _better_u(best, candidate::HyperEval, z, backend::HyperUBackend)
     return _u_rank(candidate, z, backend) < _u_rank(best, z, backend) ? candidate : best
 end
 
-# log U(a, b, z) by the best usable route: special cases, integer-b formulas, the
-# U(1, 1, z) limit, the asymptotic series, the connection formula, then the library.
-function _eval_log_u(backend::HyperUBackend, a, b, z; integer_route::Bool=true)
+# log U(a, b, z) by the best usable route: special cases, the U(1, 1, z) limit, the asymptotic series, the connection formula, then the library.
+function _eval_log_u(backend::HyperUBackend, a, b, z)
     ac = ComplexF64(a)
     bc = ComplexF64(b)
     zc = ComplexF64(z)
@@ -1736,12 +1557,8 @@ function _eval_log_u(backend::HyperUBackend, a, b, z; integer_route::Bool=true)
     _near_zero(ac - (bc - 1)) &&
         return _heval(-ac * log(zc), :log_u_special_a_eq_b_minus_1, eps(Float64), 0)
 
-    intb = integer_route ? _u_integer_b(ac, bc, zc, backend) :
-        _hfail(:log_u_integer_b_limit, "integer route disabled")
-    integer_route && _preferred_integer_u(intb, zc, backend) && return intb
-    best = integer_route ? _better_u(nothing, intb, zc, backend) : nothing
     oneone = _u_one_one_limit(ac, bc, zc, backend)
-    best = _better_u(best, oneone, zc, backend)
+    best = _better_u(nothing, oneone, zc, backend)
     if abs(zc) > backend.asymptotic_min_abs_z
         asym = _u_asymptotic(ac, bc, zc, backend)
         best = _better_u(best, asym, zc, backend)
@@ -1762,7 +1579,7 @@ function _mano_suzuki_takasugi_log_u(a0, integer_b::Int, delta, z)
     near.status == :OK && return near
     actual_a = ComplexF64(a0) + ComplexF64(delta) / 2
     actual_b = ComplexF64(integer_b) + ComplexF64(delta)
-    outer = _eval_log_u(HYPER_U, actual_a, actual_b, z; integer_route=false)
+    outer = _eval_log_u(HYPER_U, actual_a, actual_b, z)
     !_usable(near.status) && return outer
     !_usable(outer.status) && return near
     return near.estimated_relerr <= outer.estimated_relerr ? near : outer
@@ -3301,20 +3118,6 @@ function _amp_coeff_pair(
     return _amp_pair_sum(logs, -nmax, -check_nmax, check_nmax)
 end
 
-# A_- sum of a_n (-1)^n (nu+1+s-i epsilon)_n / (nu+1-s+i epsilon)_n; the _fast and _pair
-# versions build the weights by recurrence.
-function _amp_aminus_sum(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    return _amp_logsum(-nmax, nmax) do n
-        log_series_coefficient!(data, n) +
-            I * pi * n +
-            log_pochhammer(nu + 1 + p.s - I * epsc, n) -
-            log_pochhammer(nu + 1 - p.s + I * epsc, n)
-    end
-end
-
 function _amp_aminus_sum_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
     p = data.params
     nu = _nu_shift(p)
@@ -3345,33 +3148,6 @@ function _amp_aminus_pair(
             log(ComplexF64(numerator + n)) -
             log(ComplexF64(denominator + n))
     end
-end
-
-# Upper (n >= 0) and lower (n <= 0) sums of K_nu.
-function _amp_knu_sums(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-    up = _amp_logsum(0, nmax) do n
-        I * pi * n +
-            _amp_lgamma(1 + n + p.s + I * epsc + nu) +
-            _amp_lgamma(1 + n + 2nu) +
-            _amp_lgamma(1 + n + nu + I * tau) -
-            _amp_lfactorial(n) -
-            _amp_lgamma(1 + n - p.s - I * epsc + nu) -
-            _amp_lgamma(1 + n + nu - I * tau) +
-            log_series_coefficient!(data, n)
-    end
-    down = _amp_logsum(-nmax, 0) do n
-        I * pi * n +
-            log_pochhammer(1 + p.s - I * epsc + nu, n) -
-            _amp_lfactorial(-n) -
-            log_pochhammer(1 - p.s + I * epsc + nu, n) -
-            log_pochhammer(2 + 2nu, n) +
-            log_series_coefficient!(data, n)
-    end
-    return up, down
 end
 
 function _amp_knu_sums_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
@@ -3562,22 +3338,6 @@ function _amp_split_index(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_n
     r = clamp(edge - 2, -check_nmax, check_nmax)
     condition(r) > 8 && (r = max(r - 3, -check_nmax))
     return r
-end
-
-# Sum of a_n Gamma(1+nu+n+s+i epsilon) Gamma(1+nu+n+i tau) /
-# (Gamma(1+nu+n-s-i epsilon) Gamma(1+nu+n-i tau)), used in up_inc.
-function _amp_dsum(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-    return _amp_logsum(-nmax, nmax) do n
-        _amp_lgamma(1 + nu + n + p.s + I * epsc) +
-            _amp_lgamma(1 + nu + n + I * tau) -
-            _amp_lgamma(1 + nu + n - p.s - I * epsc) -
-            _amp_lgamma(1 + nu + n - I * tau) +
-            log_series_coefficient!(data, n)
-    end
 end
 
 function _amp_dsum_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
@@ -3930,29 +3690,21 @@ function _amp_shared_data(source::ManoSuzukiTakasugiSeriesData, params::ManoSuzu
     return data, mirror
 end
 
-# Amplitude logs from the sums over |n| <= nmax; `fast` builds the summand weights by
-# ratio recurrences.
+# Amplitude logs from the sums over |n| <= nmax; the summand weights are built by ratio recurrences.
 @noinline function _amp_logs(
     data::ManoSuzukiTakasugiSeriesData,
     nmax::Int;
-    fast::Bool=true,
     data2::ManoSuzukiTakasugiSeriesData=_amp_mirror_data(data),
     splits=nothing,
 )
     fsum = _amp_coeff_sum(data, nmax)
-    asum = fast ?
-        _amp_aminus_sum_fast(data, nmax) :
-        _amp_aminus_sum(data, nmax)
+    asum = _amp_aminus_sum_fast(data, nmax)
     ksum1 = splits !== nothing ? first(_amp_knu_split_pair(data, nmax, nmax, splits[1])) :
-        fast ? _amp_knu_sums_fast(data, nmax) : _amp_knu_sums(data, nmax)
+        _amp_knu_sums_fast(data, nmax)
     ksum2 = splits !== nothing ? first(_amp_knu_split_pair(data2, nmax, nmax, splits[2])) :
-        fast ? _amp_knu_sums_fast(data2, nmax) : _amp_knu_sums(data2, nmax)
-    dsum1 = fast ?
-        _amp_dsum_fast(data, nmax) :
-        _amp_dsum(data, nmax)
-    dsum2 = fast ?
-        _amp_dsum_fast(data2, nmax) :
-        _amp_dsum(data2, nmax)
+        _amp_knu_sums_fast(data2, nmax)
+    dsum1 = _amp_dsum_fast(data, nmax)
+    dsum2 = _amp_dsum_fast(data2, nmax)
     return _amp_build(
         data, data2, fsum, asum, ksum1, ksum2, dsum1, dsum2)
 end
@@ -6443,13 +6195,6 @@ function _mano_suzuki_takasugi_guess_offset(s, l, epsilon)
         (lf^2 - sf^2)^2 / ((2 * lf - 1) * 2 * lf * (2 * lf + 1))
     return correction * epsilon^2 / (2 * lf + 1)
 end
-
-"""
-    mano_suzuki_takasugi_guess(s, l, epsilon)
-
-Low-frequency estimate of the MST nu, l + O(epsilon^2).
-"""
-mano_suzuki_takasugi_guess(s, l, epsilon) = Float64(l) + _mano_suzuki_takasugi_guess_offset(s, l, epsilon)
 
 # MST equation beta_0 + alpha_0 R_1 + gamma_0 L_(-1) at nu = l + nu_offset; nu is a root.
 function _mano_suzuki_takasugi_eq_value(nu_offset, s, l, m, a, omega, lambda)
