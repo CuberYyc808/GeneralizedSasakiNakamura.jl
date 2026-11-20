@@ -494,6 +494,44 @@ function _extremal_method_label(method)
     return "linear"
 end
 
+# IN + UP combination at |a| = 1, used at complex frequency (OUT and DOWN are solved directly at real frequency).
+function _combine_extremal_gsn(Xin, Xup, boundary_condition, method_label)
+    Btrans = Xin.transmission_amplitude
+    Binc = Xin.incidence_amplitude
+    Bref = Xin.reflection_amplitude
+    Ctrans = Xup.transmission_amplitude
+    Cinc = Xup.incidence_amplitude
+    Cref = Xup.reflection_amplitude
+
+    if boundary_condition == DOWN
+        solution = rs -> begin
+            xin = Xin.GSN_solution(rs)
+            xup = Xup.GSN_solution(rs)
+            inv(Binc) .* (xin .- Bref / Ctrans .* xup)
+        end
+        return GSNRadialFunction(
+            Xin.mode, DOWN, Xin.rsin, Xin.rsout, missing,
+            Xin.horizon_expansion_order, Xin.infinity_expansion_order,
+            one(Binc), Btrans / Binc - Bref * Cref / (Binc * Ctrans),
+            -Bref * Cinc / (Binc * Ctrans),
+            (fundamental_solutions=(Xin, Xup),), missing, solution,
+            UNIT_GSN_TRANS, method_label)
+    end
+
+    solution = rs -> begin
+        xin = Xin.GSN_solution(rs)
+        xup = Xup.GSN_solution(rs)
+        inv(Cinc) .* (xup .- Cref / Btrans .* xin)
+    end
+    return GSNRadialFunction(
+        Xin.mode, OUT, Xin.rsin, Xin.rsout, missing,
+        Xin.horizon_expansion_order, Xin.infinity_expansion_order,
+        one(Cinc), Ctrans / Cinc - Bref * Cref / (Btrans * Cinc),
+        -Binc * Cref / (Btrans * Cinc),
+        (fundamental_solutions=(Xin, Xup),), missing, solution,
+        UNIT_GSN_TRANS, method_label)
+end
+
 function _gsn_from_extremal(s, l, m, a, omega, boundary_condition,
         rsin, rsout; horizon_expansion_order, infinity_expansion_order,
         method, data_type, ODE_algorithm, tolerance, lambda=nothing)
@@ -502,6 +540,15 @@ function _gsn_from_extremal(s, l, m, a, omega, boundary_condition,
     lambda_value = lambda === nothing ?
         _swsh_eigenvalue(s, l, m, a * omega) : lambda
 
+    # OUT and DOWN are solved directly at real frequency; at complex frequency (strongly damped, amplitudes up to
+    # 1e24 in the hbc grid) the two forms differ at O(1) and neither is checked, so the IN + UP combination is kept.
+    if (boundary_condition == DOWN || boundary_condition == OUT) && !isreal(omega)
+        Xin = _gsn_from_extremal(s, l, m, a, omega, IN, rsin, rsout; horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tolerance, lambda=lambda_value)
+        Xup = _gsn_from_extremal(s, l, m, a, omega, UP, rsin, rsout; horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tolerance, lambda=lambda_value)
+        return _combine_extremal_gsn(Xin, Xup, boundary_condition, method_label)
+    end
     branch = boundary_condition == IN ? :IN : boundary_condition == UP ? :UP :
         boundary_condition == OUT ? :OUT : :DOWN
     solved = ExtremalRadial.solve_extremal_gsn(
