@@ -1640,8 +1640,10 @@ function _record_current_mode_inclined!(h5, record::Bool, boundary::AbstractStri
 end
 
 function _record_current_mode_generic!(h5, record::Bool, boundary::AbstractString, n::Int, k::Int, m::Int, l::Int, mode_index::Base.RefValue{Int}, mode, N_sample::Int, K_sample::Int)
-    mode_index[] += 1
+    # Counted only when recording (as in the eccentric and inclined recorders): with mode_parallelism the two
+    # boundaries run as tasks and would otherwise race on the shared counter.
     record || return nothing
+    mode_index[] += 1
     nkey = @sprintf("n_%06d", n)
     kkey = @sprintf("k_%+06d", k)
     mkey = @sprintf("m_%+06d", m)
