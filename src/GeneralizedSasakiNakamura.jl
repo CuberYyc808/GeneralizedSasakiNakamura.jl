@@ -653,7 +653,7 @@ solutions.
 The solution method is determined by the keyword `method` (default: `"auto"`).
 The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it log a warning and fall back to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
 Explicit `method="ISEM"` never falls back. `"Riccati"` and `"linear"` select the ODE methods directly for `IN` and `UP`.
-For `OUT` and `DOWN` at $|a| < 1$, however, the `IN` and `UP` solutions that are combined are computed with `method="auto"` (ISEM first, the ODE methods only as its fallback) even with these two methods, and a given `lambda` is not used for them.
+For `OUT` and `DOWN` at real frequency and $|a| < 1$ these two methods also solve directly (`OUT` integrated outward from the horizon, `DOWN` inward from infinity); at complex frequency the `IN` and `UP` solutions that are combined are computed with `method="auto"` (ISEM first, the ODE methods only as its fallback), and a given `lambda` is not used for them.
 At $|a| = 1$ every `method` uses the exact-extremal solver. Otherwise, at the superradiant threshold $\omega = ma/(2r_+)$, with $r_+ = 1 + \sqrt{1 - a^2}$, the `UP` solution is always built with ISEM.
 
 `tol` (or its alias `tolerance`; `tol` takes precedence) is the tolerance of ISEM, and the absolute and relative tolerance of the ODE solver (default: `1e-12`) for the ODE methods.
@@ -1057,6 +1057,32 @@ function _gsn_radial_legacy(
                     method
                 )
             end
+        elseif (boundary_condition == DOWN || boundary_condition == OUT) && isa(omega, Real)
+            # Solved directly: OUT from the horizon outward, DOWN from infinity inward (Solutions.solve_down_out).
+            riccati = method == "Riccati"
+            incidence, reflection, solution, Xsoln, Phisoln = Solutions.solve_down_out(
+                s, m, a, omega, lambda, boundary_condition == OUT ? :OUT : :DOWN, rsin, rsout,
+                horizon_expansion_order, infinity_expansion_order;
+                riccati=riccati, dtype=data_type, odealgo=ODE_algorithm, reltol=tolerance, abstol=tolerance)
+            numerical = riccati ? Phisoln : Xsoln
+            SciMLBase.successful_retcode(numerical) || _warn_solve_failure(riccati ? "Riccati" : "linear", numerical.retcode)
+            return GSNRadialFunction(
+                mode,
+                boundary_condition,
+                rsin,
+                rsout,
+                rsmp,
+                horizon_expansion_order,
+                infinity_expansion_order,
+                data_type(1),
+                incidence,
+                reflection,
+                Xsoln,
+                riccati ? Phisoln : missing,
+                solution,
+                UNIT_GSN_TRANS,
+                method
+            )
         elseif boundary_condition == DOWN
             # Construct Xdown from Xin and Xup, instead of solving the ODE numerically with the boundary condition
 

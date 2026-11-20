@@ -146,6 +146,80 @@ function solve_Xin(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditi
     return odesoln
 end
 
+# Unit-amplitude asymptotic solutions (X, dX/drs) at a tortoise coordinate rs: at the horizon the ingoing (wave = :in,
+# exp(-i p rs)) or outgoing (:out, exp(+i p rs)) Frobenius series with p = omega - m Omega_H, at infinity the ingoing
+# (exp(-i omega rs)) or outgoing (exp(+i omega rs)) asymptotic series. These are the states the IN and UP routes start
+# from (Xin_initialconditions, Xup_initialconditions) and the bases their amplitudes refer to.
+function horizon_wave(s, m, a, omega, lambda, rs, wave::Symbol; order, dtype=_DEFAULTDATATYPE)
+    sign = wave === :in ? -1 : 1
+    coefficients = coefficient_sequence(wave === :in ? ingoing_coefficient_at_hor : outgoing_coefficient_at_hor,
+        s, m, a, omega, lambda; data_type=dtype)
+    r = r_from_rstar(a, rs)
+    p = omega - m*omega_horizon(a)
+    g = gansatz(coefficients, a, r; order=order)
+    dg = dgansatz_dr(coefficients, a, r; order=order)
+    phase = exp(sign*1im*p*rs)
+    return g*phase, (Delta(a, r)/(r^2 + a^2)*dg + sign*1im*p*g)*phase
+end
+
+function infinity_wave(s, m, a, omega, lambda, rs, wave::Symbol; order, dtype=_DEFAULTDATATYPE)
+    sign = wave === :in ? -1 : 1
+    coefficients = coefficient_sequence(wave === :in ? ingoing_coefficient_at_inf : outgoing_coefficient_at_inf,
+        s, m, a, omega, lambda; data_type=dtype)
+    r = r_from_rstar(a, rs)
+    f = fansatz(coefficients, omega, r; order=order)
+    df = dfansatz_dr(coefficients, omega, r; order=order)
+    phase = exp(sign*1im*omega*rs)
+    return f*phase, (Delta(a, r)/(r^2 + a^2)*df + sign*1im*omega*f)*phase
+end
+
+# OUT and DOWN solved directly at real omega: OUT starts at rsin with the outgoing horizon wave and is integrated
+# outward, DOWN starts at rsout with the ingoing infinity wave and is integrated inward, in the linear or the Riccati
+# form. The amplitudes are the coefficients of the far pair: for OUT (outgoing, ingoing) at infinity from
+# BrefBinc_SN_from_Xin, for DOWN (ingoing, outgoing) at the horizon from CrefCinc_SN_from_Xup; incidence is the first
+# of each pair (the definitions of the IN + UP combination). Outside [rsin, rsout] the solution is continued with the
+# asymptotic series. Returns (incidence, reflection, X(rs) -> (X, dX/drs), numerical X solution, Riccati solution or
+# nothing).
+function solve_down_out(s::Int, m::Int, a, omega, lambda, boundary::Symbol, rsin, rsout, horizon_order, infinity_order;
+        riccati::Bool, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
+    rsin < rsout || throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
+    boundary in (:OUT, :DOWN) || throw(ArgumentError("boundary must be :OUT or :DOWN"))
+    span = boundary === :OUT ? (rsin, rsout) : (rsout, rsin)
+    X0, dX0 = boundary === :OUT ?
+        horizon_wave(s, m, a, omega, lambda, rsin, :out; order=horizon_order, dtype=dtype) :
+        infinity_wave(s, m, a, omega, lambda, rsout, :in; order=infinity_order, dtype=dtype)
+    params = (s=s, m=m, a=a, omega=omega, lambda=lambda)
+    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
+    Phisoln, Xsoln = if riccati
+        Phi, dPhi = PhiPhiprime_from_XXprime(X0, dX0)
+        phi = solve(ODEProblem(GSN_Riccati_eqn, SA[dtype(Phi); dtype(dPhi)], span, params), odealgo;
+            reltol=reltol, abstol=abstol, maxiters=maxiters)
+        (phi, Xsoln_from_Phisoln(phi))
+    else
+        (nothing, solve(ODEProblem(GSN_linear_eqn, SA[dtype(X0); dtype(dX0)], span, params), odealgo;
+            reltol=reltol, abstol=abstol, maxiters=maxiters))
+    end
+    incidence, reflection = boundary === :OUT ?
+        BrefBinc_SN_from_Xin(s, m, a, omega, lambda, Xsoln, rsout; order=infinity_order, dtype=dtype) :
+        CrefCinc_SN_from_Xup(s, m, a, omega, lambda, Xsoln, rsin; order=horizon_order, dtype=dtype)
+    function solution(rs)
+        if rs < rsin
+            boundary === :OUT && return horizon_wave(s, m, a, omega, lambda, rs, :out; order=horizon_order, dtype=dtype)
+            hin = horizon_wave(s, m, a, omega, lambda, rs, :in; order=horizon_order, dtype=dtype)
+            hout = horizon_wave(s, m, a, omega, lambda, rs, :out; order=horizon_order, dtype=dtype)
+            return (incidence*hin[1] + reflection*hout[1], incidence*hin[2] + reflection*hout[2])
+        elseif rs > rsout
+            boundary === :DOWN && return infinity_wave(s, m, a, omega, lambda, rs, :in; order=infinity_order, dtype=dtype)
+            iout = infinity_wave(s, m, a, omega, lambda, rs, :out; order=infinity_order, dtype=dtype)
+            iin = infinity_wave(s, m, a, omega, lambda, rs, :in; order=infinity_order, dtype=dtype)
+            return (incidence*iout[1] + reflection*iin[1], incidence*iout[2] + reflection*iin[2])
+        end
+        value = Xsoln(rs)
+        return (value[1], value[2])
+    end
+    return incidence, reflection, solution, Xsoln, Phisoln
+end
+
 function Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(s, m, a, omega, lambda, r)
     #=
     Here we use explicit form for the conversion matrix to
