@@ -4089,6 +4089,10 @@ function complex_route(
     )
 end
 
+# GSN state (X, dXdrstar, error) of a route at a real radius r > rplus.
+complex_route_state_r(route::ComplexRoute, r::Real) =
+    _state_at_r(route.state_evaluator, r)
+
 # The callable rstar -> (X, dXdrstar, error) of a route.
 complex_gsn_solution_rstar(route::ComplexRoute) = route.state_evaluator
 
