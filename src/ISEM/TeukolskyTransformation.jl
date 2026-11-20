@@ -1,6 +1,5 @@
 module TeukolskyTransformation
 
-using StaticArrays
 
 export r_to_x, x_to_r, Tx
 export Delta, Vr, d2R

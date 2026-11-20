@@ -10,7 +10,6 @@ using ..Matching:
     Route,
     ConjugatedRoute,
     ScaledBasis,
-    evaluate_route,
     route_state
 using ..Matching: Matching, route_plan_of, route_truncations
 using ..Iteration: _endpoint_last_term_radius, _ENDPOINT_SEED_TARGET
@@ -21,9 +20,8 @@ using .NearHorizonTeukolsky: TeukolskyTaylorChain, teukolsky_taylor_chain, teuko
 using ..TeukolskyTransformation: _GSN_to_Y_coeffs_minus2_in
 
 export compact_kappa, compact_r_plus, compact_r_minus
-export y_from_x, x_from_y
 export r_from_x, x_from_r
-export dx_dr, dr_dx, dx_drstar
+export dx_drstar
 export gsn_solution_rstar, gsn_radial_function
 export route_teukolsky_solution, teukolsky_radial_function
 export y_branch_supported, route_y_solution, y_radial_function, near_horizon_y
@@ -379,12 +377,6 @@ function (e::TeukolskyTupleEvaluator)(r)
     return (R, Rp, Rpp, error)
 end
 
-# Compactified coordinate x = (r - r_+) / (r - r_-) in [0, 1), and y = 1 - x.
-# `a_or_params` is the spin a or any object with a field `a` (and optionally `kappa`);
-# dr/dx = 2 kappa / (1 - x)^2.
-y_from_x(x) = one(x) - x
-x_from_y(y) = one(y) - y
-
 function _a_value(a_or_params)
     return hasproperty(a_or_params, :a) ? getproperty(a_or_params, :a) : a_or_params
 end
@@ -410,15 +402,6 @@ function x_from_r(a_or_params, r)
     rp = compact_r_plus(a_or_params)
     rm = compact_r_minus(a_or_params)
     return (r - rp) / (r - rm)
-end
-
-function dr_dx(a_or_params, x)
-    kappa = compact_kappa(a_or_params)
-    return 2 * kappa / (one(x) - x)^2
-end
-
-function dx_dr(a_or_params, x)
-    return inv(dr_dx(a_or_params, x))
 end
 
 function dx_drstar(a_or_params, x)
