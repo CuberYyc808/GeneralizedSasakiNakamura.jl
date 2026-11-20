@@ -218,30 +218,6 @@ Basis(
 
 Basis(
     kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
-    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale,
-) = Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    max_step,
-    min_step,
-    endpoint_variable_scale,
-    Truncation[],
-    true,
-)
-
-Basis(
-    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
     match_dXdx, step_count, max_step, min_step, endpoint_variable_scale, truncations,
 ) = Basis(
     kind,
@@ -307,19 +283,6 @@ function Base.showerror(io::IO, err::EndpointCertificateError)
         ", requested_order=", err.requested_order)
 end
 
-
-InfinitySelection(endpoint_y, out_coeffs, in_coeffs, out_order, in_order, score, variable_scale) = InfinitySelection(
-    endpoint_y,
-    out_coeffs,
-    in_coeffs,
-    out_order,
-    in_order,
-    score,
-    variable_scale,
-    max(out_order, in_order),
-    :none,
-    :none,
-)
 
 # Work buffers for the ordinary-point marches: `pq` for the coefficient-table
 # values, `avec`/`bvec` for the local A/B series, `local_coeffs`/`local_coeffs2`
