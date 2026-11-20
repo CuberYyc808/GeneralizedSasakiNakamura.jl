@@ -1214,16 +1214,16 @@ function GSN_radial(s::Int, l::Int, m::Int, a, omega; data_type=Solutions._DEFAU
 
             if new_horizon_expansion_order > _MAX_horizon_expansion_order || new_infinity_expansion_order > _MAX_infinity_expansion_order
                 @warn "Failed to solve the equation within a reasonable range of expansion orders. Consider widening the integration domain."
-                continue
+                break
             end
 
             # Re-solve Xin and Xup using the updated settings
-            Xin = GSN_radial(s, l, m, a, omega, IN, rsin, rsout,
+            Xin = GSN_radial(s, l, m, a, omega, IN, _DEFAULT_rsin, _DEFAULT_rsout,
                 horizon_expansion_order=new_horizon_expansion_order,
                 infinity_expansion_order=new_infinity_expansion_order,
                 data_type=data_type, ODE_algorithm=ODE_algorithm, tolerance=tolerance, rsmp=nothing, method=method
             )
-            Xup = GSN_radial(s, l, m, a, omega, UP, rsin, rsout,
+            Xup = GSN_radial(s, l, m, a, omega, UP, _DEFAULT_rsin, _DEFAULT_rsout,
                 horizon_expansion_order=new_horizon_expansion_order,
                 infinity_expansion_order=new_infinity_expansion_order,
                 data_type=data_type, ODE_algorithm=ODE_algorithm, tolerance=tolerance, rsmp=nothing, method=method
