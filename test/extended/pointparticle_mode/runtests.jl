@@ -222,8 +222,8 @@ end
 # ---------------------------------------------------------------------------------------------------
 @testset "argument validation" begin
     @test_throws ArgumentError Teukolsky_pointparticle_mode(-2, 2, 2, 1, 1, 0.0, 20.0, 1.1, 0.7)
-    @test_throws ErrorException Teukolsky_pointparticle_mode(-2, 2, 2, 0, 0, 0.5, 8.0, 0.0, 1.0; method="bogus")
-    @test_throws ErrorException GSN_pointparticle_mode(-2, 2, 2, 0, 0, 0.5, 8.0, 0.0, 1.0; method="bogus")
+    @test_throws ArgumentError Teukolsky_pointparticle_mode(-2, 2, 2, 0, 0, 0.5, 8.0, 0.0, 1.0; method="bogus")
+    @test_throws ArgumentError GSN_pointparticle_mode(-2, 2, 2, 0, 0, 0.5, 8.0, 0.0, 1.0; method="bogus")
 end
 
 # ---------------------------------------------------------------------------------------------------
