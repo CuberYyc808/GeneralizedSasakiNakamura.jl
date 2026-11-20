@@ -1,6 +1,5 @@
-# sF and sU with Delta = a^2 - 2r + r^2 passed in: generated from Potentials.jl by replacing each of the 15
-# occurrences of the text (a^2 + (-2 + r)*r) in sF and sU with Delta, nothing else changed. A caller near the
-# horizon passes Delta in factored form, (r - r+)(r - r-), instead of the difference of O(1) terms.
+# sF and sU with Delta = a^2 - 2r + r^2 passed in. sF and sU (Potentials.jl) pass a^2 + (-2 + r) r; a caller near
+# the horizon passes Delta in factored form, (r - r+)(r - r-), instead of the difference of O(1) terms.
 
 function sF_delta(s::Int, m::Int, a, omega, lambda, r, Delta)
     #=
