@@ -538,7 +538,7 @@ end
 """
     solve_extremal_gsn(s, m, a, omega, lambda, boundary, rsin, rsout; method=:gsn_isem, kwargs...)
 
-Exact-extremal (`|a| = 1`) GSN solution with `boundary = :IN` or `:UP`, computed on `[rsin, rsout]` by
+Exact-extremal (`|a| = 1`) GSN solution with `boundary = :IN`, `:UP`, `:OUT` or `:DOWN`, computed on `[rsin, rsout]` by
 `method` (`:gsn_isem` Taylor patches on the GSN equation,
 `:linear` or `:riccati` ODE integration) and extended outside by the horizon and infinity
 expansions. Returns a NamedTuple with the solution, unit transmission amplitude, the incidence and
@@ -556,42 +556,46 @@ function solve_extremal_gsn(
         tolerance=Solutions._DEFAULTTOLERANCE)
     _checked_extremal_sign(a)
     _require_nonsynchronous(a, m, omega)
-    boundary in (:IN, :UP) || throw(ArgumentError(
-        "the extremal fundamental solver supports only :IN and :UP"))
+    boundary in (:IN, :UP, :OUT, :DOWN) || throw(ArgumentError(
+        "the extremal solver supports :IN, :UP, :OUT and :DOWN"))
+    # OUT starts at the horizon like IN, DOWN at infinity like UP; each is decomposed in the pair of the other end.
+    side = boundary in (:IN, :OUT) ? :IN : :UP
     rin = Coordinates.r_from_rstar(a, rsin)
     rout = Coordinates.r_from_rstar(a, rsout)
     ingoing_normalization = extremal_horizon_normalization(
         s, m, a, omega, lambda, :ingoing; order=horizon_order)
     outgoing_normalization = extremal_horizon_normalization(
         s, m, a, omega, lambda, :outgoing; order=horizon_order)
-    horizon_state = extremal_gsn_horizon_state(
-        s, m, a, omega, lambda, rin, :ingoing;
-        order=horizon_order, normalization=ingoing_normalization)
+    horizon_state = boundary === :OUT ?
+        extremal_gsn_horizon_state(s, m, a, omega, lambda, rin, :outgoing;
+            order=horizon_order, normalization=outgoing_normalization) :
+        extremal_gsn_horizon_state(s, m, a, omega, lambda, rin, :ingoing;
+            order=horizon_order, normalization=ingoing_normalization)
     infinity_state = _infinity_pair(
         s, m, a, omega, lambda, rout, rsout,
-        infinity_order, :outgoing)
+        infinity_order, boundary === :DOWN ? :ingoing : :outgoing)
 
     phi_solution = nothing
     numerical = if method === :linear
         _differential_solution(s, m, a, omega, lambda, rsin, rsout,
-            boundary, :linear, horizon_state, infinity_state;
+            side, :linear, horizon_state, infinity_state;
             data_type, ode_algorithm, tolerance)
     elseif method === :riccati
         value, phi_solution = _differential_solution(
             s, m, a, omega, lambda, rsin, rsout,
-            boundary, :riccati, horizon_state, infinity_state;
+            side, :riccati, horizon_state, infinity_state;
             data_type, ode_algorithm, tolerance)
         value
     elseif method === :gsn_isem
         _series_solution(s, m, a, omega, lambda, rsin, rsout,
-            boundary, horizon_state, infinity_state;
+            side, horizon_state, infinity_state;
             order=series_order, tolerance)
     else
         throw(ArgumentError("unsupported exact-extremal method $method"))
     end
 
-    endpoint_state = boundary === :IN ? numerical(rsout) : numerical(rsin)
-    amplitudes = if boundary === :IN
+    endpoint_state = side === :IN ? numerical(rsout) : numerical(rsin)
+    amplitudes = if side === :IN
         _infinity_decomposition(
             s, m, a, omega, lambda, endpoint_state, rout, rsout,
             infinity_order)
@@ -609,6 +613,10 @@ function solve_extremal_gsn(
                 return extremal_gsn_horizon_state(
                     s, m, a, omega, lambda, r, :ingoing;
                     order=horizon_order, normalization=ingoing_normalization)
+            elseif boundary === :OUT
+                return extremal_gsn_horizon_state(
+                    s, m, a, omega, lambda, r, :outgoing;
+                    order=horizon_order, normalization=outgoing_normalization)
             end
             incoming = extremal_gsn_horizon_state(
                 s, m, a, omega, lambda, r, :ingoing;
@@ -618,10 +626,10 @@ function solve_extremal_gsn(
                 order=horizon_order, normalization=outgoing_normalization)
             return amplitudes.ingoing * incoming + amplitudes.outgoing * outgoing
         elseif rs > rsout
-            if boundary === :UP
+            if boundary === :UP || boundary === :DOWN
                 return _infinity_pair(
                     s, m, a, omega, lambda, r, rs,
-                    infinity_order, :outgoing)
+                    infinity_order, boundary === :UP ? :outgoing : :ingoing)
             end
             incoming = _infinity_pair(
                 s, m, a, omega, lambda, r, rs,
@@ -639,8 +647,9 @@ function solve_extremal_gsn(
         riccati=phi_solution,
         solution=full_solution,
         transmission=data_type(1),
-        incidence=boundary === :IN ? amplitudes.ingoing : amplitudes.outgoing,
-        reflection=boundary === :IN ? amplitudes.outgoing : amplitudes.ingoing,
+        # IN, DOWN: incidence is the ingoing wave of the far end (infinity, horizon); UP, OUT: the outgoing one.
+        incidence=boundary in (:IN, :DOWN) ? amplitudes.ingoing : amplitudes.outgoing,
+        reflection=boundary in (:IN, :DOWN) ? amplitudes.outgoing : amplitudes.ingoing,
         amplitudes=amplitudes,
         ingoing_normalization=ingoing_normalization,
         outgoing_normalization=outgoing_normalization,
