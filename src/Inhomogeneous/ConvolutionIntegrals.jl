@@ -148,12 +148,6 @@ function _zero_radiative_mode(ω, trajectory; reason = "")
 end
 
 
-# Run f() with the task-local flag :GSN_Y_RADIAL_INFO set to `info`. No radial solver reads this flag, so the
-# `info` keyword of Teukolsky_pointparticle_flux has no effect.
-function with_y_radial_info(f, info::Bool)
-    return task_local_storage(f, :GSN_Y_RADIAL_INFO, info)
-end
-
 include("SubmissionGeometry.jl")
 
 mutable struct EccentricFluxCache
@@ -1135,13 +1129,6 @@ function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
     return _generic_carter_factor_sample(carter_sample, m, omega; lz_cot2)
 end
 
-function _phase_vector_exp!(out::Vector{ComplexF64}, base_omega::Float64, freq_vec::Vector{Float64}, mode_index::Int, q_vec::Vector{Float64}, fixed_phase::Vector{ComplexF64})
-    @inbounds for i in eachindex(q_vec)
-        out[i] = exp(im * (base_omega * freq_vec[i] + mode_index * q_vec[i])) * fixed_phase[i]
-    end
-    return out
-end
-
 function _phase_vector_recurrence!(out::Vector{ComplexF64}, base_omega::Float64, freq_vec::Vector{Float64}, mode_index::Int, step::Float64, fixed_phase::Vector{ComplexF64})
     qphase = 1.0 + 0.0im
     qstep = exp(im * mode_index * step)
@@ -1183,23 +1170,19 @@ end
     return total + m * lz_cot2
 end
 
-function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, n::Int, k::Int; recurrence_phase::Bool = true, new_only::Bool = false)
+function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, n::Int, k::Int; new_only::Bool = false)
     N = cache.N
     K = cache.K
     a = cache.a
     m = cache.m
     dqr = pi / (N - 1)
     dqtheta = pi / (K - 1)
-    radial_phase = recurrence_phase ?
-        _phase_vector_recurrence!(cache.radial_phase, omega, cache.dtr, n, dqr, cache.m_phase_r) :
-        _phase_vector_exp!(cache.radial_phase, omega, cache.dtr, n, cache.qr, cache.m_phase_r)
+    radial_phase = _phase_vector_recurrence!(cache.radial_phase, omega, cache.dtr, n, dqr, cache.m_phase_r)
     radial_tortoise = cache.radial_tortoise
     @inbounds for i in 1:N
         radial_tortoise[i] = exp(im * omega * cache.rs[i]) * cache.m_log_phase[i]
     end
-    theta_phase = recurrence_phase ?
-        _phase_vector_recurrence!(cache.theta_phase, omega, cache.dttheta, k, dqtheta, cache.m_phase_theta) :
-        _phase_vector_exp!(cache.theta_phase, omega, cache.dttheta, k, cache.qtheta, cache.m_phase_theta)
+    theta_phase = _phase_vector_recurrence!(cache.theta_phase, omega, cache.dttheta, k, dqtheta, cache.m_phase_theta)
     Binc = Y_samp["Binc"]::ComplexF64
     Y = Y_samp["Y"]::Vector{ComplexF64}
     Yp = Y_samp["Yp"]::Vector{ComplexF64}
@@ -1272,23 +1255,19 @@ function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_
     return prefactor * total
 end
 
-function _generic_p2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, lambda::Float64, n::Int, k::Int; recurrence_phase::Bool = true, new_only::Bool = false)
+function _generic_p2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, lambda::Float64, n::Int, k::Int; new_only::Bool = false)
     N = cache.N
     K = cache.K
     a = cache.a
     m = cache.m
     dqr = pi / (N - 1)
     dqtheta = pi / (K - 1)
-    radial_phase = recurrence_phase ?
-        _phase_vector_recurrence!(cache.radial_phase, omega, cache.dtr, n, dqr, cache.m_phase_r) :
-        _phase_vector_exp!(cache.radial_phase, omega, cache.dtr, n, cache.qr, cache.m_phase_r)
+    radial_phase = _phase_vector_recurrence!(cache.radial_phase, omega, cache.dtr, n, dqr, cache.m_phase_r)
     radial_tortoise = cache.radial_tortoise
     @inbounds for i in 1:N
         radial_tortoise[i] = exp(-im * omega * cache.rs[i]) * conj(cache.m_log_phase[i])
     end
-    theta_phase = recurrence_phase ?
-        _phase_vector_recurrence!(cache.theta_phase, omega, cache.dttheta, k, dqtheta, cache.m_phase_theta) :
-        _phase_vector_exp!(cache.theta_phase, omega, cache.dttheta, k, cache.qtheta, cache.m_phase_theta)
+    theta_phase = _phase_vector_recurrence!(cache.theta_phase, omega, cache.dttheta, k, dqtheta, cache.m_phase_theta)
     Cinc = Y_samp["Cinc"]::ComplexF64
     Y = Y_samp["Y"]::Vector{ComplexF64}
     Yp = Y_samp["Yp"]::Vector{ComplexF64}

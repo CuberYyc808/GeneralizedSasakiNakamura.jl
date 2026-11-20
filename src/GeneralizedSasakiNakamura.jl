@@ -2105,7 +2105,7 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
     mode_parallelism > Threads.nthreads() &&
         @warn "mode_parallelism = $(mode_parallelism) exceeds the $(Threads.nthreads()) Julia threads; start Julia with --threads=$(mode_parallelism)." maxlog = 1
     t0 = time()
-    result = ConvolutionIntegrals.with_y_radial_info(info) do
+    result = begin   # `info` is accepted for compatibility and has no effect
         if orbit_type == :circular
             ModeSummation.circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = something(minimum_consecutive, 5), submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
         elseif orbit_type == :eccentric
