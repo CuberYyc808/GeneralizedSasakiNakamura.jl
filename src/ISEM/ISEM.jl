@@ -39,8 +39,6 @@ include("Eikonal.jl")
 using .Eikonal
 include("LocalSolutionAtZero.jl")
 using .LocalSolutionAtZero
-include("HorizonLargeFrequencyExpansion.jl")
-using .HorizonLargeFrequencyExpansion
 include("LocalSolutionAtInfinity.jl")
 using .LocalSolutionAtInfinity
 include("InfinityLargeFrequencyExpansion.jl")

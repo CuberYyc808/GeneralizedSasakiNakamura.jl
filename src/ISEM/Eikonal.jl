@@ -16,7 +16,6 @@ export eikonal_candidate, eikonal_preflight, eikonal_path, eikonal_pair
 export eikonal_split, eikonal_split_pair
 export eikonal_value, eikonal_state
 export EIKONAL_TERMS, EIKONAL_ORDER, LARGE_FREQUENCY_EXPANSION_EIKONAL_ORDER
-export reset_eikonal_profile!, eikonal_profile
 
 # EIKONAL_TERMS: number of 1/xi correction terms in the plus/minus series.
 # EIKONAL_ORDER and LARGE_FREQUENCY_EXPANSION_EIKONAL_ORDER: Taylor order of the
@@ -31,80 +30,10 @@ const EIKONAL_SPLIT_LIMIT = 1e-10 + 256eps(Float64)
 const EIKONAL_MAX_STEP = 0.1
 const EIKONAL_RADIUS_SAFETY = 0.8
 const EIKONAL_STEP_GROWTH = 1.55
-# Opt-in via ISEM_EIKONAL_PARTIAL_STALL=1: with allow_partial, eikonal_split stops
-# and returns the patches so far once an accepted step falls below
-# EIKONAL_PARTIAL_STALL_RATIO times the step cap.
-const EIKONAL_PARTIAL_STALL =
-    get(ENV, "ISEM_EIKONAL_PARTIAL_STALL", "0") != "0"
-const EIKONAL_PARTIAL_STALL_RATIO = sqrt(eps(Float64))
 const EIKONAL_COMPRESSION_MIN = 1536.0
 const EIKONAL_SMALL_FREQUENCY_EXPANSION_COMPRESSION_MIN = 8192.0
 const EIKONAL_ROUTE_COMPRESSION_MIN = 192.0
 const EIKONAL_IN_PHASE_MIN = 5.0
-# Optional counters of accepted and rejected eikonal steps, compiled in only when
-# ISEM_EIKONAL_PROFILE=1 is set at load time (read with `eikonal_profile`, clear
-# with `reset_eikonal_profile!`).
-const EIKONAL_PROFILE = get(ENV, "ISEM_EIKONAL_PROFILE", "0") == "1"
-const _PROFILE_ACCEPTED = Threads.Atomic{Int}(0)
-const _PROFILE_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_RESIDUAL_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_CHECK_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_SPLIT_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_NONFINITE_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_OTHER_REJECTED = Threads.Atomic{Int}(0)
-const _PROFILE_PLANS = Threads.Atomic{Int}(0)
-const _PROFILE_PLAN_NS = Threads.Atomic{UInt64}(0)
-
-function reset_eikonal_profile!()
-    _PROFILE_ACCEPTED[] = 0
-    _PROFILE_REJECTED[] = 0
-    _PROFILE_RESIDUAL_REJECTED[] = 0
-    _PROFILE_CHECK_REJECTED[] = 0
-    _PROFILE_SPLIT_REJECTED[] = 0
-    _PROFILE_NONFINITE_REJECTED[] = 0
-    _PROFILE_OTHER_REJECTED[] = 0
-    _PROFILE_PLANS[] = 0
-    _PROFILE_PLAN_NS[] = 0
-    return nothing
-end
-
-function eikonal_profile()
-    accepted = _PROFILE_ACCEPTED[]
-    plans = _PROFILE_PLANS[]
-    return (
-        enabled=EIKONAL_PROFILE,
-        accepted_patch_count=accepted,
-        rejected_attempt_count=_PROFILE_REJECTED[],
-        rejected_residual=_PROFILE_RESIDUAL_REJECTED[],
-        rejected_check=_PROFILE_CHECK_REJECTED[],
-        rejected_split=_PROFILE_SPLIT_REJECTED[],
-        rejected_nonfinite=_PROFILE_NONFINITE_REJECTED[],
-        rejected_other=_PROFILE_OTHER_REJECTED[],
-        plan_build_count=plans,
-        plans_per_accepted_patch=plans / max(accepted, 1),
-        plan_build_us=Float64(_PROFILE_PLAN_NS[]) / 1.0e3,
-    )
-end
-
-@inline function _profile_accept!(count)
-    @static if EIKONAL_PROFILE
-        Threads.atomic_add!(_PROFILE_ACCEPTED, count)
-    end
-    return nothing
-end
-
-@inline function _profile_reject!(reason::Symbol=:other)
-    @static if EIKONAL_PROFILE
-        Threads.atomic_add!(_PROFILE_REJECTED, 1)
-        reason === :residual ? (Threads.atomic_add!(_PROFILE_RESIDUAL_REJECTED, 1)) :
-        reason === :check ? (Threads.atomic_add!(_PROFILE_CHECK_REJECTED, 1)) :
-        reason === :split ? (Threads.atomic_add!(_PROFILE_SPLIT_REJECTED, 1)) :
-        reason === :nonfinite ? (Threads.atomic_add!(_PROFILE_NONFINITE_REJECTED, 1)) :
-        (Threads.atomic_add!(_PROFILE_OTHER_REJECTED, 1))
-    end
-    return nothing
-end
-
 @inline function _reject_reason(residual, check, residual_limit, check_limit)
     (!isfinite(residual) || !isfinite(check)) && return :nonfinite
     residual > residual_limit && return :residual
@@ -475,15 +404,7 @@ function _eikonal_plan!(
 end
 
 @inline function _profile_plan!(a_coeffs, b_coeffs, scratch, terms)
-    @static if EIKONAL_PROFILE
-        start = time_ns()
-        plan = _eikonal_plan!(a_coeffs, b_coeffs, scratch, terms)
-        Threads.atomic_add!(_PROFILE_PLAN_NS, time_ns() - start)
-        Threads.atomic_add!(_PROFILE_PLANS, 1)
-        return plan
-    else
-        return _eikonal_plan!(a_coeffs, b_coeffs, scratch, terms)
-    end
+    return _eikonal_plan!(a_coeffs, b_coeffs, scratch, terms)
 end
 
 # Allocating form of `_eikonal_plan!`: the plan vectors are fresh, so patches
@@ -574,15 +495,7 @@ function _eikonal_plan(
 end
 
 @inline function _profile_plan(a_coeffs, b_coeffs, scratch, terms)
-    @static if EIKONAL_PROFILE
-        start = time_ns()
-        plan = _eikonal_plan(a_coeffs, b_coeffs, scratch, terms)
-        Threads.atomic_add!(_PROFILE_PLAN_NS, time_ns() - start)
-        Threads.atomic_add!(_PROFILE_PLANS, 1)
-        return plan
-    else
-        return _eikonal_plan(a_coeffs, b_coeffs, scratch, terms)
-    end
+    return _eikonal_plan(a_coeffs, b_coeffs, scratch, terms)
 end
 
 # Fix the coefficients cplus/cminus of the two eikonal modes so that the
@@ -829,10 +742,6 @@ function _accepted_single(kernel, direction, h_abs, min_step,
             return (; h, step, residual=step.score,
                 check_error=step.check_error, rejected)
         end
-        @static if EIKONAL_PROFILE
-            _profile_reject!(_reject_reason(
-                step.score, step.check_error, residual_limit, check_limit))
-        end
         rejected = true
         h_abs *= 0.8
     end
@@ -850,10 +759,6 @@ function _accepted_pair(kernel1, kernel2, direction, h_abs, min_step,
         if isfinite(residual) && isfinite(check_error) &&
                 residual <= residual_limit && check_error <= check_limit
             return (; h, step1, step2, residual, check_error, rejected)
-        end
-        @static if EIKONAL_PROFILE
-            _profile_reject!(_reject_reason(
-                residual, check_error, residual_limit, check_limit))
         end
         rejected = true
         h_abs *= 0.8
@@ -951,13 +856,8 @@ function eikonal_path(
             ordinary_ab_series!(
                 avec, bvec, pq, coefficients, current_x, order) :
             large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
-        @static if EIKONAL_PROFILE
-            plan = _profile_plan(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        else
-            plan = _eikonal_plan(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        end
+        plan = _eikonal_plan(@view(avec[1:a_terms]),
+            @view(bvec[1:b_terms]), scratch, terms)
         plan === nothing && return nothing
         state_scale = max(abs(value), abs(derivative), floatmin(Float64))
         kernel = _eikonal_kernel(plan, value / state_scale, derivative / state_scale)
@@ -975,9 +875,6 @@ function eikonal_path(
         best === nothing && return nothing
         next_x = current_x + best.h
         push!(patches, _patch(kernel, current_x, next_x, state_scale))
-        @static if EIKONAL_PROFILE
-            _profile_accept!(1)
-        end
         value = state_scale * best.step.value
         derivative = state_scale * best.step.derivative
         current_x = next_x
@@ -1052,13 +949,8 @@ function eikonal_split(
             ordinary_ab_series!(
                 avec, bvec, pq, coefficients, current_x, order) :
             large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
-        @static if EIKONAL_PROFILE
-            plan1 = _profile_plan!(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        else
-            plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        end
+        plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
+            @view(bvec[1:b_terms]), scratch, terms)
         plan1 === nothing && return allow_partial ? partial_result() : nothing
         scale1 = max(abs(value), abs(derivative), floatmin(Float64))
         kernel1 = _eikonal_kernel(
@@ -1072,10 +964,6 @@ function eikonal_split(
                 if !isfinite(full.score) || !isfinite(full.check_error) ||
                         full.score > residual_limit ||
                         full.check_error > check_limit
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(_reject_reason(full.score,
-                            full.check_error, residual_limit, check_limit))
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1084,10 +972,6 @@ function eikonal_split(
                 if !isfinite(step1.score) || !isfinite(step1.check_error) ||
                         step1.score > residual_limit ||
                         step1.check_error > check_limit
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(_reject_reason(step1.score,
-                            step1.check_error, residual_limit, check_limit))
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1100,17 +984,9 @@ function eikonal_split(
                     ordinary_ab_series!(avec, bvec, pq,
                         coefficients, midpoint_x, order) :
                     large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order)
-                @static if EIKONAL_PROFILE
-                    plan2 = _profile_plan!(@view(avec[1:middle_a]),
-                        @view(bvec[1:middle_b]), middle_scratch, terms)
-                else
-                    plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
-                        @view(bvec[1:middle_b]), middle_scratch, terms)
-                end
+                plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
+                    @view(bvec[1:middle_b]), middle_scratch, terms)
                 if plan2 === nothing
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(:other)
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1120,9 +996,6 @@ function eikonal_split(
                 kernel2 = _eikonal_kernel(plan2,
                     midpoint_value / scale2, midpoint_derivative / scale2)
                 if kernel2 === nothing
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(:other)
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1142,26 +1015,15 @@ function eikonal_split(
                         kernel1, kernel2, step2, residual, check_error, split_error)
                     break
                 end
-                @static if EIKONAL_PROFILE
-                    _profile_reject!(_reject_reason(residual, check_error,
-                        split_error, residual_limit, check_limit, split_limit))
-                end
                 rejected = true
                 h_abs *= 0.8
         end
         accepted === nothing && return allow_partial ? partial_result() : nothing
-        if EIKONAL_PARTIAL_STALL && allow_partial && 2abs(accepted.half_h) <=
-                EIKONAL_PARTIAL_STALL_RATIO * step_cap
-            return partial_result()
-        end
         next_x = current_x + 2 * accepted.half_h
         push!(patches, _copy_patch(accepted.kernel1, current_x,
             accepted.midpoint_x, accepted.scale1))
         push!(patches, _copy_patch(accepted.kernel2, accepted.midpoint_x,
             next_x, accepted.scale2))
-        @static if EIKONAL_PROFILE
-            _profile_accept!(2)
-        end
         value = accepted.scale2 * accepted.step2.value
         derivative = accepted.scale2 * accepted.step2.derivative
         current_x = next_x
@@ -1230,13 +1092,8 @@ function eikonal_split_pair(
             ordinary_ab_series!(
                 avec, bvec, pq, coefficients, current_x, order) :
             large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
-        @static if EIKONAL_PROFILE
-            plan1 = _profile_plan!(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        else
-            plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        end
+        plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
+            @view(bvec[1:b_terms]), scratch, terms)
         plan1 === nothing && return nothing
         scale11 = max(abs(value1), abs(deriv1), floatmin(Float64))
         scale12 = max(abs(value2), abs(deriv2), floatmin(Float64))
@@ -1255,10 +1112,6 @@ function eikonal_split_pair(
                 full_check = max(full1.check_error, full2.check_error)
                 if !isfinite(full_residual) || !isfinite(full_check) ||
                         full_residual > residual_limit || full_check > check_limit
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(_reject_reason(full_residual,
-                            full_check, residual_limit, check_limit))
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1268,10 +1121,6 @@ function eikonal_split_pair(
                 first_check = max(first1.check_error, first2.check_error)
                 if !isfinite(first_residual) || !isfinite(first_check) ||
                         first_residual > residual_limit || first_check > check_limit
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(_reject_reason(first_residual,
-                            first_check, residual_limit, check_limit))
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1286,17 +1135,9 @@ function eikonal_split_pair(
                     ordinary_ab_series!(avec, bvec, pq,
                         coefficients, midpoint_x, order) :
                     large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order)
-                @static if EIKONAL_PROFILE
-                    plan2 = _profile_plan!(@view(avec[1:middle_a]),
-                        @view(bvec[1:middle_b]), middle_scratch, terms)
-                else
-                    plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
-                        @view(bvec[1:middle_b]), middle_scratch, terms)
-                end
+                plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
+                    @view(bvec[1:middle_b]), middle_scratch, terms)
                 if plan2 === nothing
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(:other)
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1310,9 +1151,6 @@ function eikonal_split_pair(
                 kernel22 = _eikonal_kernel(plan2,
                     midpoint_value2 / scale22, midpoint_deriv2 / scale22)
                 if kernel21 === nothing || kernel22 === nothing
-                    @static if EIKONAL_PROFILE
-                        _profile_reject!(:other)
-                    end
                     rejected = true
                     h_abs *= 0.8
                     continue
@@ -1340,10 +1178,6 @@ function eikonal_split_pair(
                         second1, second2, residual, check_error, split_error)
                     break
                 end
-                @static if EIKONAL_PROFILE
-                    _profile_reject!(_reject_reason(residual, check_error,
-                        split_error, residual_limit, check_limit, split_limit))
-                end
                 rejected = true
                 h_abs *= 0.8
         end
@@ -1359,9 +1193,6 @@ function eikonal_split_pair(
         push!(patches2, first2)
         push!(patches1, second1)
         push!(patches2, second2)
-        @static if EIKONAL_PROFILE
-            _profile_accept!(2)
-        end
         value1 = accepted.scale21 * accepted.second1.value
         deriv1 = accepted.scale21 * accepted.second1.derivative
         value2 = accepted.scale22 * accepted.second2.value
@@ -1421,13 +1252,8 @@ function eikonal_pair(
             ordinary_ab_series!(
                 avec, bvec, pq, coefficients, current_x, order) :
             large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
-        @static if EIKONAL_PROFILE
-            plan = _profile_plan(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        else
-            plan = _eikonal_plan(@view(avec[1:a_terms]),
-                @view(bvec[1:b_terms]), scratch, terms)
-        end
+        plan = _eikonal_plan(@view(avec[1:a_terms]),
+            @view(bvec[1:b_terms]), scratch, terms)
         plan === nothing && return nothing
         scale1 = max(abs(value1), abs(deriv1), floatmin(Float64))
         scale2 = max(abs(value2), abs(deriv2), floatmin(Float64))
@@ -1448,9 +1274,6 @@ function eikonal_pair(
         next_x = current_x + best.h
         push!(patches1, _patch(kernel1, current_x, next_x, scale1))
         push!(patches2, _patch(kernel2, current_x, next_x, scale2))
-        @static if EIKONAL_PROFILE
-            _profile_accept!(1)
-        end
         value1 = scale1 * best.step1.value
         deriv1 = scale1 * best.step1.derivative
         value2 = scale2 * best.step2.value

@@ -24,8 +24,6 @@ const ORDINARY_COMPRESSION_MIN = 128.0
 const LAURENT_ORDER = 80
 const ORDINARY_VALIDATED_SPINS = (-2, -1, 0, 1, 2)
 const SMALL_FREQUENCY_EXPANSION_VALIDATED_SPINS = (2,)
-const COMPENSATED_ENABLED = get(
-    ENV, "ISEM_NEAR_EXTREME_COMPENSATED", "1") == "1"
 
 struct FactorTable
     s::Int
@@ -207,7 +205,6 @@ near_extreme_march(coefficients::CoefficientSet) = near_extreme_selected(coeffic
 # generic tables as kappa -> 0. The generic set is no longer compared against (the closed form is the
 # reference). `near_extreme_compensated` marks full compensation (route :near_extremal).
 function near_extreme_prepare(coefficients::CoefficientSet, controls)
-    COMPENSATED_ENABLED || return coefficients
     is_binary64_parameters(coefficients.params) || return coefficients
     getproperty(controls, :large_frequency_expansion) && return coefficients
     params = coefficients.params

@@ -78,9 +78,6 @@ const BRIDGE_CONDITION_LIMIT = 1.0e12
 const BRIDGE_CHECK_LIMIT = 1.0e4
 const BRIDGE_CHECK_TOL = 1.0e-9
 const BRIDGE_CHECK_FRACTIONS = (0.02, 0.1, 0.3, 1.0)
-# Diagnostic switch: ISEM_PHYSICAL_BRIDGE=0 disables the physical bridge (_needs_bridge)
-# and the small-frequency endpoint bridge, so routes evaluate the matched bases directly.
-const PHYSICAL_BRIDGE = get(ENV, "ISEM_PHYSICAL_BRIDGE", "1") != "0"
 const PUBLIC_EVALUATION_ENDPOINT_X = 0.999995
 const MATCHING_SCALE_LOG_MARGIN = 32.0
 const SMALL_FREQUENCY_EXPANSION_ENDPOINT_HANDOFF_TOLERANCE = 1.0e-10
@@ -327,7 +324,6 @@ end
 
 function _needs_bridge(target, coefficient1, basis1, coefficient2, basis2;
     tolerance=nothing)
-    PHYSICAL_BRIDGE || return false
     condition = _eval_condition(
         target, coefficient1, basis1, coefficient2, basis2)
     log_limit = log(BRIDGE_CONDITION_LIMIT)
@@ -360,7 +356,7 @@ function _build_bridge(
         tolerance=(branch == :UP && ctrl.small_frequency_expansion ?
             ctrl.tolerance : nothing))
     # Between BRIDGE_CHECK_LIMIT and BRIDGE_CONDITION_LIMIT the bridge is built only as a check (see below).
-    checked = !needed && PHYSICAL_BRIDGE && combination_bases !== nothing &&
+    checked = !needed && combination_bases !== nothing &&
         _eval_condition(target, coefficient1, basis1, coefficient2, basis2) > log(BRIDGE_CHECK_LIMIT)
     (needed || checked) || return nothing
     abs(target_x - match_x) > 100eps(Float64) || return nothing
@@ -503,7 +499,7 @@ function _build_small_frequency_expansion_endpoint_bridge(
     reflection,
     solution_scale,
 )
-    PHYSICAL_BRIDGE && ctrl.small_frequency_expansion || return nothing, nothing
+    ctrl.small_frequency_expansion || return nothing, nothing
     match_x < PUBLIC_EVALUATION_ENDPOINT_X || return nothing, nothing
     omega = abs(getproperty(coefficients.params, :omega))
     omega > 0 || return nothing, nothing

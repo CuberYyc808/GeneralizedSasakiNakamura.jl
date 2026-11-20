@@ -8,7 +8,6 @@ using ..CoefficientTables:
     CoefficientSet
 
 export generated_coefficients, generated_backend_loaded
-export preload_coefficient_tables!
 
 # Lengths of the A numerator, A denominator, B numerator and B denominator
 # blocks in a packed generated coefficient vector.
@@ -42,39 +41,7 @@ const _ALL_GENERATED_TABLES = (
     ("basis_ys_splus2", "regime_basis_full_matrix/gsn_basis_ys_splus2.jl", 2),
 )
 
-# Spin weights whose generated tables are included at load time, read from
-# ISEM_GENERATED_SPINS (comma-separated; default all of -2:2).
-function _requested_generated_spins()
-    raw = strip(get(ENV, "ISEM_GENERATED_SPINS", ""))
-    isempty(raw) && return (-2, -1, 0, 1, 2)
-    spins = sort!(unique!(parse.(Int, strip.(split(raw, ',')))))
-    all(s -> s in -2:2, spins) ||
-        throw(ArgumentError("ISEM_GENERATED_SPINS supports only -2,-1,0,1,2."))
-    return Tuple(spins)
-end
-
-# Ordinary-point bases included at load time, read from ISEM_GENERATED_BASES
-# (comma-separated yc/ys; default both).
-function _requested_generated_bases()
-    raw = strip(get(ENV, "ISEM_GENERATED_BASES", ""))
-    isempty(raw) && return (:yc, :ys)
-    bases = sort!(unique!(Symbol.(strip.(split(raw, ',')))); by=string)
-    all(basis -> basis in (:yc, :ys), bases) ||
-        throw(ArgumentError("ISEM_GENERATED_BASES supports only yc,ys."))
-    return Tuple(bases)
-end
-
-function _generated_table_selected(file::String, s::Integer, spins, bases)
-    s in spins || return false
-    occursin("regime_basis_full_matrix", file) || return true
-    return any(basis -> occursin("basis_$(basis)_", file), bases)
-end
-
-const _GENERATED_SPINS = _requested_generated_spins()
-const _GENERATED_BASES = _requested_generated_bases()
-const _GENERATED_TABLES = Tuple(
-    (key, file) for (key, file, s) in _ALL_GENERATED_TABLES
-    if _generated_table_selected(file, s, _GENERATED_SPINS, _GENERATED_BASES))
+const _GENERATED_TABLES = Tuple((key, file) for (key, file, _) in _ALL_GENERATED_TABLES)
 
 for (_, file) in _GENERATED_TABLES
     include(joinpath(@__DIR__, "Generated", file))
@@ -83,16 +50,6 @@ end
 const _LOADED_KEYS = Set(first.(collect(_GENERATED_TABLES)))
 
 generated_backend_loaded() = !isempty(_LOADED_KEYS)
-
-# Check that every table selected by ISEM_GENERATED_SPINS / ISEM_GENERATED_BASES
-# was included when the package loaded; the tables are included eagerly above,
-# so nothing is loaded here. Throws if a selected sector is missing.
-function preload_coefficient_tables!()
-    for s in _GENERATED_SPINS, basis in _GENERATED_BASES
-        _ensure_generated_loaded!(s, basis)
-    end
-    return nothing
-end
 
 function _spin_tag(s::Integer)
     s == -2 && return "sminus2"
@@ -150,8 +107,7 @@ function _ensure_generated_loaded!(s::Integer, basis::Symbol)
     required = ("h_hc_$tag", "i_ic_$tag", "basis_$(basis)_$tag")
     all(key -> key in _LOADED_KEYS, required) && return false
     throw(ArgumentError(
-        "generated spin sector s=$s was not loaded at top level; start a fresh " *
-        "Julia process with ISEM_GENERATED_SPINS including $s."))
+        "no generated coefficient tables for spin weight s=$s (supported: -2, -1, 0, 1, 2)"))
 end
 
 # Resolve the ordinary-point basis: :auto uses :ys for |a| = |sin(nu)| <= 1e-3

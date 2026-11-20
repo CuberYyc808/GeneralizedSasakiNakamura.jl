@@ -20,12 +20,6 @@ using ..Eikonal:
     eikonal_split_pair,
     eikonal_state,
     eikonal_value
-using ..HorizonLargeFrequencyExpansion:
-    HorizonLargeFrequencyExpansionPatch,
-    large_frequency_expansion_horizon_pair,
-    large_frequency_expansion_horizon_single,
-    large_frequency_expansion_horizon_state,
-    large_frequency_expansion_horizon_value
 using ..InfinityLargeFrequencyExpansion:
     InfinityLargeFrequencyExpansionPatch,
     large_frequency_expansion_infinity_anchor,
@@ -80,25 +74,11 @@ const _ENDPOINT_SEED_TARGET = 1e-13
 const _HORIZON_REACH_ORDER = 64
 const _HORIZON_REACH_COST_RATIO = 0.75
 const _HORIZON_REACH_MIN_SAVING = 2.0
-# Load-time environment switches (read once when the module loads):
-# ISEM_HORIZON_REACH_AUTO=1 (default) lets the horizon seed be re-selected with an
-# order-_HORIZON_REACH_ORDER series when that shortens the march (see
-# `_horizon_seed`); ISEM_ORDINARY_EIKONAL=1 (default) allows eikonal patches in
-# the ordinary regime; ISEM_HORIZON_LARGE_FREQUENCY_EXPANSION=1 (default 0)
-# compiles in the horizon large-frequency carrier route (`_large_frequency_expansion_horizon_basis`);
-# ISEM_INFINITY_LARGE_FREQUENCY_EXPANSION=1 (default) compiles in the infinity
-# large-frequency carrier of the hybrid marches and `iterate_from_infinity`.
-const _HORIZON_REACH_AUTO = get(
-    ENV, "ISEM_HORIZON_REACH_AUTO", "1") == "1"
 const _INFINITY_ENDPOINT_TARGET = 1e-10
 const _INFINITY_EIKONAL_LIMIT = 1e-12 + 256eps(Float64)
 const _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS = 3
 const _EIKONAL_SLOW_VARIATION = 0.015
 const _EIKONAL_CERTIFIED_VARIATION = 0.02
-const _ORDINARY_EIKONAL = get(
-    ENV, "ISEM_ORDINARY_EIKONAL", "1") == "1"
-const _HORIZON_LARGE_FREQUENCY_EXPANSION = get(ENV, "ISEM_HORIZON_LARGE_FREQUENCY_EXPANSION", "0") == "1"
-const _INFINITY_LARGE_FREQUENCY_EXPANSION = get(ENV, "ISEM_INFINITY_LARGE_FREQUENCY_EXPANSION", "1") == "1"
 const _SCALED_Y_CANDIDATES = (0.005, 0.01, 0.02, 0.04, 0.08, 0.12, 0.16, 0.24, 0.32, 0.48, 0.64, 0.8, 1.0)
 const _INFINITY_ENDPOINT_PHASES = (
     1.0,
@@ -110,9 +90,6 @@ const _SMALL_FREQUENCY_EXPANSION_BRIDGE_ORDER = 32
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_TARGET_Y = 1.0e-3
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_STEP_SAFETY = 0.8
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_TOLERANCE = 1.0e-13
-
-@inline _eikonal_allowed(regime::Symbol) =
-    regime != :ordinary || _ORDINARY_EIKONAL
 
 # Taylor patch about center_x, valid through next_x: the solution is scale times
 # sum_k coeffs[k+1] (x - center_x)^k.
@@ -435,9 +412,7 @@ function IterationScratch(
     order_int = Int(order)
     order_int >= 0 || throw(ArgumentError("ordinary order must be non-negative."))
     regime = large_frequency_expansion ? :large_frequency_expansion : small_frequency_expansion ? :small_frequency_expansion : :ordinary
-    use_eikonal = force_eikonal ||
-        (_eikonal_allowed(regime) &&
-         eikonal_candidate(coefficients, regime, route_branch))
+    use_eikonal = force_eikonal || eikonal_candidate(coefficients, regime, route_branch)
     eikonal_order = large_frequency_expansion ? LARGE_FREQUENCY_EXPANSION_EIKONAL_ORDER : EIKONAL_ORDER
     buffer_order = use_eikonal ? max(order_int, eikonal_order) : order_int
     return IterationScratch(
@@ -458,7 +433,6 @@ end
 function _eikonal_enabled(controls, coefficients, scratch=nothing)
     regime = getproperty(controls, :large_frequency_expansion) ? :large_frequency_expansion :
         getproperty(controls, :small_frequency_expansion) ? :small_frequency_expansion : :ordinary
-    _eikonal_allowed(regime) || return false
     scratch === nothing || return scratch.eikonal !== nothing
     return eikonal_candidate(coefficients, regime)
 end
@@ -1603,23 +1577,21 @@ function _hybrid_state(
     eikonal_attempted = false
     carrier_anchored = false
 
-    @static if _INFINITY_LARGE_FREQUENCY_EXPANSION
-        if work.large_frequency_expansion !== nothing && kind in (:infinity_in, :infinity_out)
-            branch = kind == :infinity_in ? :in : :out
-            scale = endpoint_seed_scale(kind, coefficients.params)
-            carrier = large_frequency_expansion_infinity_anchor(coefficients, branch,
-                1.0 - current_x, target_x, scale)
-            if carrier !== nothing
-                push!(patches, carrier.patch)
-                current_x = carrier.patch.next_x
-                current_value = carrier.state.X
-                current_derivative = carrier.state.dXdx
-                step_count = 1
-                max_step = abs(carrier.patch.next_x -
-                    carrier.patch.center_x)
-                min_step = max_step
-                carrier_anchored = true
-            end
+    if work.large_frequency_expansion !== nothing && kind in (:infinity_in, :infinity_out)
+        branch = kind == :infinity_in ? :in : :out
+        scale = endpoint_seed_scale(kind, coefficients.params)
+        carrier = large_frequency_expansion_infinity_anchor(coefficients, branch,
+            1.0 - current_x, target_x, scale)
+        if carrier !== nothing
+            push!(patches, carrier.patch)
+            current_x = carrier.patch.next_x
+            current_value = carrier.state.X
+            current_derivative = carrier.state.dXdx
+            step_count = 1
+            max_step = abs(carrier.patch.next_x -
+                carrier.patch.center_x)
+            min_step = max_step
+            carrier_anchored = true
         end
     end
 
@@ -1845,30 +1817,28 @@ function _hybrid_pair(
     eikonal_attempted = false
     carrier_anchored = false
 
-    @static if _INFINITY_LARGE_FREQUENCY_EXPANSION
-        if work.large_frequency_expansion !== nothing &&
-                kind1 in (:infinity_in, :infinity_out) &&
-                kind2 in (:infinity_in, :infinity_out)
-            branch1 = kind1 == :infinity_in ? :in : :out
-            branch2 = kind2 == :infinity_in ? :in : :out
-            scale1 = endpoint_seed_scale(kind1, coefficients.params)
-            scale2 = endpoint_seed_scale(kind2, coefficients.params)
-            carrier = large_frequency_expansion_infinity_anchor_pair(coefficients, branch1, branch2,
-                1.0 - current_x, target_x, scale1, scale2)
-            if carrier !== nothing
-                push!(patches1, carrier.patch1)
-                push!(patches2, carrier.patch2)
-                current_x = carrier.patch1.next_x
-                value1 = carrier.state1.X
-                deriv1 = carrier.state1.dXdx
-                value2 = carrier.state2.X
-                deriv2 = carrier.state2.dXdx
-                step_count = 1
-                max_step = abs(carrier.patch1.next_x -
-                    carrier.patch1.center_x)
-                min_step = max_step
-                carrier_anchored = true
-            end
+    if work.large_frequency_expansion !== nothing &&
+            kind1 in (:infinity_in, :infinity_out) &&
+            kind2 in (:infinity_in, :infinity_out)
+        branch1 = kind1 == :infinity_in ? :in : :out
+        branch2 = kind2 == :infinity_in ? :in : :out
+        scale1 = endpoint_seed_scale(kind1, coefficients.params)
+        scale2 = endpoint_seed_scale(kind2, coefficients.params)
+        carrier = large_frequency_expansion_infinity_anchor_pair(coefficients, branch1, branch2,
+            1.0 - current_x, target_x, scale1, scale2)
+        if carrier !== nothing
+            push!(patches1, carrier.patch1)
+            push!(patches2, carrier.patch2)
+            current_x = carrier.patch1.next_x
+            value1 = carrier.state1.X
+            deriv1 = carrier.state1.dXdx
+            value2 = carrier.state2.X
+            deriv2 = carrier.state2.dXdx
+            step_count = 1
+            max_step = abs(carrier.patch1.next_x -
+                carrier.patch1.center_x)
+            min_step = max_step
+            carrier_anchored = true
         end
     end
 
@@ -2863,158 +2833,6 @@ function _patch_range(patches, seed_x)
     return maximum_step, isfinite(minimum_step) ? minimum_step : 0.0
 end
 
-# Horizon large-frequency route: one horizon-series patch from seed_x, then an
-# eikonal path (or a Taylor march if that fails) to match_x; nothing when no
-# patch is available. Called only when ISEM_HORIZON_LARGE_FREQUENCY_EXPANSION=1.
-# `_large_frequency_expansion_horizon_basis_pair` is the two-branch version.
-function _large_frequency_expansion_horizon_basis(
-    coefficients::CoefficientSet,
-    solution,
-    branch::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
-    controls,
-)
-    kind = _kind(:horizon, branch)
-    raw, draw = _endpoint_pair(
-        kind, solution.coefficients, solution.exponent,
-        0.0 + 0.0im, seed_x)
-    scale = endpoint_seed_scale(kind, coefficients.params)
-    seed_value = scale * raw
-    seed_derivative = scale * draw
-    candidate = large_frequency_expansion_horizon_single(
-        coefficients, branch, seed_x, scale, match_x)
-    candidate === nothing && return nothing
-    PatchType = Union{HorizonLargeFrequencyExpansionPatch,EikonalPatch,Patch}
-    patches = PatchType[candidate.patch]
-    if candidate.target < match_x * (1 - 100eps(Float64))
-        suffix = eikonal_path(
-            coefficients, candidate.target,
-            candidate.state.X, candidate.state.dXdx, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
-            scratch=work.eikonal, large_frequency_expansion=work.large_frequency_expansion,
-            residual_limit=_INFINITY_EIKONAL_LIMIT,
-            check_limit=_INFINITY_EIKONAL_LIMIT)
-        if suffix === nothing
-            basis = iterate_from_state(
-                coefficients, kind, candidate.target,
-                candidate.state.X, candidate.state.dXdx, match_x;
-                controls, scratch=work)
-            append!(patches, basis.patches)
-            match_value = basis.match_X
-            match_derivative = basis.match_dXdx
-        else
-            append!(patches, suffix.patches)
-            match_value = suffix.value
-            match_derivative = suffix.derivative
-        end
-    else
-        match_value = candidate.state.X
-        match_derivative = candidate.state.dXdx
-    end
-    max_step, min_step = _patch_range(patches, seed_x)
-    truncations = Truncation[]
-    _record_truncation!(truncations, :horizon, kind,
-        solution.requested_order, solution.effective_order,
-        solution.truncation_reason)
-    return Basis(
-        kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im,
-        seed_x, seed_x, seed_value, seed_derivative,
-        solution.coefficients, patches,
-        match_value, match_derivative, length(patches),
-        max_step, min_step, 1.0 + 0.0im, truncations)
-end
-
-function _large_frequency_expansion_horizon_basis_pair(
-    coefficients::CoefficientSet,
-    solution1,
-    solution2,
-    branch1::Symbol,
-    branch2::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
-    controls,
-)
-    kind1 = _kind(:horizon, branch1)
-    kind2 = _kind(:horizon, branch2)
-    raw1, draw1 = _endpoint_pair(
-        kind1, solution1.coefficients, solution1.exponent,
-        0.0 + 0.0im, seed_x)
-    raw2, draw2 = _endpoint_pair(
-        kind2, solution2.coefficients, solution2.exponent,
-        0.0 + 0.0im, seed_x)
-    scale1 = endpoint_seed_scale(kind1, coefficients.params)
-    scale2 = endpoint_seed_scale(kind2, coefficients.params)
-    value1 = scale1 * raw1
-    deriv1 = scale1 * draw1
-    value2 = scale2 * raw2
-    deriv2 = scale2 * draw2
-    candidate = large_frequency_expansion_horizon_pair(coefficients,
-        branch1, scale1, branch2, scale2, seed_x, match_x)
-    candidate === nothing && return nothing
-    PatchType = Union{HorizonLargeFrequencyExpansionPatch,EikonalPatch,Patch}
-    patches1 = PatchType[candidate.patch1]
-    patches2 = PatchType[candidate.patch2]
-    if candidate.target < match_x * (1 - 100eps(Float64))
-        suffix = eikonal_pair(
-            coefficients, candidate.target,
-            candidate.state1.X, candidate.state1.dXdx,
-            candidate.state2.X, candidate.state2.dXdx, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
-            scratch=work.eikonal, large_frequency_expansion=work.large_frequency_expansion,
-            residual_limit=_INFINITY_EIKONAL_LIMIT,
-            check_limit=_INFINITY_EIKONAL_LIMIT)
-        if suffix === nothing
-            basis1, basis2 = iterate_pair_from_state(
-                coefficients, kind1, kind2, candidate.target,
-                candidate.state1.X, candidate.state1.dXdx,
-                candidate.state2.X, candidate.state2.dXdx, match_x;
-                controls, scratch=work)
-            append!(patches1, basis1.patches)
-            append!(patches2, basis2.patches)
-            match_value1 = basis1.match_X
-            match_deriv1 = basis1.match_dXdx
-            match_value2 = basis2.match_X
-            match_deriv2 = basis2.match_dXdx
-        else
-            append!(patches1, suffix.patches1)
-            append!(patches2, suffix.patches2)
-            match_value1 = suffix.value1
-            match_deriv1 = suffix.deriv1
-            match_value2 = suffix.value2
-            match_deriv2 = suffix.deriv2
-        end
-    else
-        match_value1 = candidate.state1.X
-        match_deriv1 = candidate.state1.dXdx
-        match_value2 = candidate.state2.X
-        match_deriv2 = candidate.state2.dXdx
-    end
-    max_step1, min_step1 = _patch_range(patches1, seed_x)
-    max_step2, min_step2 = _patch_range(patches2, seed_x)
-    truncations1 = Truncation[]
-    truncations2 = Truncation[]
-    _record_truncation!(truncations1, :horizon, kind1,
-        solution1.requested_order, solution1.effective_order,
-        solution1.truncation_reason)
-    _record_truncation!(truncations2, :horizon, kind2,
-        solution2.requested_order, solution2.effective_order,
-        solution2.truncation_reason)
-    basis1 = Basis(
-        kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im,
-        seed_x, seed_x, value1, deriv1, solution1.coefficients,
-        patches1, match_value1, match_deriv1, length(patches1),
-        max_step1, min_step1, 1.0 + 0.0im, truncations1)
-    basis2 = Basis(
-        kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im,
-        seed_x, seed_x, value2, deriv2, solution2.coefficients,
-        patches2, match_value2, match_deriv2, length(patches2),
-        max_step2, min_step2, 1.0 + 0.0im, truncations2)
-    return basis1, basis2
-end
-
 function _hybrid_horizon(
     coefficients::CoefficientSet,
     solution,
@@ -3339,11 +3157,9 @@ function _horizon_reach_promising(
     return roundoff < max(tail, residual), current_cost
 end
 
-# Whether the order-_HORIZON_REACH_ORDER seed extension is tried: switched on by
-# ISEM_HORIZON_REACH_AUTO, off in the small- and large-frequency regimes and
+# Whether the order-_HORIZON_REACH_ORDER seed extension is tried: off in the small- and large-frequency regimes and
 # when the horizon order is already at least _HORIZON_REACH_ORDER.
 @inline function _horizon_reach_auto(coefficients, controls)
-    _HORIZON_REACH_AUTO || return false
     getproperty(controls, :small_frequency_expansion) && return false
     getproperty(controls, :large_frequency_expansion) && return false
     getproperty(controls, :horizon_order) < _HORIZON_REACH_ORDER || return false
@@ -3428,16 +3244,7 @@ function iterate_from_zero(
     if _eikonal_enabled(controls, coefficients, scratch)
         work = scratch === nothing ? _scratch(coefficients,
             getproperty(controls, :ordinary_order), controls) : scratch
-        @static if _HORIZON_LARGE_FREQUENCY_EXPANSION
-            if getproperty(controls, :large_frequency_expansion)
-                basis = _large_frequency_expansion_horizon_basis(
-                    coefficients, endpoint_solution, normalized,
-                    seed_x, match_x, work, controls)
-                basis === nothing || return basis
-            end
-        end
-        limit = (getproperty(controls, :large_frequency_expansion) || _ORDINARY_EIKONAL) ?
-            _INFINITY_EIKONAL_LIMIT : nothing
+        limit = _INFINITY_EIKONAL_LIMIT
         basis = _eikonal_horizon(
             coefficients, endpoint_solution, normalized,
             seed_x, match_x, work, limit)
@@ -3489,17 +3296,7 @@ function iterate_pair_from_zero(
             _eikonal_enabled(controls, coefficients, scratch)
         work = scratch === nothing ? _scratch(coefficients,
             getproperty(controls, :ordinary_order), controls) : scratch
-        @static if _HORIZON_LARGE_FREQUENCY_EXPANSION
-            if getproperty(controls, :large_frequency_expansion)
-                bases = _large_frequency_expansion_horizon_basis_pair(
-                    coefficients, solution1, solution2,
-                    normalized1, normalized2,
-                    seed_x, match_x, work, controls)
-                bases === nothing || return bases
-            end
-        end
-        limit = (getproperty(controls, :large_frequency_expansion) || _ORDINARY_EIKONAL) ?
-            _INFINITY_EIKONAL_LIMIT : nothing
+        limit = _INFINITY_EIKONAL_LIMIT
         bases = _eikonal_horizon_pair(
             coefficients,
             solution1,
@@ -3615,12 +3412,10 @@ function iterate_from_infinity(
     selected = selection === nothing ?
         select_infinity_endpoint(coefficients, match_x; controls=controls) :
         selection
-    @static if _INFINITY_LARGE_FREQUENCY_EXPANSION
-        if getproperty(controls, :large_frequency_expansion)
-            basis = _large_frequency_expansion_infinity_basis(
-                coefficients, selected, normalized, match_x)
-            basis === nothing || return basis
-        end
+    if getproperty(controls, :large_frequency_expansion)
+        basis = _large_frequency_expansion_infinity_basis(
+            coefficients, selected, normalized, match_x)
+        basis === nothing || return basis
     end
     rho, sigma = infinity_exponents(coefficients.params, normalized)
     endpoint_coeffs = normalized == :out ? selected.out_coeffs : selected.in_coeffs
@@ -3665,12 +3460,10 @@ function iterate_pair_from_infinity(
     selected = selection === nothing ?
         select_infinity_endpoint(coefficients, match_x;
             controls=controls) : selection
-    @static if _INFINITY_LARGE_FREQUENCY_EXPANSION
-        if getproperty(controls, :large_frequency_expansion)
-            bases = _large_frequency_expansion_infinity_pair(
-                coefficients, selected, normalized1, normalized2, match_x)
-            bases === nothing || return bases
-        end
+    if getproperty(controls, :large_frequency_expansion)
+        bases = _large_frequency_expansion_infinity_pair(
+            coefficients, selected, normalized1, normalized2, match_x)
+        bases === nothing || return bases
     end
     variable_scale = selected.variable_scale
     seed_coord = selected.endpoint_y
@@ -3752,12 +3545,6 @@ function _patch_contains(patch::EikonalPatch, x)
     return lo - 20eps(Float64) <= x <= hi + 20eps(Float64)
 end
 
-function _patch_contains(patch::HorizonLargeFrequencyExpansionPatch, x)
-    lo = min(patch.center_x, patch.next_x)
-    hi = max(patch.center_x, patch.next_x)
-    return lo - 20eps(Float64) <= x <= hi + 20eps(Float64)
-end
-
 function _patch_contains(patch::InfinityLargeFrequencyExpansionPatch, x)
     lo = min(patch.center_x, patch.next_x)
     hi = max(patch.center_x, patch.next_x)
@@ -3805,7 +3592,6 @@ end
 _patch_value(patch::Patch, x) = patch.scale *
     poly_value(patch.coeffs, x - patch.center_x)
 _patch_value(patch::EikonalPatch, x) = eikonal_value(patch, x)
-_patch_value(patch::HorizonLargeFrequencyExpansionPatch, x) = large_frequency_expansion_horizon_value(patch, x)
 _patch_value(patch::InfinityLargeFrequencyExpansionPatch, x) = large_frequency_expansion_infinity_value(patch, x)
 function _patch_value(patch::ScaledPatch, x)
     y = (1.0 - Float64(x)) / patch.omega_scale
@@ -3818,10 +3604,6 @@ function _patch_state(patch::Patch, x)
 end
 
 _patch_state(patch::EikonalPatch, x) = eikonal_state(patch, x)
-function _patch_state(patch::HorizonLargeFrequencyExpansionPatch, x)
-    state = large_frequency_expansion_horizon_state(patch, x)
-    return state.X, state.dXdx
-end
 function _patch_state(patch::InfinityLargeFrequencyExpansionPatch, x)
     state = large_frequency_expansion_infinity_state(patch, x)
     return state.X, state.dXdx
