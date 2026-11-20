@@ -132,13 +132,9 @@ function ComplexRationalSettings(order::Integer, tolerance::Real)
     isfinite(resolved_tolerance) && resolved_tolerance > 0 ||
         throw(ArgumentError("complex rational tolerance must be finite and positive."))
     return ComplexRationalSettings(
-        resolved_order,
-        max(2, resolved_order - 8),
-        max(1.0e-12, 100 * resolved_tolerance),
-        max(1.0e-11, 1000 * resolved_tolerance),
-        max(1.0e-10, 10_000 * resolved_tolerance),
-        max(2.0e-13, 20 * resolved_tolerance),
-        resolved_tolerance,
+        resolved_order, max(2, resolved_order - 8), max(1.0e-12, 100 * resolved_tolerance),
+        max(1.0e-11, 1000 * resolved_tolerance), max(1.0e-10, 10_000 * resolved_tolerance),
+        max(2.0e-13, 20 * resolved_tolerance), resolved_tolerance,
     )
 end
 
@@ -163,12 +159,8 @@ function ComplexRationalScratch(coefficients, order::Integer,
         nodes=nothing)
     size = Int(order) + 1
     return ComplexRationalScratch(
-        Vector{ComplexF64}(undef, coefficients.ordinary.value_count),
-        Vector{ComplexF64}(undef, size),
-        Vector{ComplexF64}(undef, size),
-        Vector{ComplexF64}(undef, size),
-        Vector{ComplexF64}(undef, size),
-        Ref(0.0),
+        Vector{ComplexF64}(undef, coefficients.ordinary.value_count), Vector{ComplexF64}(undef, size),
+        Vector{ComplexF64}(undef, size), Vector{ComplexF64}(undef, size), Vector{ComplexF64}(undef, size), Ref(0.0),
         nodes,
     )
 end
@@ -373,14 +365,7 @@ end
 
 # The rho > 0 leg of `_integrate_coordinate_path` (towards infinity), integrated in
 # log u, u = 1/(1 - x); can extend an earlier path.
-function _integrate_infinity_path(
-    params,
-    q,
-    rho_target;
-    match_x,
-    initial_path=nothing,
-    angle_offset=0.0,
-)
+function _integrate_infinity_path(params, q, rho_target; match_x, initial_path=nothing, angle_offset=0.0)
     target = Float64(rho_target)
     isfinite(target) && target > 0 ||
         throw(ArgumentError("infinity rho target must be finite and positive."))
@@ -396,15 +381,8 @@ function _integrate_infinity_path(
                     "two-ray match_x must be real and lie in (0,1)."))
             initial_u = inv(1 - initial_x)
             (
-                0.0,
-                log(initial_u),
-                initial_u,
-                initial_x,
-                ComplexF64[initial_x],
-                ComplexF64(log(real(initial_x))),
-                ComplexF64(log(1 - real(initial_x))),
-                0,
-                0,
+                0.0, log(initial_u), initial_u, initial_x, ComplexF64[initial_x], ComplexF64(log(real(initial_x))),
+                ComplexF64(log(1 - real(initial_x))), 0, 0,
             )
         else
             initial_path.kind == :rotated ||
@@ -419,15 +397,8 @@ function _integrate_infinity_path(
             initial_logu = hasproperty(initial_path, :logu) ?
                 initial_path.logu : log(initial_u)
             (
-                initial_path.rho,
-                initial_logu,
-                initial_u,
-                initial_path.x,
-                copy(initial_path.nodes),
-                initial_path.logx,
-                initial_path.logy,
-                initial_path.accepted_steps,
-                initial_path.rejected_steps,
+                initial_path.rho, initial_logu, initial_u, initial_path.x, copy(initial_path.nodes), initial_path.logx,
+                initial_path.logy, initial_path.accepted_steps, initial_path.rejected_steps,
             )
         end
     h = min(0.25, (target - rho) / 8)
@@ -494,25 +465,11 @@ end
 # adaptive RK4 (rho < 0 towards the horizon, rho > 0 towards infinity, the
 # latter in log u, u = 1/(1 - x)), tracking log x and log(1 - x) continuously.
 # An existing rotated path can be extended to a larger |rho|.
-function _integrate_coordinate_path(
-    params,
-    q,
-    rho_target;
-    match_x,
-    initial_path=nothing,
-    angle_offset=0.0,
-)
+function _integrate_coordinate_path(params, q, rho_target; match_x, initial_path=nothing, angle_offset=0.0)
     target = Float64(rho_target)
     isfinite(target) && !iszero(target) ||
         throw(ArgumentError("two-ray rho target must be finite and nonzero."))
-    target > 0 && return _integrate_infinity_path(
-        params,
-        q,
-        target;
-        match_x,
-        initial_path,
-        angle_offset,
-    )
+    target > 0 && return _integrate_infinity_path(params, q, target; match_x, initial_path, angle_offset)
     resolved_angle_offset = Float64(angle_offset)
     isfinite(resolved_angle_offset) ||
         throw(ArgumentError("two-ray angle offset must be finite."))
@@ -523,13 +480,8 @@ function _integrate_coordinate_path(
             iszero(imag(initial_x)) && 0 < real(initial_x) < 1 ||
                 throw(ArgumentError("two-ray match_x must be real and lie in (0,1)."))
             (
-                0.0,
-                initial_x,
-                ComplexF64[initial_x],
-                ComplexF64(log(real(initial_x))),
-                ComplexF64(log(1 - real(initial_x))),
-                0,
-                0,
+                0.0, initial_x, ComplexF64[initial_x], ComplexF64(log(real(initial_x))),
+                ComplexF64(log(1 - real(initial_x))), 0, 0,
             )
         else
             initial_path.kind == :rotated ||
@@ -540,13 +492,8 @@ function _integrate_coordinate_path(
             abs(initial_path.direction - direction) <= 16eps(Float64) ||
                 throw(ArgumentError("coordinate path direction mismatch."))
             (
-                initial_path.rho,
-                initial_path.x,
-                copy(initial_path.nodes),
-                initial_path.logx,
-                initial_path.logy,
-                initial_path.accepted_steps,
-                initial_path.rejected_steps,
+                initial_path.rho, initial_path.x, copy(initial_path.nodes), initial_path.logx, initial_path.logy,
+                initial_path.accepted_steps, initial_path.rejected_steps,
             )
         end
     step_sign = sign(target - rho)
@@ -638,14 +585,7 @@ end
 
 # Value, x-derivative and second x-derivative of a horizon Frobenius solution (plus its
 # logarithmic companion term, when present) at complex x, given log x.
-function _horizon_state(
-    coefficients,
-    solution,
-    kind,
-    x,
-    logx,
-    order,
-)
+function _horizon_state(coefficients, solution, kind, x, logx, order)
     coeffs = @view solution.coefficients[1:(order + 1)]
     series, dseries, ddseries = poly_triple(coeffs, x)
     mu = solution.exponent
@@ -776,10 +716,7 @@ end
 # C = -N_n / n (the forcing F_0 = I'(mu') = n at the resonance), all in binary64 with the factored denominators
 # and the horizon A, B of the coefficient set (closed form where attached).
 function _resonant_horizon_solution(
-    coefficients,
-    branch::Symbol,
-    order::Int,
-    resonance=_horizon_resonance_data(coefficients.params, branch),
+    coefficients, branch::Symbol, order::Int, resonance=_horizon_resonance_data(coefficients.params, branch),
 )
     mu = resonance.mu
     log_mu = resonance.other_mu
@@ -793,49 +730,25 @@ function _resonant_horizon_solution(
     solution, log_coefficient = _horizon_factored_coefficients(a_power, b_power, mu, resonance, order;
         skip=resonance.n, forcing)
     return (
-        branch=branch,
-        exponent=mu,
-        coefficients=solution,
-        A=a_coeffs,
-        B=b_coeffs,
-        variable=:x,
-        requested_order=order,
-        effective_order=order,
-        truncation_reason=:none,
-        representation=:log_frobenius,
-        resonance_order=resonance.n,
-        log_exponent=log_mu,
-        log_coefficient,
-        log_coefficients=companion,
+        branch=branch, exponent=mu, coefficients=solution, A=a_coeffs, B=b_coeffs, variable=:x, requested_order=order,
+        effective_order=order, truncation_reason=:none, representation=:log_frobenius, resonance_order=resonance.n,
+        log_exponent=log_mu, log_coefficient, log_coefficients=companion,
     )
 end
 
 # Horizon Frobenius recurrence in binary64 with the denominator factored through the exponent difference,
 # I(mu + k) = k (k - D), for a series that the plain recurrence truncates (small denominator) or loses.
 function _factorized_horizon_solution(
-    coefficients,
-    branch::Symbol,
-    order::Int,
-    resonance=_horizon_resonance_data(coefficients.params, branch),
+    coefficients, branch::Symbol, order::Int, resonance=_horizon_resonance_data(coefficients.params, branch),
 )
     a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :H, order)
     a_power = endpoint_power_lookup(a_coeffs, -1)
     b_power = endpoint_power_lookup(b_coeffs, -2)
     solution, _ = _horizon_factored_coefficients(a_power, b_power, resonance.mu, resonance, order)
     return (
-        branch=branch,
-        exponent=resonance.mu,
-        coefficients=solution,
-        A=a_coeffs,
-        B=b_coeffs,
-        variable=:x,
-        requested_order=order,
-        effective_order=order,
-        truncation_reason=:none,
-        representation=:factorized_frobenius,
-        resonance_order=0,
-        log_exponent=resonance.other_mu,
-        log_coefficient=zero(ComplexF64),
+        branch=branch, exponent=resonance.mu, coefficients=solution, A=a_coeffs, B=b_coeffs, variable=:x,
+        requested_order=order, effective_order=order, truncation_reason=:none, representation=:factorized_frobenius,
+        resonance_order=0, log_exponent=resonance.other_mu, log_coefficient=zero(ComplexF64),
         log_coefficients=ComplexF64[],
     )
 end
@@ -870,11 +783,7 @@ end
 # threshold at which the plain recurrence truncates) takes the logarithmic solution; otherwise the guarded
 # factored series (a resonance beyond `order` is not reached), or the unguarded factored series where fewer than
 # two orders of the guarded one survive.
-function _complex_horizon_solution(
-    coefficients,
-    branch::Symbol,
-    order::Int,
-)
+function _complex_horizon_solution(coefficients, branch::Symbol, order::Int)
     resonance = _horizon_resonance_data(coefficients.params, branch)
     1 <= _horizon_resonant_order(resonance) <= order &&
         return _resonant_horizon_solution(coefficients, branch, order, resonance)
@@ -908,14 +817,7 @@ end
 
 # Value, x-derivative and second x-derivative of an infinity local solution
 # X = exp(sigma/y + rho log y) * series(y / variable_scale), y = 1 - x.
-function _infinity_state(
-    coefficients,
-    solution,
-    kind,
-    x,
-    logy,
-    order,
-)
+function _infinity_state(coefficients, solution, kind, x, logy, order)
     y = 1 - x
     coeffs = @view solution.coefficients[1:(order + 1)]
     variable_scale = hasproperty(solution, :variable_scale) ?
@@ -940,15 +842,7 @@ function _infinity_state(
         second=ComplexF64(second_y))
 end
 
-function _scaled_infinity_order_metrics(
-    A,
-    B,
-    coefficients,
-    solution,
-    kind,
-    path,
-    order::Int,
-)
+function _scaled_infinity_order_metrics(A, B, coefficients, solution, kind, path, order::Int)
     full = _infinity_state(
         coefficients, solution, kind, path.x, path.logy, order)
     previous = _infinity_state(
@@ -963,15 +857,7 @@ function _scaled_infinity_order_metrics(
     return (; order, score=max(score, tail), adjacent, residual, tail)
 end
 
-function _best_scaled_infinity_metrics(
-    A,
-    B,
-    coefficients,
-    solution,
-    kind,
-    path,
-    settings,
-)
+function _best_scaled_infinity_metrics(A, B, coefficients, solution, kind, path, settings)
     max_order = min(settings.order, solution.effective_order)
     min_order = min(12, max_order)
     best = nothing
@@ -989,15 +875,7 @@ end
 # (this and the next two functions): disagreement between the full- and reduced-order
 # evaluation and the ODE residual; the `_from_endpoint` variant also counts the series
 # tail in the score and records the evaluation roundoff.
-function _horizon_check_from_ab(
-    A,
-    B,
-    coefficients,
-    solution,
-    kind,
-    path,
-    settings,
-)
+function _horizon_check_from_ab(A, B, coefficients, solution, kind, path, settings)
     full_order = solution.effective_order
     reduced_order = max(2, full_order - 8)
     full = _horizon_state(
@@ -1013,15 +891,7 @@ function _horizon_check_from_ab(
         state=ComplexRationalState(full.X, full.dXdx))
 end
 
-function _horizon_check_from_endpoint(
-    A,
-    B,
-    coefficients,
-    solution,
-    kind,
-    path,
-    settings,
-)
+function _horizon_check_from_endpoint(A, B, coefficients, solution, kind, path, settings)
     full_order = solution.effective_order
     reduced_order = max(2, full_order - 8)
     full = _horizon_state(
@@ -1042,15 +912,7 @@ function _horizon_check_from_endpoint(
         state=ComplexRationalState(full.X, full.dXdx))
 end
 
-function _infinity_check_from_ab(
-    A,
-    B,
-    coefficients,
-    solution,
-    kind,
-    path,
-    settings,
-)
+function _infinity_check_from_ab(A, B, coefficients, solution, kind, path, settings)
     y = 1 - path.x
     variable_scale = hasproperty(solution, :variable_scale) ?
         solution.variable_scale : 1.0 + 0.0im
@@ -1093,35 +955,17 @@ function _complex_infinity_solution(coefficients, branch::Symbol, order::Int)
     if !iszero(omega) &&
             (abs(omega) <= _SCALED_Y_PHYSICAL_HANDOFF ||
              strongly_damped)
-        return infinity_local_solution(
-            coefficients,
-            branch,
-            order;
-            variable_scale=omega,
-        )
+        return infinity_local_solution(coefficients, branch, order; variable_scale=omega)
     end
     try
         return infinity_local_solution(coefficients, branch, order)
     catch exception
         _credibility_lost(exception, :infinity) || rethrow()
-        return infinity_local_solution(
-            coefficients,
-            branch,
-            order;
-            variable_scale=omega,
-        )
+        return infinity_local_solution(coefficients, branch, order; variable_scale=omega)
     end
 end
 
-function _horizon_candidate!(
-    scratch,
-    coefficients,
-    solutions,
-    kinds,
-    path,
-    settings,
-    endpoint_rational=false,
-)
+function _horizon_candidate!(scratch, coefficients, solutions, kinds, path, settings, endpoint_rational=false)
     # Residuals use the exact ODE coefficients: the horizon-centred A/B series
     # that generate the Frobenius solution would only check it against itself.
     A, B = _ode_ab!(scratch, coefficients, path.x)
@@ -1139,11 +983,7 @@ function _horizon_candidate!(
             denominator = abel_denominator(
                 coefficients, :horizon, path.x)
             denominator.status == "OK" || error(denominator.status)
-            _abel_normalize_second(
-                checks[1].state,
-                checks[2].state,
-                denominator.denominator,
-            ).corrected_error
+            _abel_normalize_second(checks[1].state, checks[2].state, denominator.denominator).corrected_error
         catch caught
             absorbable(caught) || rethrow()
             Inf
@@ -1162,14 +1002,7 @@ end
 @inline _pair_abel_ok(candidate, target) =
     target === nothing || candidate.pair_abel_error <= target
 
-function _infinity_candidate!(
-    scratch,
-    coefficients,
-    solutions,
-    kinds,
-    path,
-    settings,
-)
+function _infinity_candidate!(scratch, coefficients, solutions, kinds, path, settings)
     A, B = _ode_ab!(scratch, coefficients, path.x)
     checks = map((solution, kind) -> _infinity_check_from_ab(
         A, B, coefficients, solution, kind, path, settings),
@@ -1179,15 +1012,7 @@ end
 
 # Horizon seed on the real axis: halve x from the junction until the endpoint series
 # pass their checks there (or a structurally checked node is found).
-function _select_real_horizon_path(
-    coefficients,
-    solutions,
-    kinds,
-    match_x,
-    settings,
-    ;
-    pair_abel_target=nothing,
-)
+function _select_real_horizon_path(coefficients, solutions, kinds, match_x, settings, ; pair_abel_target=nothing)
     best = nothing
     structural = nothing
     scratch = ComplexRationalScratch(coefficients, settings.order)
@@ -1248,15 +1073,7 @@ end
 # `_RHO_MAGNITUDES` until the endpoint series pass their checks at its end;
 # `max_best_score` accepts the best unchecked candidate instead of erroring.
 function _select_rotated_horizon_path(
-    coefficients,
-    solutions,
-    kinds,
-    p,
-    match_x,
-    settings,
-    angle_offset=0.0,
-    ;
-    max_best_score=nothing,
+    coefficients, solutions, kinds, p, match_x, settings, angle_offset=0.0, ; max_best_score=nothing,
     pair_abel_target=nothing,
 )
     best = nothing
@@ -1295,14 +1112,7 @@ end
 # Horizon endpoint seed on a rotated ray. For near-extremal spin with small |p|
 # a real-axis seed is tried first, and either serves as the other's fallback.
 function _select_horizon_path(
-    coefficients,
-    solutions,
-    kinds,
-    p,
-    match_x,
-    settings,
-    ;
-    pair_abel_target=nothing,
+    coefficients, solutions, kinds, p, match_x, settings, ; pair_abel_target=nothing,
     fallback_pair_abel_target=pair_abel_target,
 )
     params = coefficients.params
@@ -1352,16 +1162,7 @@ end
 
 # Infinity seed on the rotated ray: extend the ray towards infinity through
 # `_INFINITY_RHO_MAGNITUDES` until the endpoint series pass their checks at its end.
-function _select_infinity_path(
-    coefficients,
-    solutions,
-    kinds,
-    omega,
-    match_x,
-    settings,
-    ;
-    angle_offset=0.0,
-)
+function _select_infinity_path(coefficients, solutions, kinds, omega, match_x, settings, ; angle_offset=0.0)
     best = nothing
     path = nothing
     scratch = ComplexRationalScratch(coefficients, settings.order)
@@ -1400,24 +1201,13 @@ end
 # Infinity seed on the principal MST axis: the outgoing local solution is
 # replaced by the combination of the local pair proportional to the principal
 # MST state, and its Abel error enters the score.
-function _principal_mano_suzuki_takasugi_candidate!(
-    coefficients,
-    plan,
-    solutions,
-    kinds,
-    path,
-    settings,
-)
+function _principal_mano_suzuki_takasugi_candidate!(coefficients, plan, solutions, kinds, path, settings)
     length(kinds) == 2 &&
         kinds[1] == :infinity_in &&
         kinds[2] == :infinity_out ||
         throw(ArgumentError(
             "principal MST projective correction requires in/out infinity pair."))
-    A, B = _ode_ab!(
-        ComplexRationalScratch(coefficients, settings.order),
-        coefficients,
-        path.x,
-    )
+    A, B = _ode_ab!(ComplexRationalScratch(coefficients, settings.order), coefficients, path.x)
     local_checks = map(solutions, kinds) do solution, kind
         _infinity_check_from_ab(
             A, B, coefficients, solution, kind, path, settings)
@@ -1429,10 +1219,7 @@ function _principal_mano_suzuki_takasugi_candidate!(
         scale = max(abs(state.X), abs(state.dXdx))
         isfinite(scale) && scale > 0 ||
             error("principal MST projective state is zero or nonfinite.")
-        ComplexRationalState(
-            ComplexF64(state.X / scale),
-            ComplexF64(state.dXdx / scale),
-        )
+        ComplexRationalState(ComplexF64(state.X / scale), ComplexF64(state.dXdx / scale))
     end
     incoming = normalize(local_checks[1].state)
     outgoing = normalize(local_checks[2].state)
@@ -1445,39 +1232,25 @@ function _principal_mano_suzuki_takasugi_candidate!(
         error("principal MST projective correction is singular.")
     mixing = ComplexF64(numerator / denominator)
     corrected = normalize(ComplexRationalState(
-        outgoing.X + mixing * incoming.X,
-        outgoing.dXdx + mixing * incoming.dXdx,
+        outgoing.X + mixing * incoming.X, outgoing.dXdx + mixing * incoming.dXdx,
     ))
     checks = (
-        local_checks[1],
-        (;
-            score=mst.estimated_relerr,
-            adjacent=mst.estimated_relerr,
-            residual=mst.estimated_relerr,
-            roundoff=0.0,
-            order=settings.order,
-            state=corrected,
+        local_checks[1], (; score=mst.estimated_relerr, adjacent=mst.estimated_relerr, residual=mst.estimated_relerr,
+        roundoff=0.0, order=settings.order, state=corrected,
         ),
     )
     pair_abel_error = if length(checks) == 2
         denominator = abel_denominator(
             coefficients, :infinity, path.x)
         denominator.status == "OK" || error(denominator.status)
-        _abel_normalize_second(
-            checks[1].state,
-            checks[2].state,
-            denominator.denominator,
-        ).corrected_error
+        _abel_normalize_second(checks[1].state, checks[2].state, denominator.denominator).corrected_error
     else
         0.0
     end
     return (;
         path,
         checks,
-        score=max(
-            mst.estimated_relerr,
-            pair_abel_error,
-        ),
+        score=max(mst.estimated_relerr, pair_abel_error),
         pair_abel_error,
         projective_mixing=mixing,
     )
@@ -1486,14 +1259,7 @@ end
 # Infinity seed on the principal MST axis (small purely damped omega): real-axis nodes
 # at y = |omega| * `_PRINCIPAL_MANO_SUZUKI_TAKASUGI_Y_SCALES`, scored by
 # `_principal_mano_suzuki_takasugi_candidate!`.
-function _select_principal_mano_suzuki_takasugi_infinity_path(
-    coefficients,
-    solutions,
-    kinds,
-    omega,
-    match_x,
-    settings,
-)
+function _select_principal_mano_suzuki_takasugi_infinity_path(coefficients, solutions, kinds, omega, match_x, settings)
     branches = (:out,)
     plan = mano_suzuki_takasugi_principal_plan(coefficients; branches)
     best = nothing
@@ -1558,22 +1324,14 @@ function _series_state_condition(coeffs, h, value, derivative, order)
         value_power *= absolute_h
     end
     return max(
-        value_scale / max(abs(value), floatmin(Float64)),
-        derivative_scale / max(abs(derivative), floatmin(Float64)),
+        value_scale / max(abs(value), floatmin(Float64)), derivative_scale / max(abs(derivative), floatmin(Float64)),
     )
 end
 
 # Local A/B Taylor series at the step centre `x`: the ordinary P/Q expansion, or (when
 # q0 is degenerate or `shifted`) the endpoint series shifted to the centre. Returns the
 # term counts, the representation used and its condition.
-function _local_ab_series!(
-    scratch,
-    coefficients,
-    x,
-    order,
-    eps_limit,
-    shifted,
-)
+function _local_ab_series!(scratch, coefficients, x, order, eps_limit, shifted)
     if !shifted
         try
             a_terms, b_terms = ordinary_ab_series!(
@@ -1620,15 +1378,7 @@ end
 # One Taylor step of size h for both states from the A/B series in `scratch`; the
 # score combines the full/reduced-order disagreement and the ODE residual.
 function _local_step_from_ab!(
-    scratch,
-    state1,
-    state2,
-    h,
-    settings,
-    a_terms,
-    b_terms,
-    representation,
-    coefficient_condition,
+    scratch, state1, state2, h, settings, a_terms, b_terms, representation, coefficient_condition,
 )
     order = settings.order
     ordinary_point_coeffs!(
@@ -1681,30 +1431,13 @@ end
 
 # Step both states from x by h; for ordinary representations the residual is
 # re-checked with the exact ODE coefficients at x + h.
-function _local_step!(
-    scratch,
-    coefficients,
-    x,
-    state1,
-    state2,
-    h,
-    settings,
-    shifted,
-)
+function _local_step!(scratch, coefficients, x, state1, state2, h, settings, shifted)
     order = settings.order
     a_terms, b_terms, representation, coefficient_condition =
         _local_ab_series!(
             scratch, coefficients, x, order, settings.step_target, shifted)
     candidate = _local_step_from_ab!(
-        scratch,
-        state1,
-        state2,
-        h,
-        settings,
-        a_terms,
-        b_terms,
-        representation,
-        coefficient_condition,
+        scratch, state1, state2, h, settings, a_terms, b_terms, representation, coefficient_condition,
     )
     if representation == :ordinary ||
             representation == :ordinary_shift_fallback
@@ -1714,10 +1447,7 @@ function _local_step!(
             B,
             candidate.state1,
             ComplexRationalState(
-                poly_pair(
-                    @view(scratch.coeffs1[1:(settings.reduced_order + 1)]),
-                    h,
-                )...,
+                poly_pair(@view(scratch.coeffs1[1:(settings.reduced_order + 1)]), h)...,
             ),
             poly_triple(scratch.coeffs1, h)[3],
         )
@@ -1726,10 +1456,7 @@ function _local_step!(
             B,
             candidate.state2,
             ComplexRationalState(
-                poly_pair(
-                    @view(scratch.coeffs2[1:(settings.reduced_order + 1)]),
-                    h,
-                )...,
+                poly_pair(@view(scratch.coeffs2[1:(settings.reduced_order + 1)]), h)...,
             ),
             poly_triple(scratch.coeffs2, h)[3],
         )
@@ -1742,11 +1469,7 @@ function _local_step!(
     return candidate
 end
 
-function _scaled_rational(
-    rational::RationalCoefficients,
-    variable_scale,
-    numerator_factor,
-)
+function _scaled_rational(rational::RationalCoefficients, variable_scale, numerator_factor)
     scale = ComplexF64(variable_scale)
     numerator = Vector{ComplexF64}(undef, length(rational.numerator))
     denominator = Vector{ComplexF64}(undef, length(rational.denominator))
@@ -1791,27 +1514,13 @@ end
 # x = s*Z near the horizon. Both propagate the pair in the chart variable
 # with the endpoint series shifted to each step center.
 function _scaled_step!(
-    scratch,
-    chart::Symbol,
-    endpoint,
-    variable,
-    state1,
-    state2,
-    h,
-    settings;
-    coefficients=nothing,
+    scratch, chart::Symbol, endpoint, variable, state1, state2, h, settings; coefficients=nothing,
     variable_scale=nothing,
 )
     shift! = chart === :y ? shifted_infinity_ab! : shifted_ab!
     representation = chart === :y ? :scaled_y_shift : :scaled_x_shift
     accepted, a_terms, b_terms, coefficient_condition = shift!(
-        scratch.avec,
-        scratch.bvec,
-        scratch.pq,
-        endpoint,
-        variable,
-        settings.order;
-        eps_limit=10settings.step_target,
+        scratch.avec, scratch.bvec, scratch.pq, endpoint, variable, settings.order; eps_limit=10settings.step_target,
     )
     # A rejected shift is not used: the y chart takes the ordinary-point tables in the scaled variable
     # (ordinary_scaled_y_ab_series!, as the small-frequency bridge), the x chart the closed form about
@@ -1850,31 +1559,14 @@ function _scaled_step!(
         )
     end
     return _local_step_from_ab!(
-        scratch,
-        state1,
-        state2,
-        h,
-        settings,
-        a_terms,
-        b_terms,
-        representation,
-        coefficient_condition,
+        scratch, state1, state2, h, settings, a_terms, b_terms, representation, coefficient_condition,
     )
 end
 
 # Step the pair in the chart variable from `variable0` to `target`, shrinking each step
 # until it passes; returns the final states and the step statistics.
 function _propagate_scaled_pair!(
-    scratch,
-    chart::Symbol,
-    endpoint,
-    variable_scale,
-    variable0,
-    state1,
-    state2,
-    target,
-    settings;
-    coefficients=nothing,
+    scratch, chart::Symbol, endpoint, variable_scale, variable0, state1, state2, target, settings; coefficients=nothing,
 )
     label, name = chart === :y ? ("scaled-y", "Y") : ("scaled-x", "Z")
     variable = ComplexF64(variable0)
@@ -1898,16 +1590,7 @@ function _propagate_scaled_pair!(
         best_h = h
         for _ in 1:32
             candidate = _scaled_step!(
-                scratch,
-                chart,
-                endpoint,
-                variable,
-                state1,
-                state2,
-                h,
-                settings;
-                coefficients,
-                variable_scale,
+                scratch, chart, endpoint, variable, state1, state2, h, settings; coefficients, variable_scale,
             )
             if isfinite(candidate.score) && candidate.score < best_score
                 best_score = candidate.score
@@ -1950,15 +1633,7 @@ end
 end
 
 # Step the pair from x0 to `target` in x, accumulating the local error in `scratch`.
-function _propagate_pair!(
-    scratch,
-    coefficients,
-    x0,
-    state1,
-    state2,
-    target,
-    settings,
-)
+function _propagate_pair!(scratch, coefficients, x0, state1, state2, target, settings)
     x = ComplexF64(x0)
     target_x = ComplexF64(target)
     patches = 0
@@ -1981,15 +1656,7 @@ function _propagate_pair!(
 end
 
 # One accepted step of `_propagate_pair!` from x towards target_x.
-function _propagate_step!(
-    scratch,
-    coefficients,
-    x,
-    state1,
-    state2,
-    target_x,
-    settings,
-)
+function _propagate_step!(scratch, coefficients, x, state1, state2, target_x, settings)
     rejected = 0
     remaining = target_x - x
     radius = min(abs(x), abs(1 - x))
@@ -2151,17 +1818,7 @@ end
 
 # Propagate a pair from chart variable `source` to `target` (u = 1 - x for
 # `:y`, u = x for `:x`) with the chart scale `scale`, returning x-derivatives.
-function _scaled_chart_segment(
-    scratch,
-    chart::Symbol,
-    coefficients,
-    scale,
-    source,
-    target,
-    state1,
-    state2,
-    settings,
-)
+function _scaled_chart_segment(scratch, chart::Symbol, coefficients, scale, source, target, state1, state2, settings)
     endpoint = chart === :y ?
         _scaled_infinity_endpoint(coefficients.infinity, scale) :
         _scaled_horizon_endpoint(coefficients.horizon, scale)
@@ -2170,15 +1827,7 @@ function _scaled_chart_segment(
     from_chart(state) = ComplexRationalState(state.X, ComplexF64(
         chart === :y ? -state.dXdx / scale : state.dXdx / scale))
     segment = _propagate_scaled_pair!(
-        scratch,
-        chart,
-        endpoint,
-        scale,
-        source / scale,
-        to_chart(state1),
-        to_chart(state2),
-        target / scale,
-        settings;
+        scratch, chart, endpoint, scale, source / scale, to_chart(state1), to_chart(state2), target / scale, settings;
         coefficients,
     )
     return (;
@@ -2193,19 +1842,7 @@ end
 # Ordinary-point steps along path nodes from `index` towards `last_index`
 # (`step` = +1 or -1), grouping nodes inside the local disk-safety radius.
 # With a chart, stop before nodes inside its physical handoff radius.
-function _ordinary_path_hops(
-    scratch,
-    coefficients,
-    path,
-    x,
-    index,
-    step,
-    last_index,
-    chart,
-    state1,
-    state2,
-    settings,
-)
+function _ordinary_path_hops(scratch, coefficients, path, x, index, step, last_index, chart, state1, state2, settings)
     ordinary(node) = chart === nothing ||
         (chart === :y ? abs(1 - node) >= _SCALED_Y_PHYSICAL_HANDOFF :
             abs(node) >= _SCALED_X_PHYSICAL_HANDOFF)
@@ -2240,16 +1877,7 @@ end
 # Backward propagation from the last path node (the endpoint seed) to the first (the
 # junction): scaled-y chart steps while 1 - x is inside the chart handoff radius (only
 # when `variable_scale` is not one), then ordinary-point steps along the remaining nodes.
-function _propagate_on_path(
-    coefficients,
-    path,
-    state1,
-    state2,
-    settings,
-    ;
-    variable_scale=1.0 + 0.0im,
-    nodes=nothing,
-)
+function _propagate_on_path(coefficients, path, state1, state2, settings, ; variable_scale=1.0 + 0.0im, nodes=nothing)
     settings = _local_propagation_settings(settings)
     scratch = ComplexRationalScratch(coefficients, settings.order, nodes)
     patches = 0
@@ -2264,10 +1892,7 @@ function _propagate_on_path(
                 abs(1 - x) < _SCALED_Y_PHYSICAL_HANDOFF
             source_y = 1 - x
             propagation_scale = source_y / _SCALED_Y_CHART_SOURCE
-            target_magnitude = min(
-                _SCALED_Y_PHYSICAL_HANDOFF,
-                growth * abs(source_y),
-            )
+            target_magnitude = min(_SCALED_Y_PHYSICAL_HANDOFF, growth * abs(source_y))
             target_index = source_index - 1
             for candidate_index in (source_index - 1):-1:1
                 candidate_y = 1 - path.nodes[candidate_index]
@@ -2305,15 +1930,7 @@ end
 
 # Forward propagation from the first path node: ordinary steps until the
 # chart handoff radius, then scaled-chart steps to the last node.
-function _propagate_forward_chart_path(
-    coefficients,
-    path,
-    state1,
-    state2,
-    settings,
-    chart;
-    nodes=nothing,
-)
+function _propagate_forward_chart_path(coefficients, path, state1, state2, settings, chart; nodes=nothing)
     settings = _local_propagation_settings(settings)
     scratch = ComplexRationalScratch(coefficients, settings.order, nodes)
     last_index = length(path.nodes)
@@ -2331,10 +1948,7 @@ function _propagate_forward_chart_path(
     while source_index < last_index
         source = _chart_variable(chart, x)
         propagation_scale = source / 0.5
-        target_magnitude = max(
-            abs(last_variable),
-            abs(source) / growth,
-        )
+        target_magnitude = max(abs(last_variable), abs(source) / growth)
         target_index = source_index + 1
         for candidate_index in (source_index + 1):last_index
             candidate = _chart_variable(chart, path.nodes[candidate_index])
@@ -2360,14 +1974,7 @@ function _propagate_forward_chart_path(
 end
 
 function _propagate_forward_on_path(
-    coefficients,
-    path,
-    state1,
-    state2,
-    settings,
-    ;
-    variable_scale=1.0 + 0.0im,
-    nodes=nothing,
+    coefficients, path, state1, state2, settings, ; variable_scale=1.0 + 0.0im, nodes=nothing,
 )
     chart = isone(ComplexF64(variable_scale)) ? nothing : :y
     result = _propagate_forward_chart_path(
@@ -2384,14 +1991,7 @@ function _propagate_forward_on_path(
     )
 end
 
-function _propagate_forward_horizon_path(
-    coefficients,
-    path,
-    state1,
-    state2,
-    settings;
-    nodes=nothing,
-)
+function _propagate_forward_horizon_path(coefficients, path, state1, state2, settings; nodes=nothing)
     result = _propagate_forward_chart_path(
         coefficients, path, state1, state2, settings, :x; nodes)
     return (;
@@ -2414,23 +2014,13 @@ end
 # Match at an interior node of the infinity path: the target is propagated forward and
 # the basis pair back to it; nodes are tried at fixed fractions of the path and the
 # first that passes (else the best) is returned.
-function _infinity_overlap_match(
-    coefficients,
-    seed,
-    target_state,
-    settings;
-    variable_scale=1.0 + 0.0im,
-)
+function _infinity_overlap_match(coefficients, seed, target_state, settings; variable_scale=1.0 + 0.0im)
     node_count = length(seed.path.nodes)
     node_count >= 3 ||
         error("infinity overlap matching requires at least three path nodes.")
     indices = Int[]
     for fraction in (0.5, 0.35, 0.65, 0.2, 0.8, 0.9)
-        index = clamp(
-            round(Int, 1 + fraction * (node_count - 1)),
-            2,
-            node_count - 1,
-        )
+        index = clamp(round(Int, 1 + fraction * (node_count - 1)), 2, node_count - 1)
         index in indices || push!(indices, index)
     end
 
@@ -2441,40 +2031,19 @@ function _infinity_overlap_match(
             target_path = _path_segment(seed.path, 1, index)
             basis_path = _path_segment(seed.path, index, node_count)
             target = _propagate_forward_on_path(
-                coefficients,
-                target_path,
-                target_state,
-                target_state,
-                settings;
-                variable_scale,
+                coefficients, target_path, target_state, target_state, settings; variable_scale,
             )
             basis = _propagate_on_path(
-                coefficients,
-                basis_path,
-                seed.checks[1].state,
-                seed.checks[2].state,
-                settings;
-                variable_scale,
+                coefficients, basis_path, seed.checks[1].state, seed.checks[2].state, settings; variable_scale,
             )
             denominator = abel_denominator(
                 coefficients, :infinity, target.x)
             denominator.status == "OK" ||
                 error("infinity Abel denominator failed: $(denominator.status).")
-            normalization = _abel_normalize_second(
-                basis.state1,
-                basis.state2,
-                denominator.denominator,
-            )
-            diagnostics = _matching_diagnostics(
-                target.state1,
-                basis.state1,
-                normalization.corrected,
-            )
+            normalization = _abel_normalize_second(basis.state1, basis.state2, denominator.denominator)
+            diagnostics = _matching_diagnostics(target.state1, basis.state1, normalization.corrected)
             score = max(
-                target.max_score,
-                basis.max_score,
-                normalization.corrected_error,
-                eps(Float64) * diagnostics.condition,
+                target.max_score, basis.max_score, normalization.corrected_error, eps(Float64) * diagnostics.condition,
                 eps(Float64) * diagnostics.coefficient1_cancellation,
                 eps(Float64) * diagnostics.coefficient2_cancellation,
             )
@@ -2542,10 +2111,7 @@ function _abel_normalize_second(state1, state2, exact_denominator)
     if !_finite_complex(ratio) || iszero(ratio)
         ratio = _scaled_abel_ratio(state1, state2, exact_denominator)
     end
-    corrected = ComplexRationalState(
-        ComplexF64(state2.X / ratio),
-        ComplexF64(state2.dXdx / ratio),
-    )
+    corrected = ComplexRationalState(ComplexF64(state2.X / ratio), ComplexF64(state2.dXdx / ratio))
     _finite_complex(corrected.X) && _finite_complex(corrected.dXdx) ||
         error("nonfinite Abel-normalized basis state.")
     corrected_ratio =
@@ -2626,16 +2192,9 @@ end
 
 @inline function _amplitude_pair_distance(first, second)
     scale = max(
-        abs(first.incidence),
-        abs(first.reflection),
-        abs(second.incidence),
-        abs(second.reflection),
-        floatmin(Float64),
+        abs(first.incidence), abs(first.reflection), abs(second.incidence), abs(second.reflection), floatmin(Float64),
     )
-    return max(
-        abs(first.incidence - second.incidence),
-        abs(first.reflection - second.reflection),
-    ) / scale
+    return max(abs(first.incidence - second.incidence), abs(first.reflection - second.reflection)) / scale
 end
 
 @inline function _horizon_stokes_pretrigger(result, branch, params)
@@ -2650,32 +2209,15 @@ end
 
 # IN match re-solved with the horizon ray rotated by `angle_offset`, reusing the
 # selected match's infinity states and junction.
-function _solve_horizon_angle_at_match(
-    coefficients,
-    locals,
-    selected,
-    p,
-    settings,
-    angle_offset,
-)
+function _solve_horizon_angle_at_match(coefficients, locals, selected, p, settings, angle_offset)
     horizon_seed = nothing
     horizon_seed =
         _select_rotated_horizon_path(
-            coefficients,
-            (locals.horizon_in,),
-            (:horizon_in,),
-            p,
-            selected.match_x,
-            settings,
-            angle_offset,
+            coefficients, (locals.horizon_in,), (:horizon_in,), p, selected.match_x, settings, angle_offset,
         )
     horizon = nothing
     horizon = _propagate_on_path(
-        coefficients,
-        horizon_seed.path,
-        horizon_seed.checks[1].state,
-        horizon_seed.checks[1].state,
-        settings,
+        coefficients, horizon_seed.path, horizon_seed.checks[1].state, horizon_seed.checks[1].state, settings,
     )
     denominator_result = nothing
     diagnostics = nothing
@@ -2690,10 +2232,7 @@ function _solve_horizon_angle_at_match(
         infinity_in = selected.endpoint_states.infinity_in
         infinity_out = selected.endpoint_states.infinity_out
         incidence, reflection = _connection_coefficients(
-            horizon.state1,
-            infinity_in,
-            infinity_out,
-            denominator_result.denominator,
+            horizon.state1, infinity_in, infinity_out, denominator_result.denominator,
         )
         diagnostics = _matching_diagnostics(
             horizon.state1, infinity_in, infinity_out)
@@ -2728,14 +2267,7 @@ end
 # IN near extremal spin matched at r* = 0 on a horizon ray without angle offset:
 # re-solve the horizon side with growing angle offsets and adopt a candidate
 # when two consecutive offsets agree and both differ from the original match.
-function _horizon_stokes_consensus_retry(
-    coefficients,
-    locals,
-    branch,
-    selected,
-    p,
-    settings,
-)
+function _horizon_stokes_consensus_retry(coefficients, locals, branch, selected, p, settings)
     # The match result's type depends on branch and endpoint-match route;
     # one compiled retry serves all of them.
     Base.@nospecialize selected
@@ -2759,14 +2291,7 @@ function _horizon_stokes_consensus_retry(
         angle_offset = _HORIZON_STOKES_INITIAL_ANGLE +
             step * _HORIZON_STOKES_ANGLE_STEP
         candidate = try
-            _solve_horizon_angle_at_match(
-                coefficients,
-                locals,
-                selected,
-                p,
-                settings,
-                angle_offset,
-            )
+            _solve_horizon_angle_at_match(coefficients, locals, selected, p, settings, angle_offset)
         catch caught
             absorbable(caught) || rethrow()
             nothing
@@ -2788,10 +2313,7 @@ function _horizon_stokes_consensus_retry(
             end
         elseif step == previous_step + 1
             agreement = _amplitude_pair_distance(previous, candidate)
-            pair_separation = min(
-                _amplitude_pair_distance(selected, previous),
-                separation,
-            )
+            pair_separation = min(_amplitude_pair_distance(selected, previous), separation)
             if agreement < best_agreement
                 best_agreement = agreement
                 best_separation = pair_separation
@@ -2856,13 +2378,7 @@ end
 # When the match is ill-conditioned, re-solve at junctions shifted by fractions
 # of log(25)/|Im omega| and adopt the lower-condition member of the
 # best-agreeing pair when it is clearly separated from the original.
-function _matching_consensus_retry(
-    coefficients,
-    locals,
-    branch,
-    selected,
-    settings,
-)
+function _matching_consensus_retry(coefficients, locals, branch, selected, settings)
     Base.@nospecialize selected
     params = coefficients.params
     candidate_records =
@@ -2881,13 +2397,7 @@ function _matching_consensus_retry(
     candidates = typeof(selected)[]
     for fraction in (0.25, 0.5, 0.75)
         candidate = try
-            _solve_at_match(
-                coefficients,
-                locals,
-                branch,
-                direction * fraction * rstar_scale,
-                settings,
-            )
+            _solve_at_match(coefficients, locals, branch, direction * fraction * rstar_scale, settings)
         catch caught
             absorbable(caught) || rethrow()
             nothing
@@ -2921,10 +2431,7 @@ function _matching_consensus_retry(
             end
         end
     end
-    separation = min(
-        _amplitude_pair_distance(selected, best_first),
-        _amplitude_pair_distance(selected, best_second),
-    )
+    separation = min(_amplitude_pair_distance(selected, best_first), _amplitude_pair_distance(selected, best_second))
     condition_trigger = branch == :IN &&
         selected.coefficient2_cancellation >=
             _MATCH_CONSENSUS_IN_CANCELLATION_MIN &&
@@ -2962,10 +2469,7 @@ lower-condition member of the best-agreeing pair with all candidates and
 agreement diagnostics.
 """
 function complex_offpole_match_plateau_candidate(
-    evaluator,
-    branch,
-    retry_cache=nothing,
-    ; early_stability_max=_OFFPOLE_PLATEAU_EARLY_STABILITY_MAX,
+    evaluator, branch, retry_cache=nothing, ; early_stability_max=_OFFPOLE_PLATEAU_EARLY_STABILITY_MAX,
 )
     branch in (:IN, :UP) ||
         throw(ArgumentError("off-pole matching plateau requires :IN or :UP."))
@@ -2999,13 +2503,7 @@ function complex_offpole_match_plateau_candidate(
         end
         if candidate === nothing
             candidate = try
-                _solve_at_match(
-                    coefficients,
-                    locals,
-                    branch,
-                    fraction * rstar_scale,
-                    settings,
-                )
+                _solve_at_match(coefficients, locals, branch, fraction * rstar_scale, settings)
             catch caught
                 absorbable(caught) || rethrow()
                 nothing
@@ -3075,9 +2573,7 @@ function _local_solutions(coefficients, branch::Symbol, order::Int)
             horizon_out=nothing,
             infinity_in=_complex_infinity_solution(
                 coefficients, :in, order),
-            infinity_out=_complex_infinity_solution(
-                coefficients, :out, order),
-        )
+            infinity_out=_complex_infinity_solution(coefficients, :out, order))
     elseif branch == :UP
         return (;
             horizon_in=_complex_horizon_solution(
@@ -3085,9 +2581,7 @@ function _local_solutions(coefficients, branch::Symbol, order::Int)
             horizon_out=_complex_horizon_solution(
                 coefficients, :out, _horizon_series_order(order)),
             infinity_in=nothing,
-            infinity_out=_complex_infinity_solution(
-                coefficients, :out, order),
-        )
+            infinity_out=_complex_infinity_solution(coefficients, :out, order))
     end
     throw(ArgumentError("complex rational branch must be :IN or :UP."))
 end
@@ -3108,15 +2602,7 @@ end
 # horizon and infinity rays, propagation to the junction (or to the seed for
 # endpoint matching), Abel normalization, connection coefficients and their
 # error estimates.
-function _solve_at_match(
-    coefficients,
-    locals,
-    branch::Symbol,
-    match_rstar,
-    settings,
-    ;
-    infinity_angle_offset=0.0,
-)
+function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, settings, ; infinity_angle_offset=0.0)
     params = coefficients.params
     match_x = _match_x_from_rstar(params, match_rstar)
     omega_horizon = params.a / (2 * _rplus(params))
@@ -3140,12 +2626,8 @@ function _solve_at_match(
                 occursin("no certified two-ray infinity path", message) ||
                     rethrow()
                 _select_principal_mano_suzuki_takasugi_infinity_path(
-                    coefficients,
-                    (locals.infinity_in, locals.infinity_out),
-                    (:infinity_in, :infinity_out),
-                    params.omega,
-                    match_x,
-                    settings,
+                    coefficients, (locals.infinity_in, locals.infinity_out), (:infinity_in, :infinity_out),
+                    params.omega, match_x, settings,
                 )
             end
         else
@@ -3186,11 +2668,7 @@ function _solve_at_match(
                 infinity = _seed_bundle(infinity_seed)
                 infinity_endpoint_match = try
                     _propagate_forward_on_path(
-                        coefficients,
-                        infinity_seed.path,
-                        horizon.state1,
-                        horizon.state1,
-                        settings;
+                        coefficients, infinity_seed.path, horizon.state1, horizon.state1, settings;
                         variable_scale=locals.infinity_in.variable_scale,
                     )
                 catch exception
@@ -3253,11 +2731,7 @@ function _solve_at_match(
             if endpoint_match
                 horizon_endpoint_match = try
                     _propagate_forward_horizon_path(
-                        coefficients,
-                        horizon_seed.path,
-                        infinity.state1,
-                        infinity.state1,
-                        settings,
+                        coefficients, horizon_seed.path, infinity.state1, infinity.state1, settings,
                     )
                 catch exception
                     absorbable(exception) || rethrow()
@@ -3331,10 +2805,7 @@ function _solve_at_match(
                     _abel_range_error(exception) || rethrow()
                 infinity_endpoint_match = try
                     _infinity_overlap_match(
-                        coefficients,
-                        infinity_seed,
-                        horizon.state1,
-                        settings;
+                        coefficients, infinity_seed, horizon.state1, settings;
                         variable_scale=locals.infinity_in.variable_scale,
                     )
                 catch fallback_exception
@@ -3387,11 +2858,7 @@ function _solve_at_match(
                     _abel_range_error(exception) || rethrow()
                 horizon_endpoint_match = try
                     _propagate_forward_horizon_path(
-                        coefficients,
-                        horizon_seed.path,
-                        infinity.state1,
-                        infinity.state1,
-                        settings,
+                        coefficients, horizon_seed.path, infinity.state1, infinity.state1, settings,
                     )
                 catch fallback_exception
                     absorbable(fallback_exception) || rethrow()
@@ -3794,18 +3261,8 @@ otherwise it is `nothing`. Returns the parameters, controls, coefficients, real-
 evaluator, unit-transmission amplitudes, metadata and a retry cache.
 """
 function complex_rational_build(
-    s::Integer,
-    l::Integer,
-    m::Integer,
-    a,
-    omega,
-    branch::Symbol;
-    lambda=nothing,
-    nu=nothing,
-    N=nothing,
-    tol=nothing,
-    xm=nothing,
-    defer_relaxed_rotation::Bool=false,
+    s::Integer, l::Integer, m::Integer, a, omega, branch::Symbol; lambda=nothing, nu=nothing, N=nothing, tol=nothing,
+    xm=nothing, defer_relaxed_rotation::Bool=false,
 )
     branch in (:IN, :UP) ||
         throw(ArgumentError("complex rational branch must be :IN or :UP."))
@@ -3965,8 +3422,7 @@ function complex_rational_build(
         horizon_out_representation=
             _horizon_representation(locals.horizon_out),
         horizon_resonance_order=max(
-            _horizon_resonance_order(locals.horizon_in),
-            _horizon_resonance_order(locals.horizon_out),
+            _horizon_resonance_order(locals.horizon_in), _horizon_resonance_order(locals.horizon_out),
         ),
         amplitude_observable=(
             _horizon_representation(locals.horizon_in) ==
@@ -4006,10 +3462,7 @@ function complex_rational_build(
             selected.horizon_endpoint_match === nothing ?
                 0 : selected.horizon_endpoint_match.scaled_x_patches,
         patch_count=selected.patch_count,
-        propagation_score=max(
-            selected.horizon.max_score,
-            selected.infinity.max_score,
-        ),
+        propagation_score=max(selected.horizon.max_score, selected.infinity.max_score),
         abel_ratio=selected.abel_ratio,
         abel_raw_error=selected.abel_raw_error,
         abel_error=selected.abel_error,
@@ -4062,42 +3515,20 @@ function complex_up_horizon_in_candidate(evaluator, metadata)
         coefficients, :in, _horizon_series_order(settings.order))
     p = params.omega - params.m * params.a / (2 * _rplus(params))
     seed = _select_rotated_horizon_path(
-        coefficients,
-        (horizon_in,),
-        (:horizon_in,),
-        p,
-        match_x,
-        settings;
+        coefficients, (horizon_in,), (:horizon_in,), p, match_x, settings;
         max_best_score=_UP_HORIZON_IN_ENDPOINT_SCORE_MAX,
     )
-    propagated = _propagate_on_path(
-        coefficients,
-        seed.path,
-        seed.checks[1].state,
-        seed.checks[1].state,
-        settings,
-    )
+    propagated = _propagate_on_path(coefficients, seed.path, seed.checks[1].state, seed.checks[1].state, settings)
     denominator = abel_denominator(
         coefficients, :horizon, ComplexF64(match_x))
     denominator.status == "OK" ||
         error("horizon Abel denominator failed: $(denominator.status).")
     endpoint_states = metadata.endpoint_states
-    normalization = _abel_normalize_second(
-        propagated.state1,
-        endpoint_states.horizon_out,
-        denominator.denominator,
-    )
+    normalization = _abel_normalize_second(propagated.state1, endpoint_states.horizon_out, denominator.denominator)
     reflection, incidence = _connection_coefficients(
-        endpoint_states.infinity_out,
-        propagated.state1,
-        normalization.corrected,
-        denominator.denominator,
+        endpoint_states.infinity_out, propagated.state1, normalization.corrected, denominator.denominator,
     )
-    diagnostics = _matching_diagnostics(
-        endpoint_states.infinity_out,
-        propagated.state1,
-        normalization.corrected,
-    )
+    diagnostics = _matching_diagnostics(endpoint_states.infinity_out, propagated.state1, normalization.corrected)
     return (;
         incidence,
         reflection,
@@ -4314,10 +3745,7 @@ end
 
 X, dX/dr*, error estimate and step count of a rational route at real r > r_+.
 """
-function complex_rational_state_r(
-    evaluator::ComplexRationalEvaluator,
-    r::Real,
-)
+function complex_rational_state_r(evaluator::ComplexRationalEvaluator, r::Real)
     rf = Float64(r)
     rf > _rplus(evaluator.params) ||
         throw(DomainError(r, "real-axis ISEM complex evaluation requires r > r_plus."))
@@ -4337,9 +3765,7 @@ end
 # propagated from the previous one and restarted from the junction every
 # `chain_max` targets or after a patch-limit failure.
 function _states_x(
-    evaluator::ComplexRationalEvaluator,
-    targets::AbstractVector{<:Real},
-    chain_max::Int=_EVALUATION_CHAIN_MAX,
+    evaluator::ComplexRationalEvaluator, targets::AbstractVector{<:Real}, chain_max::Int=_EVALUATION_CHAIN_MAX,
 )
     count = length(targets)
     states = Vector{ComplexRationalState}(undef, count)
@@ -4355,31 +3781,15 @@ function _states_x(
 
     function normalize_state(state)
         scale = max(abs(state.X), abs(state.dXdx), floatmin(Float64))
-        return ComplexRationalState(
-            state.X / scale,
-            state.dXdx / scale,
-        ), scale
+        return ComplexRationalState(state.X / scale, state.dXdx / scale), scale
     end
 
     match_state, match_scale = normalize_state(evaluator.match_state)
 
-    function advance(
-        current_x,
-        current_state,
-        current_scale,
-        current_error,
-        target,
-    )
+    function advance(current_x, current_state, current_scale, current_error, target)
         base_scale = current_scale
         propagated = try
-            _propagate_pair(
-                evaluator.coefficients,
-                current_x,
-                current_state,
-                current_state,
-                target,
-                evaluator.settings,
-            )
+            _propagate_pair(evaluator.coefficients, current_x, current_state, current_state, target, evaluator.settings)
         catch error
             absorbable(error) || rethrow()
             if !(error isa ErrorException &&
@@ -4388,27 +3798,13 @@ function _states_x(
             end
             base_scale = match_scale
             _propagate_pair(
-                evaluator.coefficients,
-                evaluator.match_x,
-                match_state,
-                match_state,
-                target,
-                evaluator.settings,
+                evaluator.coefficients, evaluator.match_x, match_state, match_state, target, evaluator.settings,
             )
         end
         next_state, next_scale = normalize_state(propagated.state1)
         cumulative_scale = base_scale * next_scale
-        actual_state = ComplexRationalState(
-            next_state.X * cumulative_scale,
-            next_state.dXdx * cumulative_scale,
-        )
-        return (
-            target,
-            next_state,
-            cumulative_scale,
-            max(current_error, propagated.max_score),
-            actual_state,
-        )
+        actual_state = ComplexRationalState(next_state.X * cumulative_scale, next_state.dXdx * cumulative_scale)
+        return (target, next_state, cumulative_scale, max(current_error, propagated.max_score), actual_state,)
     end
 
     current_x = evaluator.match_x
@@ -4438,13 +3834,7 @@ function _states_x(
                 chain_length = 0
             end
             current_x, current_state, current_scale, current_error,
-                current_actual = advance(
-                    current_x,
-                    current_state,
-                    current_scale,
-                    current_error,
-                    target,
-                )
+                current_actual = advance(current_x, current_state, current_scale, current_error, target)
             chain_length += 1
         end
         states[index] = current_actual
@@ -4471,13 +3861,7 @@ function _states_x(
                 chain_length = 0
             end
             current_x, current_state, current_scale, current_error,
-                current_actual = advance(
-                    current_x,
-                    current_state,
-                    current_scale,
-                    current_error,
-                    target,
-                )
+                current_actual = advance(current_x, current_state, current_scale, current_error, target)
             chain_length += 1
         end
         states[index] = current_actual
@@ -4489,10 +3873,7 @@ end
 # Vector form of `complex_rational_state_r`: chained propagation checked against
 # single-point evaluations at up to nine of the radii, with per-point evaluation as the
 # fallback when they disagree.
-function complex_rational_states_r(
-    evaluator::ComplexRationalEvaluator,
-    radii::AbstractVector{<:Real},
-)
+function complex_rational_states_r(evaluator::ComplexRationalEvaluator, radii::AbstractVector{<:Real})
     rs = Float64.(radii)
     isempty(rs) && return NamedTuple[]
     all(r -> r > _rplus(evaluator.params), rs) ||
@@ -4506,11 +3887,7 @@ function complex_rational_states_r(
             dxdrstar = 2 * evaluator.params.kappa * x /
                 (r * r + evaluator.params.a * evaluator.params.a)
             state = states[index]
-            (
-                X=state.X,
-                dXdrstar=ComplexF64(state.dXdx * dxdrstar),
-                error=errors[index],
-            )
+            (X=state.X, dXdrstar=ComplexF64(state.dXdx * dxdrstar), error=errors[index],)
         end
     end
     function certificate(states)
@@ -4522,16 +3899,10 @@ function complex_rational_states_r(
                 evaluator, rs[index])
             candidate = states[index]
             scale = max(
-                abs(reference.X),
-                abs(reference.dXdrstar),
-                abs(candidate.X),
-                abs(candidate.dXdrstar),
-                floatmin(Float64),
+                abs(reference.X), abs(reference.dXdrstar), abs(candidate.X), abs(candidate.dXdrstar), floatmin(Float64),
             )
             error = max(
-                error,
-                abs(reference.X - candidate.X) / scale,
-                abs(reference.dXdrstar - candidate.dXdrstar) / scale,
+                error, abs(reference.X - candidate.X) / scale, abs(reference.dXdrstar - candidate.dXdrstar) / scale,
             )
         end
         return error
@@ -4550,16 +3921,10 @@ function (evaluator::ComplexRationalEvaluator)(rstar::Real)
     return state.X, state.dXdrstar, state.error
 end
 
-function (evaluator::ComplexRationalEvaluator)(
-    rstars::AbstractVector{<:Real},
-)
+function (evaluator::ComplexRationalEvaluator)(rstars::AbstractVector{<:Real})
     radii = r_from_rstar.(Ref(evaluator.params.a), Float64.(rstars))
     states = complex_rational_states_r(evaluator, radii)
-    return (
-        getproperty.(states, :X),
-        getproperty.(states, :dXdrstar),
-        getproperty.(states, :error),
-    )
+    return (getproperty.(states, :X), getproperty.(states, :dXdrstar), getproperty.(states, :error),)
 end
 
 end
