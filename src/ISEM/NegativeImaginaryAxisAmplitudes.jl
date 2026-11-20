@@ -1453,53 +1453,6 @@ end
     return _FAST_ANCHOR_MAX_OMEGA < omega_abs <= max_omega
 end
 
-function _fast_p_rescue(
-    route::ComplexRoute,
-    s,
-    l,
-    m,
-    a,
-    omega,
-    branch;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
-    max_omega::Float64=_MAX_ABS_IMAG_OMEGA,
-)
-    _fast_p_pretrigger(route; max_omega) || return route
-    route_backend = route.metadata.backend
-    candidate = _fast_route(
-        s,
-        l,
-        m,
-        a,
-        omega,
-        branch;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
-        pole_normalization,
-        max_omega,
-        rescue_source=route_backend,
-    )
-    return candidate === nothing ? route : candidate
-end
-
 # Whether the analytic-amplitude comparison runs after a route was built:
 # default controls, Im(omega) < 0, and either omega near the negative imaginary
 # axis or a route whose amplitudes came from the complex-rational or
@@ -1616,28 +1569,6 @@ end
     pole_normalization,
 )
     Base.@nospecialize route
-    rescued = _fast_p_rescue(
-        route,
-        s,
-        l,
-        m,
-        a,
-        omega,
-        branch;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
-        pole_normalization,
-        max_omega=_MAX_ABS_IMAG_OMEGA,
-    )
-    rescued === route || return rescued
     amplitude_trigger = _offaxis_pretrigger(
         route;
         backend,
