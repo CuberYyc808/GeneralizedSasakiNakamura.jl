@@ -1385,7 +1385,7 @@ end
 
 # Generic-orbit mode flux by nested trapezoidal refinement on subsamples of the dense master grid, doubling
 # N (and K when the polar band looks under-resolved) until the energy flux converges to sample_tol.
-function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false)
+function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false)
     _check_mode_geometry(cache, KG_master)
     if !(s == -2 || s == 2)
         error("Spin weight s must be either 2 or -2.")
@@ -1509,10 +1509,6 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
             continue
         end
         if allow_stop && !suspect_needs_extra && (factor * relE <= effective_sample_tol || (abs(energy2) < low_flux_cutoff && abs(previous_energy) < low_flux_cutoff) || low_flux_done)
-                if zero_low_flux && mode_abs_floor > 0.0 && abs(energy) < mode_abs_floor
-                    integral = 0.0 + 0.0im
-                    energy = 0.0
-                end
                 break
         end
     end
@@ -1541,9 +1537,6 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         "YInterpolationSelfCheckError" => ycheck.self_check_error,
         "YInterpolationDeferred" => !y_attempted,
     )
-    if zero_low_flux && mode_abs_floor > 0.0 && energy == 0.0
-        res["LowFluxZeroed"] = true
-    end
     return res
 end
 
@@ -1558,7 +1551,6 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
         tol::Float64 = 1e-8,
         max_flux::Float64 = 1.0,
         mode_abs_floor::Float64 = 1e-16,
-        zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
         confirm_low_flux::Bool = false,
         local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
@@ -1671,9 +1663,6 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     end
 
     amp = sum(leaf.amp for leaf in leaves; init = 0.0 + 0.0im)
-    if zero_low_flux && mode_abs_floor > 0.0 && abs(_generic_adaptive_energy_from_amp(amp, s, a, m, ω)) < mode_abs_floor
-        amp = 0.0 + 0.0im
-    end
     max_leaf_depth = maximum((leaf.key.level_r for leaf in leaves); init = 0)
     carter_factor = _generic_carter_factor_sample(KG_master, m, ω)
     res = _generic_adaptive_levin_result(amp, KG_master, Ysol, SH, s, a, m, ω, ϒθ, k, carter_factor)
@@ -1702,9 +1691,6 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     res["AdaptiveLevinStopReason"] = stop_reason
     res["AdaptiveLevinUnconverged"] = stop_reason == "inactive_or_max_depth" &&
         any(leaf -> leaf.active && leaf.key.level_r >= max_depth, leaves)
-    if zero_low_flux && amp == 0.0 + 0.0im
-        res["LowFluxZeroed"] = true
-    end
     return res
 end
 
@@ -1737,7 +1723,7 @@ function _generic_adaptive_levin_result(amp::ComplexF64, KG_master::Dict, Ysol, 
     end
 end
 
-function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing, adaptive_local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH, adaptive_max_depth::Int = 8, adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
+function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k, N_sample::Int64, K_sample::Int64; Nmax::Int = DEFAULT_LEVIN_NMAX, Kmax::Int = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing, adaptive_local_r_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH, adaptive_max_depth::Int = 8, adaptive_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
     _check_mode_geometry(cache, KG_master)
     levin_cache = cache isa GenericM2FluxCache ? cache : GenericFluxCache()
     return generic_mode_flux_from_master_cached_adaptive_levin!(
@@ -1752,7 +1738,6 @@ function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k,
         tol = tol,
         max_flux = max_flux,
         mode_abs_floor = mode_abs_floor,
-        zero_low_flux = zero_low_flux,
         threaded_sampling = threaded_sampling,
         local_r_intervals = adaptive_local_r_intervals,
         local_theta_intervals = adaptive_local_theta_intervals,
@@ -1762,12 +1747,12 @@ function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k,
     )
 end
 
-function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache=nothing, geometry_owner=nothing)
+function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache=nothing, geometry_owner=nothing)
     if cache !== nothing
         cache = _submission_public_cache(cache, geometry_owner, :generic)
         return generic_mode_flux_from_master_cached!(cache, KG_master, s, l, m, n, k;
             N0=N0, K0=K0, Nmax=Nmax, Kmax=Kmax, sample_tol=sample_tol, tol=tol,
-            max_flux=max_flux, mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux,
+            max_flux=max_flux, mode_abs_floor=mode_abs_floor,
             threaded_sampling=threaded_sampling)
     end
     geometry_owner === nothing || check_submission_geometry(geometry_owner, KG_master)
@@ -1847,13 +1832,6 @@ function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, 
         SHsamp = next_SHsamp
         res = res2
         if allow_stop && !suspect_needs_extra && (factor * relE <= effective_sample_tol || (abs(res2["EnergyFlux"]) < low_flux_cutoff && abs(res["EnergyFlux"]) < low_flux_cutoff) || low_flux_done)
-            if zero_low_flux && low_flux_done
-                res["Amplitude"] = 0.0 + 0.0im
-                res["EnergyFlux"] = 0.0
-                res["AngularMomentumFlux"] = 0.0
-                res["CarterConstantFlux"] = 0.0
-                res["LowFluxZeroed"] = true
-            end
             break
         end
     end
@@ -3068,7 +3046,6 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
         max_depth::Int = 8,
         mode_abs_floor::Float64 = 1e-16,
         energy_abs_tol::Float64 = 0.0,
-        zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
         cache = nothing)
     _check_mode_geometry(cache, KG_sample)
@@ -3180,13 +3157,6 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
 
     amp = sum(leaf.amp for leaf in leaves; init = 0.0 + 0.0im)
     res = _adaptive_eccentric_levin_result(amp, KG_sample, Ysol, SH, s, a, ω, m)
-    if zero_low_flux && mode_abs_floor > 0.0 && abs(res["EnergyFlux"]) < mode_abs_floor
-        res["Amplitude"] = 0.0 + 0.0im
-        res["EnergyFlux"] = 0.0
-        res["AngularMomentumFlux"] = 0.0
-        res["CarterConstantFlux"] = 0.0
-        res["LowFluxZeroed"] = true
-    end
     res["N_sample_requested"] = local_n
     max_leaf_depth = maximum((leaf.level for leaf in leaves); init = 0)
     res["N_sample"] = local_n * 2^max_leaf_depth
@@ -3215,7 +3185,7 @@ end
 # Semi-latus rectum from which the eccentric trapezoid always refines to the phase-resolving grid (see below).
 const ALIAS_GUARD_P = 40.0
 
-function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
@@ -3297,13 +3267,6 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
             continue
         end
         if allow_stop && !suspect_needs_extra && (factor * relE <= effective_sample_tol || (abs(res2["EnergyFlux"]) < low_flux_cutoff && abs(res["EnergyFlux"]) < low_flux_cutoff) || low_flux_done)
-            if zero_low_flux && low_flux_done
-                res2["Amplitude"] = 0.0 + 0.0im
-                res2["EnergyFlux"] = 0.0
-                res2["AngularMomentumFlux"] = 0.0
-                res2["CarterConstantFlux"] = 0.0
-                res2["LowFluxZeroed"] = true
-            end
             N = N2
             res = res2
             break
@@ -3333,7 +3296,7 @@ function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m
     end
 end
 
-function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache = nothing)
+function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(K_sample) || throw(ArgumentError("K_sample must be a power of 2"))
     ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
@@ -3402,13 +3365,6 @@ function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::
             continue
         end
         if allow_stop && !suspect_needs_extra && (factor * rel <= effective_sample_tol || (abs(res2["EnergyFlux"]) < low_flux_cutoff && abs(res["EnergyFlux"]) < low_flux_cutoff) || low_flux_done)
-            if zero_low_flux && low_flux_done
-                res2["Amplitude"] = 0.0 + 0.0im
-                res2["EnergyFlux"] = 0.0
-                res2["AngularMomentumFlux"] = 0.0
-                res2["CarterConstantFlux"] = 0.0
-                res2["LowFluxZeroed"] = true
-            end
             K_interval = K2
             res = res2
             break
@@ -3523,7 +3479,7 @@ end
 
 """
     convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax = 2^14, Kmax = 2^12,
-        tol = 1e-8, sample_tol = 1e-3, max_flux = 1.0, mode_abs_floor = 1e-16, zero_low_flux = false,
+        tol = 1e-8, sample_tol = 1e-3, max_flux = 1.0, mode_abs_floor = 1e-16,
         threaded_sampling = false, cache = nothing, trajectory = nothing, geometry_owner = nothing)
 
 Flux of the (s, l, m, n, k) mode of the bound Kerr geodesic (a, p, e, x) using the ISEM radial solution and
@@ -3533,7 +3489,7 @@ eccentric or generic routine. Returns a `Dict` with "Amplitude", "omega", "Energ
 `cache`, `trajectory` and `geometry_owner` let a submission reuse a mode cache, a precomputed orbit and shared
 orbit geometry across modes.
 """
-function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax::Int = 2^14, Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, zero_low_flux::Bool = false, threaded_sampling::Bool = false, cache=nothing, trajectory=nothing, geometry_owner=nothing)
+function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 64, Nmax::Int = 2^14, Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache=nothing, trajectory=nothing, geometry_owner=nothing)
     route = _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
     KG = route.KG
     if m == 0 && n == 0 && k == 0
@@ -3553,12 +3509,12 @@ function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 25
         if !isequal(e, 0.0)
             return convolution_integral_inclined_trapezoidal_isem(a, p, x, s, l, m, k, K;
                 Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux,
-                mode_abs_floor=mode_abs_floor, zero_low_flux=zero_low_flux,
+                mode_abs_floor=mode_abs_floor,
                 threaded_sampling=threaded_sampling)
         end
         master = route.master
         master === nothing && (master = kerr_geo_inclined_sample_dense(KG, x, Kmax))
-        return convolution_integral_inclined_trapezoidal_isem(master, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache=route.cache)
+        return convolution_integral_inclined_trapezoidal_isem(master, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, cache=route.cache)
     elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
         if k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
@@ -3569,7 +3525,6 @@ function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 25
             s, l, m, n, N; Nmax = Nmax, tol = tol,
             sample_tol = sample_tol, max_flux = max_flux,
             mode_abs_floor = mode_abs_floor,
-            zero_low_flux = zero_low_flux,
             threaded_sampling = threaded_sampling, cache=route.cache)
     else
         master = route.master
@@ -3578,15 +3533,13 @@ function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 25
             N0 = N, K0 = K, Nmax = Nmax, Kmax = Kmax, tol = tol,
             sample_tol = sample_tol, max_flux = max_flux,
             mode_abs_floor = mode_abs_floor,
-            zero_low_flux = zero_low_flux,
             threaded_sampling = threaded_sampling, cache=route.cache)
     end
 end
 
 """
     convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k; N = 256, K = 32, Nmax = DEFAULT_LEVIN_NMAX,
-        Kmax = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol = 1e-3, max_flux = 1.0, mode_abs_floor = 1e-16,
-        zero_low_flux = false, threaded_sampling = false, adaptive_local_n, adaptive_min_depth,
+        Kmax = DEFAULT_LEVIN_KMAX, tol = 1e-8, sample_tol = 1e-3, max_flux = 1.0, mode_abs_floor = 1e-16, threaded_sampling = false, adaptive_local_n, adaptive_min_depth,
         adaptive_max_depth = 8, adaptive_tol_max, cache = nothing, trajectory = nothing, geometry_owner = nothing)
 
 Flux of the (s, l, m, n, k) mode of the bound Kerr geodesic (a, p, e, x) using the ISEM radial solution and Levin
@@ -3604,7 +3557,6 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
         sample_tol::Float64 = 1e-3,
         max_flux = 1.0,
         mode_abs_floor::Float64 = 1e-16,
-        zero_low_flux::Bool = false,
         threaded_sampling::Bool = false,
         adaptive_local_n::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
         adaptive_min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH,
@@ -3642,13 +3594,12 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
             max_depth = adaptive_max_depth,
             depth_tol_max = adaptive_tol_max,
             mode_abs_floor = mode_abs_floor,
-            zero_low_flux = zero_low_flux,
             threaded_sampling = threaded_sampling, cache=route.cache,
         )
     else
         master = route.master
         master === nothing && (master = GridSampling.kerr_geo_generic_sample_dense(KG, Nmax, Kmax))
-        return convolution_integral_generic_levin_isem(master, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max, cache=route.cache)
+        return convolution_integral_generic_levin_isem(master, s, l, m, n, k, N, K; Nmax = Nmax, Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, adaptive_local_r_intervals = adaptive_local_n, adaptive_local_theta_intervals = adaptive_local_n, adaptive_min_depth = adaptive_min_depth, adaptive_max_depth = adaptive_max_depth, adaptive_tol_max = adaptive_tol_max, cache=route.cache)
     end
 end
 

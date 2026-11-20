@@ -1199,7 +1199,7 @@ function _run_boundaries(f_inf, f_hor, concurrent::Bool)
     return (inf, hor)
 end
 
-function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
+function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N, Nmax = 2^14, tol = 1e-8, lmax = 30, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
     rules = orbit_rules(a, p, e, x)
     mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
     if e == 0.0
@@ -1299,7 +1299,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     levin_floor_tracks_mode_floor = levin_mode_abs_floor == mode_abs_floor
     branch_mode_floor = s -> s == -2 ? branch_mode_floor_inf[] : branch_mode_floor_hor[]
     branch_levin_floor = s -> levin_floor_tracks_mode_floor ? branch_mode_floor(s) : Float64(levin_mode_abs_floor)
-    ci_kwargs = fast ? (Nmax = Nmax, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling) : (Nmax = Nmax, zero_low_flux = zero_low_flux, threaded_sampling = false)
+    ci_kwargs = fast ? (Nmax = Nmax, threaded_sampling = threaded_sampling) : (Nmax = Nmax, threaded_sampling = false)
     tail_levin_infinity_active = rs === nothing ? Ref(false) : rs.tail_levin_infinity_active
     tail_levin_horizon_active = rs === nothing ? Ref(false) : rs.tail_levin_horizon_active
     tail_levin_infinity_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_infinity_start_n
@@ -1338,16 +1338,16 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         let; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 mode_cache.walk_factors = factors
-                ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, levin_floor), energy_abs_tol = levin_abs, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
+                ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, levin_floor), energy_abs_tol = levin_abs, threaded_sampling = threaded_sampling, cache = mode_cache)
             end
         else
             if fast
                 with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, cache = mode_cache)
+                    ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, threaded_sampling = threaded_sampling, cache = mode_cache)
                 end
             else
                 with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
-                    ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, cache = mode_cache)
+                    ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, threaded_sampling = false, cache = mode_cache)
                 end
             end
         end; end; end
@@ -1616,13 +1616,13 @@ end
 
 # Total eccentric equatorial fluxes: n = 0 shell, then n = 1, 2, ... shells (each over m >= 1, m <= -1 and l),
 # until minimum_consecutive + 1 n shells are below tol times the branch total. See Teukolsky_pointparticle_flux.
-function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
+function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, N0 = N, Nmax = submission === nothing ? 2^14 : submission.Nmax, tol = 1e-8, lmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Kmax = submission === nothing ? 2^12 : submission.Kmax)
     caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn, resume
             with_submission_operation(scope) do
-                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
+                _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
         end
     end
@@ -1923,7 +1923,7 @@ function _inclined_branch_shells!(s::Int, ctx, prefetch)
     return (total_energy, total_angular, total_carter, k_reached, l_reached, lmax_hit, near_static_zero, failed_modes, total_modes, state)
 end
 
-function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, warn_truncation::Bool = true, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
+function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, warn_truncation::Bool = true, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
@@ -2000,7 +2000,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
     mode_index = Ref(0)
     record_h5 = record ? _public_track_resource!(scope, h5open(record_path, "w")) : nothing
-    ci_kwargs = fast ? (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling) : (Kmax = Kmax, zero_low_flux = zero_low_flux, threaded_sampling = false)
+    ci_kwargs = fast ? (Kmax = Kmax, threaded_sampling = threaded_sampling) : (Kmax = Kmax, threaded_sampling = false)
     branch_mode_floor_inf = rs === nothing ? Ref(Float64(mode_abs_floor)) : rs.branch_mode_floor_inf
     branch_mode_floor_hor = rs === nothing ? Ref(Float64(mode_abs_floor)) : rs.branch_mode_floor_hor
     # One mode from its parameters (max_flux, floor; the k = 0 walks use the default max_flux 1.0); the walks do the
@@ -2262,13 +2262,13 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 end
 
 # Total inclined circular fluxes, summed over k shells as the eccentric summation sums n shells.
-function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
+function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing, Nmax = submission === nothing ? 2^14 : submission.Nmax)
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn, resume
             with_submission_operation(scope) do
-                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, warn_truncation = warn, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
+                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, warn_truncation = warn, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
         end
     end
@@ -3030,7 +3030,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
     return merge(result, (state = merge(state, (result = result,)),))
 end
 
-function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
+function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
     nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
@@ -3040,10 +3040,10 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
     tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
-        return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission = scope, lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
     if e == 0.0
-        return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, submission = isequal(e, 0.0) ? scope : nothing, stop_requested = isequal(e, 0.0) ? nothing : (() -> _mode_flux_parent_stop_requested(scope)), lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
+        return inclined_mode_summation(a, p, x; K = K0, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, submission = isequal(e, 0.0) ? scope : nothing, stop_requested = isequal(e, 0.0) ? nothing : (() -> _mode_flux_parent_stop_requested(scope)), lifecycle_observer = scope.lifecycle_observer, geometry_observer = scope.geometry_observer)
     end
 
     record_path = record_path === nothing ? "generic_mode_data_a_$(_record_tag(a))_p_$(_record_tag(p))_e_$(_record_tag(e))_x_$(_record_tag(x)).h5" : record_path
@@ -3168,16 +3168,16 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
                 if use_levin
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
                         mode_cache.walk_factors = factors
-                        ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
+                        ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
                     end
                 else
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
-                        ConvolutionIntegrals.generic_mode_flux_from_master_cached!(mode_cache, KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling)
+                        ConvolutionIntegrals.generic_mode_flux_from_master_cached!(mode_cache, KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, threaded_sampling = threaded_sampling)
                     end
                 end
             else
                 with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
-                    ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, zero_low_flux = zero_low_flux, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
+                    ConvolutionIntegrals.generic_mode_flux_from_master(KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, threaded_sampling = false, geometry_owner = submission_geometry!(scope))
                 end
             end; end; end
             end
@@ -3380,13 +3380,13 @@ end
 
 # Total generic-orbit fluxes, summed over n, k, m and l shells with the stopping rules described in
 # Teukolsky_pointparticle_flux. Equatorial and e = 0 orbits are passed to the eccentric and inclined summations.
-function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, zero_low_flux = false, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
+function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 16, Nmax = submission === nothing ? 2^14 : submission.Nmax, Kmax = submission === nothing ? 2^12 : submission.Kmax, tol = 1e-8, lmax = :auto, kmax = :auto, nmax = :auto, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, progress_interval::Int = 0, progress_path = nothing, mode_parallelism::Int = 1, progress::Bool = false, stop_requested = nothing, lifecycle_observer = nothing, geometry_observer = nothing)
     caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested, lifecycle_observer, geometry_observer)
     return _with_public_scope(scope, owned) do
         _with_auto_caps(caps) do L, Kc, Nc, warn, resume
             with_submission_operation(scope) do
-                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, zero_low_flux = zero_low_flux, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
+                _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, fast = fast, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, progress_interval = progress_interval, progress_path = progress_path, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
         end
     end
