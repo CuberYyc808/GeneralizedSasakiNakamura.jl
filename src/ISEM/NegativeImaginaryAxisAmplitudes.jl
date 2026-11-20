@@ -1864,7 +1864,7 @@ function _build_triggered(s, l, m, a, omega, branch)
     )
 end
 
-ComplexFrequency._register_special_route_builder!(build)
-ComplexFrequency._register_post_route_builder!(_post_overlay)
+ComplexFrequency._special_route(args...; kwargs...) = build(args...; kwargs...)
+ComplexFrequency._post_route(route, args...; kwargs...) = _post_overlay(route, args...; kwargs...)
 
 end

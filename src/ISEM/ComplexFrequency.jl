@@ -4007,26 +4007,11 @@ function _complex_route_impl(
         ":p_equation."))
 end
 
-# Builder hooks used by `complex_route`: a special-case builder tried
-# first (returns `nothing` to decline), the default builder, and a step that
-# post-processes the built route. NegativeImaginaryAxisAmplitudes registers the first and
-# the last.
-const _SPECIAL_ROUTE_BUILDER = Ref{Any}(
-    (args...; kwargs...) -> nothing)
-const _DEFAULT_ROUTE_BUILDER = Ref{Any}(
-    _complex_route_impl)
-const _POST_ROUTE_BUILDER = Ref{Any}(
-    (route, args...; kwargs...) -> route)
-
-function _register_special_route_builder!(builder)
-    _SPECIAL_ROUTE_BUILDER[] = builder
-    return nothing
-end
-
-function _register_post_route_builder!(builder)
-    _POST_ROUTE_BUILDER[] = builder
-    return nothing
-end
+# Steps of `complex_route` around `_complex_route_impl`, with methods in NegativeImaginaryAxisAmplitudes (included
+# after this module): a special-case builder tried first (returns `nothing` to decline) and a step that
+# post-processes the built route. The calls keep their inference barriers.
+function _special_route end
+function _post_route end
 
 """
     complex_route(s, l, m, a, omega, branch; backend=:direct_rational, kwargs...)
@@ -4059,9 +4044,7 @@ function complex_route(
     large_frequency_expansion=nothing,
     pole_normalization::Bool=false,
 )
-    special_builder =
-        Base.inferencebarrier(_SPECIAL_ROUTE_BUILDER[])
-    special = special_builder(
+    special = Base.inferencebarrier(_special_route)(
         s, l, m, a, omega, branch;
         backend,
         controls,
@@ -4076,9 +4059,7 @@ function complex_route(
         pole_normalization,
     )
     special === nothing || return special
-    default_builder =
-        Base.inferencebarrier(_DEFAULT_ROUTE_BUILDER[])
-    route = default_builder(
+    route = Base.inferencebarrier(_complex_route_impl)(
         s, l, m, a, omega, branch;
         backend,
         controls,
@@ -4092,9 +4073,7 @@ function complex_route(
         large_frequency_expansion,
         pole_normalization,
     )
-    post_builder =
-        Base.inferencebarrier(_POST_ROUTE_BUILDER[])
-    return post_builder(
+    return Base.inferencebarrier(_post_route)(
         route, s, l, m, a, omega, branch;
         backend,
         controls,
