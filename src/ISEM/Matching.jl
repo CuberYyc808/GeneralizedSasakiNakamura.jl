@@ -1,4 +1,5 @@
 module Matching
+using ...Errors: absorbable
 
 using ..CoefficientTables: CoefficientSet, gsn_coefficients
 using ..ComplexPathAmplitudes: complex_path_amplitudes
@@ -378,6 +379,7 @@ function _build_bridge(
             allow_partial=true,
         )
     catch err
+        absorbable(err) || rethrow()
         message = sprint(showerror, err)
         startswith(message, "ISEM GSN hybrid recurrence failed") || rethrow()
         return nothing
@@ -398,7 +400,7 @@ function _build_bridge(
         end
         return worst > BRIDGE_CHECK_TOL ? bridge : nothing
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         return nothing
     end
 end
@@ -480,6 +482,7 @@ function _small_frequency_expansion_endpoint_selection(coefficients, ctrl, match
         return select_infinity_endpoint(
             coefficients, match_x; controls=ctrl)
     catch err
+        absorbable(err) || rethrow()
         message = sprint(showerror, err)
         startswith(message, "ISEM GSN infinity") || rethrow()
         return nothing
@@ -670,6 +673,7 @@ function _connection_coefficients(target, basis1, basis2, det)
         max(_logabs(c1), _logabs(c2)) <= target_log &&
             return c1, c2, 1.0
     catch err
+        absorbable(err) || rethrow()
         sprint(showerror, err) ==
             "ISEM GSN matching coefficient exceeds Float64 range" || rethrow()
     end
@@ -1085,6 +1089,7 @@ function _match_body(
                 )
                 (incoming, outgoing, false)
             catch err
+                absorbable(err) || rethrow()
                 if err isa ManoSuzukiTakasugiCertificateError
                     _small_frequency_expansion_auto_fallback(base_ctrl, err) || rethrow()
                     fallback = _ordinary_fallback(
@@ -1097,6 +1102,7 @@ function _match_body(
                         coefficients, match_x, ctrl, scratch, mst_plan)
                     (incoming, outgoing, true)
                 catch robust_err
+                    absorbable(robust_err) || rethrow()
                     _small_frequency_expansion_auto_fallback(base_ctrl, robust_err) ||
                         throw(robust_err)
                     fallback = _ordinary_fallback(
@@ -1174,6 +1180,7 @@ function _match_body(
                     solution_scale,
                 ) : build_mano_suzuki_takasugi_eval_plan(mst_plan)
             catch err
+                absorbable(err) || rethrow()
                 if logscaled_mst &&
                         _public_exterior_covered(bridge, endpoint_plan)
                     nothing
@@ -1220,6 +1227,7 @@ function _match_body(
                 false,
             )
         catch err
+            absorbable(err) || rethrow()
             if err isa ManoSuzukiTakasugiCertificateError
                 _small_frequency_expansion_auto_fallback(base_ctrl, err) || rethrow()
                 fallback = _ordinary_fallback(
@@ -1233,6 +1241,7 @@ function _match_body(
                     true,
                 )
             catch robust_err
+                absorbable(robust_err) || rethrow()
                 _small_frequency_expansion_auto_fallback(base_ctrl, robust_err) ||
                     throw(robust_err)
                 fallback = _ordinary_fallback(
@@ -1331,6 +1340,7 @@ function _match_body(
                 i_out,
             ) : build_mano_suzuki_takasugi_eval_plan(mst_plan)
         catch err
+            absorbable(err) || rethrow()
             if logscaled_mst
                 _public_exterior_covered(endpoint_bridge, endpoint_plan) ?
                     nothing : rethrow()

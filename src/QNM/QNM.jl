@@ -1,4 +1,5 @@
 module QNM
+using ..Errors: absorbable
 
 using LinearAlgebra
 using Printf

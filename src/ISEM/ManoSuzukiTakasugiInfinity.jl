@@ -1,4 +1,5 @@
 module ManoSuzukiTakasugiInfinity
+using ...Errors: absorbable
 
 using HypergeometricFunctions
 using SpecialFunctions: digamma, expint, gamma, loggamma, polygamma
@@ -1388,12 +1389,14 @@ function _invgamma_complex(z)
         if _finite_complex(gz) && !iszero(gz)
             return inv(gz)
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
     end
     try
         value = exp(-loggamma(zc))
         _finite_complex(value) && return ComplexF64(value)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
     end
     return ComplexF64(NaN + NaN * im)
 end
@@ -1424,6 +1427,7 @@ function _onef1_library(a, b, z)
         _finite_complex(value) || return _hfail(:onef1_direct, "library returned nonfinite")
         return _heval(value, :onef1_direct, eps(Float64), 0)
     catch err
+        absorbable(err) || rethrow()
         return _hfail(:onef1_direct, sprint(showerror, err))
     end
 end
@@ -1507,6 +1511,7 @@ function _u_connection(a, b, z, backend::HyperUBackend)
         return HyperEval(log(value), :log_u_connection, relerr,
             max(m1.iterations, m2.iterations), status, "cancellation=$(cancellation)")
     catch err
+        absorbable(err) || rethrow()
         return _hfail(:log_u_connection, sprint(showerror, err))
     end
 end
@@ -1520,6 +1525,7 @@ function _u_library(a, b, z)
         return HyperEval(log(value), :log_u_direct, 1.0e-8, 0, :WARN_CONDITIONED,
             "direct library fallback")
     catch err
+        absorbable(err) || rethrow()
         return _hfail(:log_u_direct, sprint(showerror, err))
     end
 end
@@ -1544,6 +1550,7 @@ function _u_one_one_limit(a, b, z, backend::HyperUBackend)
             max(da, db) * max(1.0, abs(log(zc)), abs(zc)) / max(abs(value), floatmin(Float64))
         return HyperEval(log(value), :log_u_one_one_limit, relerr, 0, status, "")
     catch err
+        absorbable(err) || rethrow()
         return _hfail(:log_u_one_one_limit, sprint(showerror, err))
     end
 end
@@ -1628,6 +1635,7 @@ function _u_positive_integer_b(a, n::Int, z, backend::HyperUBackend, exact_b::Bo
         return HyperEval(log(value), :log_u_integer_b_limit, relerr, iterations, status,
             "b_n=$(n), cancellation=$(cancellation)")
     catch err
+        absorbable(err) || rethrow()
         return _hfail(:log_u_integer_b_limit, sprint(showerror, err))
     end
 end
@@ -2386,7 +2394,8 @@ function _negative_segment!(sequence::ManoSuzukiTakasugiUSequence)
     sequence.negative_status = :RUNNING
     accepted = try
         _build_negative_segment!(sequence)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         false
     end
     if !accepted
@@ -2635,14 +2644,16 @@ end
 function _budget_term(termfun, errorfun, n)
     term = try
         termfun(n)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     _finite_complex(term.value) && _finite_complex(term.deriv) &&
         _finite_complex(term.second) || return nothing
     state_error = try
         Float64(errorfun(n))
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         Inf
     end
     return term, state_error
@@ -5290,7 +5301,8 @@ function _branch_check(data::ManoSuzukiTakasugiSeriesData, branch::Symbol, r)
                 series -> _in_p_triplet(data, r, series), r, sequence)
             return (residual=residual, sequence=sequence, budget=budget)
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
     end
     return (
         residual=ManoSuzukiTakasugiResidual(Inf, Inf, 0, 0, "ERROR"),
@@ -5382,7 +5394,8 @@ function _mano_suzuki_takasugi_residual_seed_x(
     if y_start > MANO_SUZUKI_TAKASUGI_DIRECT_MATCH_Y
         direct = try
             _mano_suzuki_takasugi_residual_at_y(coefficients, data, y_start, branches)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if direct !== nothing && direct.valid
@@ -5411,7 +5424,8 @@ function _mano_suzuki_takasugi_residual_seed_x(
     candidate_y = max(100eps(Float64), candidate_y)
     candidate = try
         _mano_suzuki_takasugi_residual_at_y(coefficients, data, candidate_y, branches)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     if candidate !== nothing && candidate.valid
@@ -5443,7 +5457,8 @@ function _mano_suzuki_takasugi_residual_seed_x(
         evaluations += 1
         ev = try
             _mano_suzuki_takasugi_residual_at_y(coefficients, data, y, branches)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if ev !== nothing && ev.valid
@@ -5480,7 +5495,8 @@ function _mano_suzuki_takasugi_residual_seed_x(
             evaluations += 1
             ev = try
                 _mano_suzuki_takasugi_residual_at_y(coefficients, data, mid, branches)
-            catch
+            catch caught
+                absorbable(caught) || rethrow()
                 nothing
             end
             if ev !== nothing && ev.valid
@@ -5497,7 +5513,8 @@ function _mano_suzuki_takasugi_residual_seed_x(
     evaluations += 1
     ev = try
         _mano_suzuki_takasugi_residual_at_y(coefficients, data, y_seed, branches)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     chosen_y = ev !== nothing && ev.valid ? y_seed : y_safe
@@ -5702,7 +5719,7 @@ function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Sy
         result = _principal_amplitudes(data, branch)
         return data, result, :principal
     catch error
-        error isa InterruptException && rethrow()
+        absorbable(error) || rethrow()
         push!(errors, "principal=$(sprint(showerror, error))")
     end
 
@@ -5710,7 +5727,7 @@ function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Sy
         result = _split_amplitudes(data, branch)
         return data, result, :split_index
     catch error
-        error isa InterruptException && rethrow()
+        absorbable(error) || rethrow()
         push!(errors, "split_index=$(sprint(showerror, error))")
     end
 
@@ -5730,7 +5747,7 @@ function _physical_amplitude_plan(data::ManoSuzukiTakasugiSeriesData, branch::Sy
         selected = _amp_data(base, centered, result.shift)
         return selected, result, :coherent_shift
     catch error
-        error isa InterruptException && rethrow()
+        absorbable(error) || rethrow()
         push!(errors, "coherent_shift=$(sprint(showerror, error))")
     end
 

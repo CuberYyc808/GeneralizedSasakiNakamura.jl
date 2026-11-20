@@ -1,4 +1,5 @@
 module Iteration
+using ...Errors: absorbable
 
 using ..CoefficientTables: CoefficientSet
 using ..OrdinaryPointExpansion: direct_ab_value
@@ -1393,8 +1394,7 @@ function select_infinity_endpoint(
             return _select_infinity_endpoint_order(
                 coefficients, match_x, 32; controls, certificate)
         catch err
-            err isa Union{MethodError, BoundsError, TypeError, UndefVarError, AssertionError,
-                InterruptException, OutOfMemoryError} && rethrow()
+            absorbable(err) || rethrow()
             return selected
         end
     end

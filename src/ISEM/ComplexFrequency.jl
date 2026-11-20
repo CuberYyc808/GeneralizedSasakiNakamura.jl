@@ -1,4 +1,5 @@
 module ComplexFrequency
+using ...Errors: absorbable
 
 using Logging: NullLogger, with_logger
 import Logging
@@ -1615,7 +1616,8 @@ function _principal_small_frequency_expansion_build_fallback(
                 tol=requested.tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     confirmation = first === nothing ? nothing : try
@@ -1627,14 +1629,16 @@ function _principal_small_frequency_expansion_build_fallback(
                 tol=requested.tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     if first !== nothing && confirmation !== nothing
         _, _, amplitude_agreement = _route_pair_errors(first, confirmation)
         state_agreement = try
             _principal_p_state_agreement(first, confirmation)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             Inf
         end
         split_mismatch = max(
@@ -1961,7 +1965,8 @@ function _try_up_initial_match_consensus(rational::ComplexRoute)
     started = time_ns()
     candidates = try
         complex_up_initial_match_candidates(rational.state_evaluator)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     metrics = _up_initial_match_metrics(rational, candidates)
@@ -2004,7 +2009,8 @@ function _offpole_match_plateau_metrics(rational, candidates)
     selected = candidates.selected
     continuity = try
         _offpole_match_plateau_continuity(rational, selected)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         (xerror=Inf, dxerror=Inf, error=Inf)
     end
     member_agreement = 0.0
@@ -2018,7 +2024,8 @@ function _offpole_match_plateau_metrics(rational, candidates)
                 _OFFPOLE_MATCH_PLATEAU_MEMBER_AGREEMENT_MAX || continue
             candidate_continuity = try
                 _offpole_match_plateau_continuity(rational, candidate)
-            catch
+            catch caught
+                absorbable(caught) || rethrow()
                 (xerror=Inf, dxerror=Inf, error=Inf)
             end
             candidate_continuity.error <=
@@ -2151,7 +2158,8 @@ function _try_offpole_match_plateau(
     candidates = try
         complex_offpole_match_plateau_candidate(
             rational.state_evaluator, rational.branch, retry_cache)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return selected
     end
     metrics = _offpole_match_plateau_metrics(rational, candidates)
@@ -2344,7 +2352,8 @@ function _try_up_horizon_in_order_consensus(
     candidate = try
         complex_up_horizon_in_candidate(
             rational.state_evaluator, rational.metadata)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     params = rational.state_evaluator.params
@@ -2356,13 +2365,15 @@ function _try_up_horizon_in_order_consensus(
             N=order1,
             tol=tolerance,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     confirmation = try
         complex_up_horizon_in_candidate(
             confirmation_route.state_evaluator, confirmation_route.metadata)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     final_route = try
@@ -2373,13 +2384,15 @@ function _try_up_horizon_in_order_consensus(
             N=order2,
             tol=tolerance,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     final_candidate = try
         complex_up_horizon_in_candidate(
             final_route.state_evaluator, final_route.metadata)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     metrics = _up_horizon_in_order_metrics(
@@ -2412,7 +2425,8 @@ function _try_up_horizon_in_order_consensus(
                 tol=tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     lower_candidates = try
@@ -2420,7 +2434,8 @@ function _try_up_horizon_in_order_consensus(
             complex_up_horizon_in_candidate(
                 lower_route.state_evaluator, lower_route.metadata)
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     lower_metrics = _up_horizon_in_order_metrics(
@@ -2863,7 +2878,8 @@ function _try_p_consensus(
                     tol=controls.tolerance,
                 )
             end
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         confirmation_order = _P_NEGATIVE_IMAGINARY_AXIS_ORDER + _P_NEGATIVE_IMAGINARY_AXIS_ORDER_DELTA
@@ -2875,7 +2891,8 @@ function _try_p_consensus(
                     tol=controls.tolerance,
                 )
             end
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if candidate !== nothing && confirmation !== nothing
@@ -2905,7 +2922,8 @@ function _try_p_consensus(
                 tol=controls.tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     if regular_trigger
@@ -2923,7 +2941,8 @@ function _try_p_consensus(
                     tol=controls.tolerance,
                 )
             end
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if confirmation !== nothing
@@ -2948,7 +2967,8 @@ function _try_p_consensus(
                     tol=controls.tolerance,
                 )
             end
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if confirmation !== nothing
@@ -2970,7 +2990,8 @@ function _try_p_consensus(
                 tol=controls.tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rational
     end
     metrics = _p_up_dual_metrics(
@@ -3000,7 +3021,8 @@ function _try_p_negative_imaginary_axis_build_consensus(
                 tol=tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return fallback
     end
     confirmation_order = _P_NEGATIVE_IMAGINARY_AXIS_ORDER + _P_NEGATIVE_IMAGINARY_AXIS_ORDER_DELTA
@@ -3012,7 +3034,8 @@ function _try_p_negative_imaginary_axis_build_consensus(
                 tol=tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return fallback
     end
     if _p_negative_imaginary_axis_nonrotating(fallback)
@@ -3155,7 +3178,8 @@ function _negative_imaginary_axis_partner_retry(route, s, l, m, a, omega, branch
                 tol=tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     confirmation = try
@@ -3166,7 +3190,8 @@ function _negative_imaginary_axis_partner_retry(route, s, l, m, a, omega, branch
                 tol=tolerance,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     _, _, agreement = _unit_pair_errors(candidate, confirmation)
@@ -3428,7 +3453,8 @@ function _negative_imaginary_axis_side_retry(route, s, l, m, a, omega)
             s, l, m, a, axis_omega)
         negative_imaginary_axis_strength_fast(
             s, l, m, a, axis_omega, axis_params.lambda)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     strength.certificate_accepted || return route
@@ -3443,13 +3469,15 @@ function _negative_imaginary_axis_side_retry(route, s, l, m, a, omega)
             ComplexF64(offsets[1], imag(omegac)),
             tolerance,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         try
             _negative_imaginary_axis_in_rational(
                 s, l, m, a,
                 ComplexF64(offsets[1], imag(omegac)),
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             return route
         end
     end
@@ -3461,7 +3489,8 @@ function _negative_imaginary_axis_side_retry(route, s, l, m, a, omega)
             factors,
             in_source.pair,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     second = try
@@ -3472,7 +3501,8 @@ function _negative_imaginary_axis_side_retry(route, s, l, m, a, omega)
             factors,
             in_source.pair,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     _, _, agreement = _amplitude_pair_errors(
@@ -3667,7 +3697,8 @@ function _try_exact_pole_reciprocal(
             N=order,
             tol=tolerance,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     confirmation_order = order + _POLE_RECIPROCAL_ORDER_DELTA
@@ -3679,7 +3710,8 @@ function _try_exact_pole_reciprocal(
             N=confirmation_order,
             tol=tolerance,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return route
     end
     iszero(up_route.reflection) && return route
@@ -3735,7 +3767,7 @@ function _apply_exact_pole_normalization(route::ComplexRoute)
     raw_errors = try
         amplitude_errors(route)
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         (NaN, NaN)
     end
     scale = max(abs(route.incidence), abs(route.reflection))
@@ -3994,6 +4026,7 @@ function _complex_route_impl(
                 defer_relaxed_rotation=!pinned_controls,
             )
         catch exception
+            absorbable(exception) || rethrow()
             build_error = exception
             nothing
         end
@@ -4021,6 +4054,7 @@ function _complex_route_impl(
                     _complex_p_route(s, l, m, a, omega, branch; tol)
                 end
             catch p_error
+                absorbable(p_error) || rethrow()
                 p_error isa ErrorException && startswith(
                     p_error.msg, _P_ROUTE_NAN_AMPLITUDE_ERROR) ||
                     (_replay_logs(p_logs); rethrow())
@@ -4672,7 +4706,7 @@ function _complex_amplitude_certificate(route::ComplexRoute)
     error = try
         maximum(_certificate_amplitude_errors(route, amplitude_errors(route)))
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         NaN
     end
     return (certified=true, estimated_error=Float64(error), uncertified_stages=())

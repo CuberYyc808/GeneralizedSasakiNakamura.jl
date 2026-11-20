@@ -1,5 +1,8 @@
 module GeneralizedSasakiNakamura
 
+include("Errors.jl")
+using .Errors: absorbable
+
 include("Homogeneous/Kerr.jl")
 include("Homogeneous/Coordinates.jl")
 include("Homogeneous/AsymptoticExpansionCoefficients.jl")
@@ -652,6 +655,7 @@ function GSN_radial(
                 s, l, m, a, omega, boundary_condition;
                 xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
         catch err
+            absorbable(err) || rethrow()
             # The legacy route cannot honor a requested ISEM junction, and the ODE routes are
             # binary64: arbitrary-precision inputs report the ISEM failure instead.
             xm === nothing || rethrow()

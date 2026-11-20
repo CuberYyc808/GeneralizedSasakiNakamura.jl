@@ -171,7 +171,8 @@ function _public_check_stop(scope)
     if callback !== nothing
         requested = try
             callback()
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             request_submission_cancel!(scope; reason = "stop callback raised an exception")
             rethrow()
         end

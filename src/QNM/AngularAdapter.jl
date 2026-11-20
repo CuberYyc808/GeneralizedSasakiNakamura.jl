@@ -36,7 +36,8 @@ function _require_qnm_angular_backend()
     isempty(missing_apis) && return nothing
     backend_path = try
         pathof(SpinWeightedSpheroidalHarmonics)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     throw(ArgumentError(

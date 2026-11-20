@@ -411,7 +411,8 @@ function _negative_imaginary_axis_edge_scan(mode::QNMMode, a::T, gamma_center, r
             abs(leaver_radial_residual(mode, a, omega;
                 residual_options..., require_cf_convergence=false).value) *
                 prod(abs(omega - pole) for pole in poles; init=one(T))
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             T(Inf)
         end
         isfinite(value) ? T(value) : T(Inf)
@@ -603,7 +604,8 @@ function _near_axis_precision_check(mode::QNMMode, a::Float64,
         polished = try
             _polish_frequency_root(mode, B(a), _complex_of_type(B, omega);
                 options...)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         polished === nothing && return (verified=false,
@@ -635,7 +637,7 @@ function _near_axis_float64_check(mode::QNMMode, a::Float64, omega::ComplexF64, 
             root_tolerance=Float64(root_tolerance), stability_tolerance=Float64(stability_tolerance),
             near_axis=true)
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         nothing
     end
     certificate === nothing && return (verified=false, estimated=false, precision_bits=53, converged=false,

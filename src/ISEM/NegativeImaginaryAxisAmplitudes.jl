@@ -1,4 +1,5 @@
 module NegativeImaginaryAxisAmplitudes
+using ...Errors: absorbable
 
 # Special routes for complex frequencies near the negative imaginary axis: replace or
 # check the amplitudes of a ComplexRoute with the analytic MST amplitudes and anchor
@@ -155,7 +156,8 @@ function _anchor_switch_x(anchored, original)
         x < original.match_x || break
         estimate(evaluator) = try
             ComplexRational._state_x(evaluator, x).error
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             Inf
         end
         estimate(anchored) <= estimate(original) || break
@@ -238,7 +240,8 @@ function _in_real_axis_anchor(route, evaluator)
             controls,
             match_x=rational.match_x,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return rejected(:construction_error)
     end
     basis.endpoint_valid ||
@@ -574,7 +577,8 @@ function _mano_suzuki_takasugi_out_anchor(
                 params.omega,
                 params.lambda,
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
     else
@@ -591,7 +595,8 @@ function _mano_suzuki_takasugi_out_anchor(
                     tolerance=_STATE_ANCHOR_SUM_TOLERANCE,
                     nu=selected_nu,
                 )
-            catch
+            catch caught
+                absorbable(caught) || rethrow()
                 nothing
             end
             if selected !== nothing &&
@@ -939,7 +944,8 @@ function _state_anchor(
         state = ComplexRational._state_x(
             evaluator, _STATE_ANCHOR_X)
         (state.X, state.dXdx)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         (ComplexF64(NaN, NaN), ComplexF64(NaN, NaN))
     end
     target = (anchor.X, anchor.dXdx)
@@ -1038,7 +1044,8 @@ function _analytic_result(route)
         principal = try
             mano_suzuki_takasugi_principal_amplitudes(
                 evaluator.coefficients, route.branch)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         principal !== nothing &&
@@ -1047,7 +1054,8 @@ function _analytic_result(route)
     refined_nu = try
         mano_suzuki_takasugi_nu_complex(
             p.s, p.l, p.m, p.a, p.omega, p.lambda)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         nothing
     end
     if refined_nu !== nothing
@@ -1062,7 +1070,8 @@ function _analytic_result(route)
                 route.branch;
                 nu=refined_nu,
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         refined !== nothing && refined.certificate_accepted &&
@@ -1106,13 +1115,15 @@ end
     pole_normalization && return false
     branch_symbol = try
         ComplexFrequency._normalize_branch(branch)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return false
     end
     branch_symbol in (:IN, :UP) || return false
     af = try
         Float64(a)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return false
     end
     kappa_squared = (1.0 - af) * (1.0 + af)
@@ -1175,17 +1186,20 @@ function _fast_route(
 
     params = try
         gsn_parameters(s, l, m, a, omega)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     data = try
         ManoSuzukiTakasugiInfinity._mano_suzuki_takasugi_data(params)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     result = try
         ManoSuzukiTakasugiInfinity._principal_amplitudes(data, branch_symbol)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     result.certificate_accepted || return nothing
@@ -1205,7 +1219,8 @@ function _fast_route(
     )
     coefficients = try
         gsn_coefficients(params; controls=direct_controls)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     state = try
@@ -1254,7 +1269,8 @@ function _fast_route(
                 certified=true,
             )
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     all(_finite, (state.X, state.dXdx)) || return nothing
@@ -1285,7 +1301,8 @@ function _fast_route(
             params.omega,
             params.lambda,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     factors =
@@ -1724,7 +1741,8 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
         (near_nia || state_trigger) || return route
         anchor = try
             _state_anchor(route)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             (evaluator=route.state_evaluator, metadata=(;))
         end
         return _state_overlay(route, anchor)
@@ -1756,7 +1774,8 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
                 nu=nu_value,
                 require_certificate=true,
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             (evaluator=route.state_evaluator, metadata=(;))
         end
         return _retain_analytic_agreement(
@@ -1769,7 +1788,8 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
     # path; which amplitude values are reported does not change it.
     anchor = try
         _state_anchor(route; nu=nu_value, require_certificate=true)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         (evaluator=route.state_evaluator, metadata=(;))
     end
     anchored_route = _state_overlay(route, anchor)
@@ -1880,7 +1900,8 @@ function _build_triggered(s, l, m, a, omega, branch)
     route = try
         ComplexFrequency._complex_p_route(
             s, l, m, a, omega, branch)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     result = try
@@ -1893,13 +1914,15 @@ function _build_triggered(s, l, m, a, omega, branch)
             route.params.lambda,
             route.branch,
         )
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
     result.certificate_accepted || return nothing
     anchor = try
         _state_anchor(route)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         (evaluator=route.state_evaluator, metadata=(;))
     end
     return _overlay(

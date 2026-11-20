@@ -1,4 +1,5 @@
 module RadialFunctions
+using ...Errors: absorbable
 
 using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
@@ -648,7 +649,7 @@ function _route_certificate(route::Route)
         incidence, reflection = Matching.amplitude_errors(route)
         Matching._complex_path_switch(route) ? incidence : max(incidence, reflection)
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         NaN
     end
     return (certified=true, estimated_error=Float64(error), uncertified_stages=())

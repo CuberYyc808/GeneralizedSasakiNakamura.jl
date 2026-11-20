@@ -172,7 +172,7 @@ function _qnm_selected_excitation(root, options; detailed=false)
         attempt((match_radius, horizon_tortoise)) = try
             _qnm_checked_variational(root; legacy..., match_radius, horizon_tortoise)
         catch err
-            err isa InterruptException && rethrow()
+            absorbable(err) || rethrow()
             get(options,:backend,:auto) === :variational && rethrow()
             nothing
         end

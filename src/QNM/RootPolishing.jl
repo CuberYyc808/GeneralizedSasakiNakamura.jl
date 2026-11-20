@@ -3333,6 +3333,7 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
             ),
         )
     catch error
+        absorbable(error) || rethrow()
         return failed_result(current, :evaluation_error, (
             input_type=string(typeof(a)),
             spin_path=accepted_spins,

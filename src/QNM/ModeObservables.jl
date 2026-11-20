@@ -200,6 +200,7 @@ function _qnm_branch_observables(root, excitation_options;
         detailed ? qnm_excitation_factor(root; excitation_options...) :
             _qnm_gsn_excitation_factor(root; excitation_options...)
     catch error
+        absorbable(error) || rethrow()
         return QNMResult((
             a=input_a,
             mode=root.mode,

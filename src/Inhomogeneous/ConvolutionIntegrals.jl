@@ -1,4 +1,5 @@
 module ConvolutionIntegrals
+using ..Errors: absorbable
 
 using LinearAlgebra
 using SpinWeightedSpheroidalHarmonics
@@ -106,7 +107,7 @@ function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing,
     try
         return f()
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         if (omega !== nothing && _near_static_overflow(err, omega, Ωφ)) || _negligible_overflow(err, omega, l, rmax)
             res = _zero_radiative_mode(omega, nothing; reason = "near_static_overflow")
             res["NearStaticOverflow"] = true
@@ -120,7 +121,7 @@ function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing,
     try
         return task_local_storage(f, _FORCE_ORDINARY_KEY, true)
     catch err
-        err isa InterruptException && rethrow()
+        absorbable(err) || rethrow()
         if negligible_if_failed
             res = _zero_radiative_mode(omega === nothing ? 0.0 : omega, nothing; reason = "negligible_failed_mode")
             res["NearStaticOverflow"] = true
@@ -478,7 +479,7 @@ function _isem_wronskian_check(s, l, m, a, omega, radii; route = nothing)
             pup = Rup.Teukolsky_solution.pair_value(r)
             (r^2 - 2r + a^2)^(s + 1) * (pin[1] * pup[2] - pin[2] * pup[1])
         catch err
-            err isa InterruptException && rethrow()
+            absorbable(err) || rethrow()
             continue
         end
         push!(ws, ComplexF64(w))
@@ -4019,7 +4020,8 @@ function _walk_factors_get!(build, factors::_SharedFactors, key)
         end
         try
             value = build()
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             lock(factors.lock) do
                 delete!(factors.pending, key)
             end

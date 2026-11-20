@@ -14,6 +14,7 @@
 # diagnostics (`complex_loss_digits`); the MST representation of the infinity side replaces it in
 # ManoSuzukiTakasugiGeneric.
 module ArbitraryPrecisionRoute
+using ...Errors: absorbable
 
 using ...Coordinates: r_from_rstar, rstar_from_r, horizon_distance_from_rstar
 using ...ConversionFactors
@@ -360,7 +361,8 @@ function _nu_seeds(p::GSNParameters)
                 C(p.l) + C(_mano_suzuki_takasugi_nu_offset(p.s, p.l, p.m, a, real(w), lambda)) :
                 C(mano_suzuki_takasugi_nu_complex(p.s, p.l, p.m, a, w, lambda))
             isfinite(seed) && push!(seeds, seed)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
         end
     end
     push!(seeds, C(p.l))

@@ -1,4 +1,5 @@
 module Coordinates
+using ..Errors: absorbable
 
 using ..Kerr
 using Roots
@@ -82,7 +83,8 @@ function _r_from_rstar_exact_extremal(rstar)
         hnewton = _exact_extremal_newton_h(rstar, _exact_extremal_initial_h(rstar))
         residual = abs(_rstar_from_exact_extremal_rp(hnewton) - rstar)
         residual <= 1e-10 ? hnewton : _exact_extremal_bracket_h(rstar)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         _exact_extremal_bracket_h(rstar)
     end
     return 1 + h

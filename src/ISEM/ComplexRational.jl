@@ -1,4 +1,5 @@
 module ComplexRational
+using ...Errors: absorbable
 
 using LinearAlgebra: eigvals
 using ...Coordinates: r_from_rstar, rstar_from_r
@@ -1143,7 +1144,8 @@ function _horizon_candidate!(
                 checks[2].state,
                 denominator.denominator,
             ).corrected_error
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             Inf
         end
     else
@@ -1313,6 +1315,7 @@ function _select_horizon_path(
                 coefficients, solutions, kinds, match_x, settings;
                 pair_abel_target=fallback_pair_abel_target)
         catch exception
+            absorbable(exception) || rethrow()
             message = sprint(showerror, exception)
             startswith(message, "no certified real-axis horizon path") ||
                 rethrow()
@@ -1324,6 +1327,7 @@ function _select_horizon_path(
             coefficients, solutions, kinds, p, match_x, settings;
             pair_abel_target)
     catch exception
+        absorbable(exception) || rethrow()
         message = sprint(showerror, exception)
         expected = occursin("two-ray coordinate path", message) ||
             occursin("no certified two-ray horizon path", message)
@@ -1339,6 +1343,7 @@ function _select_horizon_path(
                 coefficients, solutions, kinds, match_x, settings;
                 pair_abel_target=fallback_pair_abel_target)
         catch fallback_exception
+            absorbable(fallback_exception) || rethrow()
             error(sprint(showerror, fallback_exception) *
                 " Rotated-path failure: " * message)
         end
@@ -1522,7 +1527,8 @@ function _select_principal_mano_suzuki_takasugi_infinity_path(
         candidate = try
             _principal_mano_suzuki_takasugi_candidate!(
                 coefficients, plan, solutions, kinds, path, settings)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         candidate === nothing && continue
@@ -2489,6 +2495,7 @@ function _infinity_overlap_match(
                     target.scaled_y_patches + basis.scaled_y_patches,
             )
         catch exception
+            absorbable(exception) || rethrow()
             push!(failures, "index=$index: $(sprint(showerror, exception))")
             nothing
         end
@@ -2763,7 +2770,8 @@ function _horizon_stokes_consensus_retry(
                 settings,
                 angle_offset,
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         candidate === nothing && continue
@@ -2883,7 +2891,8 @@ function _matching_consensus_retry(
                 direction * fraction * rstar_scale,
                 settings,
             )
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if candidate !== nothing
@@ -3000,7 +3009,8 @@ function complex_offpole_match_plateau_candidate(
                     fraction * rstar_scale,
                     settings,
                 )
-            catch
+            catch caught
+                absorbable(caught) || rethrow()
                 nothing
             end
         end
@@ -3170,6 +3180,7 @@ function _solve_at_match(
                     horizon_seed.checks[1].state,
                     settings)
             catch exception
+                absorbable(exception) || rethrow()
                 error("horizon path propagation failed: " *
                     sprint(showerror, exception))
             end
@@ -3186,6 +3197,7 @@ function _solve_at_match(
                         variable_scale=locals.infinity_in.variable_scale,
                     )
                 catch exception
+                    absorbable(exception) || rethrow()
                     error("infinity endpoint matching propagation failed: " *
                         sprint(showerror, exception))
                 end
@@ -3197,6 +3209,7 @@ function _solve_at_match(
                         infinity_seed.checks[2].state,
                         settings)
                 catch exception
+                    absorbable(exception) || rethrow()
                     error("infinity path propagation failed: " *
                         sprint(showerror, exception))
                 end
@@ -3214,6 +3227,7 @@ function _solve_at_match(
                         horizon_seed.checks[2].state,
                         settings)
                 catch exception
+                    absorbable(exception) || rethrow()
                     error("horizon path propagation failed: " *
                         sprint(showerror, exception))
                 end
@@ -3235,6 +3249,7 @@ function _solve_at_match(
                         variable_scale=locals.infinity_out.variable_scale)
                 end
             catch exception
+                absorbable(exception) || rethrow()
                 error("infinity path propagation failed: " *
                     sprint(showerror, exception))
             end
@@ -3248,6 +3263,7 @@ function _solve_at_match(
                         settings,
                     )
                 catch exception
+                    absorbable(exception) || rethrow()
                     error("horizon endpoint matching propagation failed: " *
                         sprint(showerror, exception))
                 end
@@ -3313,6 +3329,7 @@ function _solve_at_match(
                 _abel_normalize_second(
                     basis1, basis2, denominator_result.denominator)
             catch exception
+                absorbable(exception) || rethrow()
                 infinity_endpoint_match === nothing &&
                     _abel_range_error(exception) || rethrow()
                 infinity_endpoint_match = try
@@ -3324,6 +3341,7 @@ function _solve_at_match(
                         variable_scale=locals.infinity_in.variable_scale,
                     )
                 catch fallback_exception
+                    absorbable(fallback_exception) || rethrow()
                     error("infinity overlap matching fallback failed: " *
                         sprint(showerror, fallback_exception))
                 end
@@ -3367,6 +3385,7 @@ function _solve_at_match(
                 _abel_normalize_second(
                     basis1, basis2, denominator_result.denominator)
             catch exception
+                absorbable(exception) || rethrow()
                 horizon_endpoint_match === nothing &&
                     _abel_range_error(exception) || rethrow()
                 horizon_endpoint_match = try
@@ -3378,6 +3397,7 @@ function _solve_at_match(
                         settings,
                     )
                 catch fallback_exception
+                    absorbable(fallback_exception) || rethrow()
                     error("horizon endpoint matching fallback failed: " *
                         sprint(showerror, fallback_exception))
                 end
@@ -3830,6 +3850,7 @@ function complex_rational_build(
         _solve_at_match(
             coefficients, locals, branch, initial_match_rstar, settings)
     catch exception
+        absorbable(exception) || rethrow()
         xm === nothing && _junction_retry_error(
             sprint(showerror, exception)) || rethrow()
         searched = _junction_search(
@@ -3878,7 +3899,8 @@ function complex_rational_build(
         retry_seconds = @elapsed shifted = try
             _solve_at_match(
                 coefficients, locals, branch, shifted_rstar, settings)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             nothing
         end
         if shifted !== nothing &&
@@ -4376,6 +4398,7 @@ function _states_x(
                 evaluator.settings,
             )
         catch error
+            absorbable(error) || rethrow()
             if !(error isa ErrorException &&
                     startswith(error.msg, _PATCH_LIMIT_ERROR))
                 rethrow()

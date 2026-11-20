@@ -1,4 +1,5 @@
 module ModeSummation
+using ..Errors: absorbable
 
 using KerrGeodesics
 using LsqFit
@@ -28,7 +29,8 @@ function _fit_shell_estimate(model, idxs, vals, next_index, p0, fallback)
         fit = curve_fit(model, xdata, ydata, p0)
         est = abs(model(next_index, fit.param))
         return isfinite(est) ? est : fallback
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return fallback
     end
 end
@@ -464,7 +466,8 @@ function _auto_cap_probe_fluxes(a, r, x_probe)
                 end
             end
         end
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return nothing
     end
 end
@@ -522,7 +525,8 @@ end
 function auto_nmax_estimate(a, p, e, x, tol, lmax)
     scale = try
         _radial_harmonic_scale(a, p, e, x)
-    catch
+    catch caught
+        absorbable(caught) || rethrow()
         return (cap = AUTO_NMAX_MAX, status = :scale_failed)
     end
     isfinite(scale) || return (cap = AUTO_NMAX_MAX, status = :scale_failed)
@@ -953,7 +957,8 @@ function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimu
         # beyond the stop: the serial walk never computes these, so their errors do not count
         try
             wait(task)
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
         end
         unused += 1
     end
@@ -1181,8 +1186,9 @@ function _run_boundaries(f_inf, f_hor, concurrent::Bool)
     inf_task = Threads.@spawn f_inf()
     hor = try
         f_hor()
-    catch
-        try; wait(inf_task); catch; end   # the other boundary's walks cannot be cancelled: let it finish
+    catch caught
+        absorbable(caught) || rethrow()
+        try; wait(inf_task); catch caught; absorbable(caught) || rethrow(); end   # the other boundary's walks cannot be cancelled: let it finish
         rethrow()
     end
     inf = try
@@ -3069,7 +3075,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             fit = curve_fit(model, xdata, ydata, p0)
             est = abs(model(n, fit.param))
             isfinite(est) ? est : fallback
-        catch
+        catch caught
+            absorbable(caught) || rethrow()
             fallback
         end
     end
