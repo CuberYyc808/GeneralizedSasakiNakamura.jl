@@ -267,80 +267,17 @@ function _polish_extremal_damped_root_with_gsn(result::LeaverResult;
     initial = _wronskian_incidence(
         result, result.omega; radial_solver)
     initial_scaled = T(_scaled_wronskian_incidence(initial))
-    if get(result.provenance, :root_equation, :none) ==
-            :richartz_extremal_recurrence
-        # The exact-extremal recurrence fixes the frequency; the radial
-        # incidence is only a closure check of the radial basis.
-        return _replace_extremal_damped_root_frequency(
-            result, result.omega, (
-                exact_gsn_root_polish=initial_scaled <= tolerance &&
-                    initial.wronskian_drift <= wronskian_gate ?
-                    :not_needed : :radial_closure_failed,
-                exact_gsn_initial_scaled_incidence=initial_scaled,
-                exact_gsn_selected_scaled_incidence=initial_scaled,
-                exact_gsn_root_shift=zero(T),
-                exact_gsn_polish_rows=NamedTuple[],
-            ))
-    end
-    if initial_scaled <= tolerance &&
-            initial.wronskian_drift <= wronskian_gate
-        return _replace_extremal_damped_root_frequency(
-            result, result.omega, (
-                exact_gsn_root_polish=:not_needed, exact_gsn_initial_scaled_incidence=initial_scaled,
-                exact_gsn_selected_scaled_incidence=initial_scaled, exact_gsn_root_shift=zero(T),
-                exact_gsn_polish_rows=NamedTuple[],
-            ))
-    end
-
-    base_step = T(1.0e-4) * max(one(T), abs(result.omega))
-    best_omega = result.omega
-    best_scaled = initial_scaled
-    rows = NamedTuple[]
-    for factor in T[one(T), T(2), T(0.5)]
-        step = base_step * factor
-        plus = _wronskian_incidence(
-            result, result.omega + step; radial_solver)
-        minus = _wronskian_incidence(
-            result, result.omega - step; radial_solver)
-        derivative = (plus.incidence - minus.incidence) / (2step)
-        finite_derivative = isfinite(derivative) &&
-            abs(derivative) > sqrt(eps(T))
-        candidate_omega = finite_derivative ?
-            result.omega - initial.incidence / derivative : result.omega
-        root_shift = abs(candidate_omega - result.omega) /
-            max(one(T), abs(result.omega))
-        candidate = if finite_derivative && root_shift <= T(1.0e-5)
-            _wronskian_incidence(
-                result, candidate_omega; radial_solver)
-        else
-            initial
-        end
-        candidate_scaled = T(_scaled_wronskian_incidence(candidate))
-        candidate_healthy = finite_derivative &&
-            root_shift <= T(1.0e-5) &&
-            candidate.wronskian_drift <= wronskian_gate &&
-            isfinite(candidate_scaled)
-        push!(rows, (
-            factor, step, derivative, candidate_omega, root_shift=T(root_shift), scaled_incidence=candidate_scaled,
-            wronskian_drift=T(candidate.wronskian_drift), healthy=candidate_healthy,
-        ))
-        if candidate_healthy && candidate_scaled < best_scaled
-            best_omega = candidate_omega
-            best_scaled = candidate_scaled
-        end
-        best_scaled <= tolerance && break
-    end
-    status = best_scaled <= tolerance ? :accepted : :failed
+    # Every extremal damped simple pole comes from the exact-extremal (Richartz) recurrence, which fixes the
+    # frequency; the radial incidence is only a closure check of the radial basis.
     return _replace_extremal_damped_root_frequency(
-        result, best_omega, (
-            exact_gsn_root_polish=status,
+        result, result.omega, (
+            exact_gsn_root_polish=initial_scaled <= tolerance &&
+                initial.wronskian_drift <= wronskian_gate ?
+                :not_needed : :radial_closure_failed,
             exact_gsn_initial_scaled_incidence=initial_scaled,
-            exact_gsn_selected_scaled_incidence=best_scaled,
-            exact_gsn_root_shift=T(abs(best_omega - result.omega) /
-                max(one(T), abs(result.omega))),
-            exact_gsn_incidence_tolerance=tolerance,
-            exact_gsn_wronskian_tolerance=wronskian_gate,
-            exact_gsn_polish_rows=rows,
+            exact_gsn_selected_scaled_incidence=initial_scaled,
+            exact_gsn_root_shift=zero(T),
+            exact_gsn_polish_rows=NamedTuple[],
         ))
 end
 
