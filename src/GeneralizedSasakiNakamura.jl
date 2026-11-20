@@ -441,8 +441,50 @@ function _use_lhp_highspin_p_fallback(a, omega, boundary_condition; xm, N, tol, 
     return abs(real(a)) >= 0.99
 end
 
+# Direct DOWN and OUT at real frequency: the target is marched from its own end (OUT from the horizon like IN, DOWN
+# from infinity like UP) and expressed in the pair of the other end: one solve instead of IN and UP, and no
+# cancellation between them. The route belongs to the IN (OUT) or UP (DOWN) side, so its incidence and reflection are
+# the coefficients of (i_in, i_out) for OUT and of (h_out, h_in) for DOWN; OUT's incidence is the outgoing wave at
+# infinity and DOWN's the ingoing wave at the horizon (the definitions of the IN + UP combination), hence the swap.
+# Returns nothing where no direct route exists (complex frequency, small-frequency regime).
+function _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition; xm, N, tol, sfe, lfe)
+    isreal(omega) && !iszero(omega) && _binary64_inputs(a, omega) || return nothing
+    # At the superradiant threshold the two horizon waves coincide: OUT and DOWN keep the IN + UP combination there.
+    _is_horizon_superradiance_frequency(a, m, omega) && return nothing
+    route = try
+        ISEM.radial_route(s, l, m, a, real(omega), boundary_condition == OUT ? :OUT : :DOWN;
+            N=N, xm=xm, tol=tol,
+            small_frequency_expansion=sfe === nothing ? :auto : sfe,
+            large_frequency_expansion=lfe === nothing ? :auto : lfe)
+    catch err
+        err isa ISEM.DirectBoundaryUnavailable || rethrow()
+        return nothing
+    end
+    side = ISEM.gsn_radial_function(route)
+    return GSNRadialFunction(
+        side.mode,
+        boundary_condition,
+        side.rsin,
+        side.rsout,
+        side.rsmp,
+        side.horizon_expansion_order,
+        side.infinity_expansion_order,
+        side.transmission_amplitude,
+        side.reflection_amplitude,
+        side.incidence_amplitude,
+        side.numerical_GSN_solution,
+        side.numerical_Riccati_solution,
+        side.GSN_solution,
+        side.normalization_convention,
+        side.method,
+    )
+end
+
 function _gsn_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
     if boundary_condition == DOWN || boundary_condition == OUT
+        direct = _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition;
+            xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
+        direct === nothing || return direct
         Xin = _gsn_from_isem(s, l, m, a, omega, IN;
             xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
         Xup = _gsn_from_isem(s, l, m, a, omega, UP;
@@ -569,6 +611,10 @@ end
 
 function _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
     if boundary_condition == DOWN || boundary_condition == OUT
+        direct = _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition;
+            xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
+        direct === nothing ||
+            return _teukolsky_from_gsn(direct, s, m, a, omega, ComplexF64, tol)
         Rin = _teukolsky_from_isem(s, l, m, a, omega, IN;
             xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
         Rup = _teukolsky_from_isem(s, l, m, a, omega, UP;
@@ -591,7 +637,10 @@ and boundary condition specified by `boundary_condition`, which can be either
 - `OUT` for purely-outgoing at the horizon,
 - `DOWN` for purely-ingoing at infinity.
 
-Note that the `OUT` and `DOWN` solutions are constructed by linearly combining the `IN` and `UP` solutions.
+With ISEM at real frequency the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own
+end (`OUT` from the horizon, `DOWN` from infinity) and matched to the pair of the other end. At complex frequency, in
+the small-frequency regime and at the superradiant threshold they are constructed by linearly combining the `IN` and
+`UP` solutions.
 
 The solution method is determined by the keyword `method` (default: `"auto"`).
 The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it log a warning and fall back to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
@@ -1295,7 +1344,10 @@ and boundary condition specified by `boundary_condition`, which can be either
 - `OUT` for purely-outgoing at the horizon,
 - `DOWN` for purely-ingoing at infinity.
 
-Note that the `OUT` and `DOWN` solutions are constructed by linearly combining the `IN` and `UP` solutions.
+With ISEM at real frequency the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own
+end (`OUT` from the horizon, `DOWN` from infinity) and matched to the pair of the other end. At complex frequency, in
+the small-frequency regime and at the superradiant threshold they are constructed by linearly combining the `IN` and
+`UP` solutions.
 
 The full GSN solution is converted to the corresponding Teukolsky solution $(R(r), dR/dr)$ and 
 the incidence, reflection and transmission amplitude are converted from the GSN formalism to the Teukolsky formalism 

@@ -57,7 +57,7 @@ using ..Parameters:
     is_binary64_parameters,
     select_spin_regime
 
-export Route, ConjugatedRoute, RoutePlan
+export Route, ConjugatedRoute, RoutePlan, DirectBoundaryUnavailable
 export match_route, radial_route
 export evaluate_route, route_state, route_patch_count, route_plan_of, route_truncations
 
@@ -184,10 +184,30 @@ end
 
 function _normalized_route_branch(branch)
     text = uppercase(String(Symbol(branch)))
-    text == "IN" && return :IN
-    text == "UP" && return :UP
-    throw(ArgumentError("ISEM GSN route branch must be :IN or :UP."))
+    text in ("IN", "UP", "OUT", "DOWN") && return Symbol(text)
+    throw(ArgumentError("ISEM GSN route branch must be :IN, :UP, :OUT or :DOWN."))
 end
+
+"""
+    DirectBoundaryUnavailable(branch, regime)
+
+Thrown when an OUT or DOWN route is asked for in a regime whose machinery builds only the IN and UP targets
+(`regime = :small_frequency_expansion`); the caller then combines IN and UP.
+"""
+struct DirectBoundaryUnavailable <: Exception
+    branch::Symbol
+    regime::Symbol
+end
+
+Base.showerror(io::IO, err::DirectBoundaryUnavailable) =
+    print(io, "no direct ISEM route for ", err.branch, " in the ", err.regime, " regime")
+
+# A boundary condition is (end, wave): IN = (horizon, in), OUT = (horizon, out), UP = (infinity, out), DOWN =
+# (infinity, in). A route marches the target solution from its own end and expresses it in the pair of the other end,
+# so OUT is built like IN (target from the horizon) and DOWN like UP (target from infinity); the route records the
+# side, and the caller that asked for OUT or DOWN reads the amplitudes as coefficients of that far pair.
+_route_side(branch::Symbol) = branch in (:IN, :OUT) ? :IN : :UP
+_route_wave(branch::Symbol) = branch in (:IN, :DOWN) ? :in : :out
 
 _basis_tuple(basis::Basis) = (X=basis.match_X, dXdx=basis.match_dXdx)
 _logscaled_match_state(basis::LogScaledBasis) = basis.match_state
@@ -1012,12 +1032,16 @@ function _match_impl(
 )
     base_ctrl = controls === nothing ? gsn_controls(coefficients.params) : controls
     route_branch = _normalized_route_branch(branch)
+    side = _route_side(route_branch)
     ctrl = _with_ordinary_defaults(
         _with_low_frequency_defaults(
-            base_ctrl, coefficients.params, route_branch),
+            base_ctrl, coefficients.params, side),
         coefficients.params,
-        route_branch,
+        side,
     )
+    # The small-frequency (MST) machinery builds the IN and UP targets only.
+    route_branch in (:OUT, :DOWN) && ctrl.small_frequency_expansion &&
+        throw(DirectBoundaryUnavailable(route_branch, :small_frequency_expansion))
     coefficients = near_extreme_prepare(coefficients, ctrl)
     # The small-frequency-expansion (MST) machinery is large; with small_frequency_expansion as a type parameter an ordinary
     # solve compiles only the branches it can reach.
@@ -1037,6 +1061,8 @@ function _match_body(
     ::Val{UseSmallFrequencyExpansion},
 ) where {UseSmallFrequencyExpansion}
     match_x = ctrl.match_x
+    side = _route_side(route_branch)
+    target_wave = _route_wave(route_branch)
     selection = UseSmallFrequencyExpansion ? nothing : select_infinity_endpoint(
         coefficients,
         match_x;
@@ -1046,7 +1072,7 @@ function _match_body(
     scratch = IterationScratch(coefficients,
         getproperty(ctrl, :ordinary_order);
         force_eikonal=ctrl.large_frequency_expansion, large_frequency_expansion=ctrl.large_frequency_expansion, small_frequency_expansion=UseSmallFrequencyExpansion,
-        route_branch=route_branch)
+        route_branch=side)
     mst_branches = route_branch == :IN ? (:in, :out) : (:out,)
     mst_plan = if UseSmallFrequencyExpansion
         try
@@ -1070,8 +1096,8 @@ function _match_body(
     endpoint_y = mst_plan === nothing ? selection.endpoint_y :
         1.0 - mst_plan.seed_x
 
-    if route_branch == :IN
-        h_in = iterate_from_zero(coefficients, :in; controls=ctrl, match_x=match_x, scratch=scratch)
+    if side == :IN
+        h_in = iterate_from_zero(coefficients, target_wave; controls=ctrl, match_x=match_x, scratch=scratch)
         i_in, i_out, logscaled_mst = if UseSmallFrequencyExpansion
             try
                 incoming, outgoing = mano_suzuki_takasugi_infinity_pair(
@@ -1247,7 +1273,7 @@ function _match_body(
             end
         end
     else
-        (iterate_from_infinity(coefficients, :out;
+        (iterate_from_infinity(coefficients, target_wave;
             controls=ctrl, match_x, selection, scratch),
             false,
         )
@@ -1379,7 +1405,8 @@ end
     radial_route(s, l, m, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing, kwargs...)
     radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, kwargs...)
 
-Build the ISEM GSN route for the `:IN` or `:UP` solution. Extra keywords are
+Build the ISEM GSN route for the `:IN`, `:UP`, `:OUT` or `:DOWN` solution (OUT and DOWN are returned as routes of
+the IN and UP side whose amplitudes are the coefficients of the far pair, see `_route_side`). Extra keywords are
 passed to `gsn_controls` when `controls` is not given. A real negative
 frequency is solved at (-m, -omega) and returned as a `ConjugatedRoute`.
 """
@@ -1425,7 +1452,7 @@ function radial_route(
         return ConjugatedRoute(positive_route, params)
     end
     coefficients = gsn_coefficients(params; controls=ctrl)
-    return _complex_path_reflection(match_route(coefficients, branch; controls=ctrl))
+    return _matched_route(coefficients, branch, ctrl)
 end
 
 function radial_route(
@@ -1442,7 +1469,14 @@ function radial_route(
     end
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     coeffs = coefficients === nothing ? gsn_coefficients(params; controls=ctrl) : coefficients
-    return _complex_path_reflection(match_route(coeffs, branch; controls=ctrl))
+    return _matched_route(coeffs, branch, ctrl)
+end
+
+# The complex-path reflection (below) is a correction of the IN and UP reflection amplitudes; a direct OUT or DOWN
+# route is returned as matched.
+function _matched_route(coefficients, branch, ctrl)
+    route = match_route(coefficients, branch; controls=ctrl)
+    return _normalized_route_branch(branch) in (:OUT, :DOWN) ? route : _complex_path_reflection(route)
 end
 
 # High frequency: the reflected amplitude of a real-frequency IN or UP route is exponentially small next to the
