@@ -144,11 +144,7 @@ _finite_vector(values) = all(_finite, values)
 # the angular compression (l + 1/2)/kappa, the phase compression
 # max(|omega|, |k_H|, |m Omega_H|)/kappa, the frequency regime and the route
 # branch. Returns a EikonalSelection with the reason for the decision.
-function eikonal_preflight(
-    params,
-    regime::Symbol=:ordinary,
-    route_branch::Union{Nothing,Symbol}=nothing,
-)
+function eikonal_preflight(params, regime::Symbol=:ordinary, route_branch::Union{Nothing,Symbol}=nothing)
     l = getproperty(params, :l)
     m = getproperty(params, :m)
     a = getproperty(params, :a)
@@ -197,9 +193,7 @@ function eikonal_preflight(
 end
 
 function eikonal_candidate(
-        coefficients::CoefficientSet,
-        regime::Symbol=:ordinary,
-        route_branch::Union{Nothing,Symbol}=nothing,
+    coefficients::CoefficientSet, regime::Symbol=:ordinary, route_branch::Union{Nothing,Symbol}=nothing,
 )
     return eikonal_preflight(
         coefficients.params, regime, route_branch).candidate
@@ -317,12 +311,7 @@ end
 # xi = sqrt(f0), eta = integral of sqrt(ft), Z = ft^(-1/4), and plus/minus are
 # the amplitude corrections to `terms` orders in 1/(+xi) and 1/(-xi). Writes
 # into `scratch` (patches must copy it); nothing if a series is not finite.
-function _eikonal_plan!(
-    a_coeffs,
-    b_coeffs,
-    scratch::EikonalScratch,
-    terms::Integer=EIKONAL_TERMS,
-)
+function _eikonal_plan!(a_coeffs, b_coeffs, scratch::EikonalScratch, terms::Integer=EIKONAL_TERMS)
     terms >= 0 || throw(ArgumentError("eikonal term count must be non-negative."))
     A = _poly_copy!(scratch.plan_A, a_coeffs)
     B = _poly_copy!(scratch.plan_B, b_coeffs)
@@ -409,12 +398,7 @@ end
 
 # Allocating form of `_eikonal_plan!`: the plan vectors are fresh, so patches
 # built with `_patch` (no copy) stay valid after the next plan.
-function _eikonal_plan(
-    a_coeffs,
-    b_coeffs,
-    scratch::EikonalScratch,
-    terms::Integer=EIKONAL_TERMS,
-)
+function _eikonal_plan(a_coeffs, b_coeffs, scratch::EikonalScratch, terms::Integer=EIKONAL_TERMS)
     terms >= 0 || throw(ArgumentError("eikonal term count must be non-negative."))
     count = length(scratch.f)
     order = count - 1
@@ -516,15 +500,7 @@ function _eikonal_kernel(plan::EikonalPlan, X0, dX0)
     cminus = (dX0 * vp - X0 * dp) / denominator
     _finite(cplus) && _finite(cminus) || return nothing
     return EikonalKernel(
-        plan.A,
-        plan.B,
-        plan.xi,
-        plan.eta,
-        plan.Z,
-        plan.aint,
-        plan.plus,
-        plan.minus,
-        ComplexF64(cplus),
+        plan.A, plan.B, plan.xi, plan.eta, plan.Z, plan.aint, plan.plus, plan.minus, ComplexF64(cplus),
         ComplexF64(cminus),
     )
 end
@@ -722,10 +698,8 @@ function _kernel_steps(kernel1::EikonalKernel, kernel2::EikonalKernel, h)
     check1 = _pair_error((value1, derivative1), checked1)
     check2 = _pair_error((value2, derivative2), checked2)
     return (
-        (; value=value1, derivative=derivative1,
-            score=score1, check_error=check1),
-        (; value=value2, derivative=derivative2,
-            score=score2, check_error=check2),
+        (; value=value1, derivative=derivative1, score=score1, check_error=check1),
+        (; value=value2, derivative=derivative2, score=score2, check_error=check2),
     )
 end
 
@@ -768,37 +742,15 @@ end
 
 function _patch(kernel::EikonalKernel, center_x, next_x, scale)
     return EikonalPatch(
-        center_x,
-        next_x,
-        kernel.xi,
-        kernel.A,
-        kernel.B,
-        kernel.eta,
-        kernel.Z,
-        kernel.aint,
-        kernel.plus,
-        kernel.minus,
-        kernel.cplus,
-        kernel.cminus,
-        scale,
+        center_x, next_x, kernel.xi, kernel.A, kernel.B, kernel.eta, kernel.Z, kernel.aint, kernel.plus, kernel.minus,
+        kernel.cplus, kernel.cminus, scale,
     )
 end
 
 function _copy_patch(kernel::EikonalKernel, center_x, next_x, scale)
     return EikonalPatch(
-        center_x,
-        next_x,
-        kernel.xi,
-        copy(kernel.A),
-        copy(kernel.B),
-        copy(kernel.eta),
-        copy(kernel.Z),
-        copy(kernel.aint),
-        copy(kernel.plus),
-        copy(kernel.minus),
-        kernel.cplus,
-        kernel.cminus,
-        scale,
+        center_x, next_x, kernel.xi, copy(kernel.A), copy(kernel.B), copy(kernel.eta), copy(kernel.Z),
+        copy(kernel.aint), copy(kernel.plus), copy(kernel.minus), kernel.cplus, kernel.cminus, scale,
     )
 end
 
@@ -824,18 +776,8 @@ end
 # re-planning at each patch start. Returns patches, the final state and step
 # statistics, or nothing as soon as a plan or an accepted step is unavailable.
 function eikonal_path(
-    coefficients::CoefficientSet,
-    seed_x,
-    seed_X,
-    seed_dXdx,
-    target_x;
-    avec,
-    bvec,
-    pq,
-    scratch=EikonalScratch(),
-    residual_limit=EIKONAL_RESIDUAL_LIMIT,
-    check_limit=EIKONAL_CHECK_LIMIT,
-    terms::Integer=EIKONAL_TERMS,
+    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, scratch=EikonalScratch(),
+    residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT, terms::Integer=EIKONAL_TERMS,
     large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
@@ -894,20 +836,9 @@ end
 # when the full and split states agree within `split_limit`. With
 # `allow_partial`, a failure returns the patches built so far (with `x`).
 function eikonal_split(
-    coefficients::CoefficientSet,
-    seed_x,
-    seed_X,
-    seed_dXdx,
-    target_x;
-    avec,
-    bvec,
-    pq,
-    scratch=EikonalScratch(),
-    residual_limit=EIKONAL_RESIDUAL_LIMIT,
-    check_limit=EIKONAL_CHECK_LIMIT,
-    split_limit=EIKONAL_SPLIT_LIMIT,
-    terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
+    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, scratch=EikonalScratch(),
+    residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT, split_limit=EIKONAL_SPLIT_LIMIT,
+    terms::Integer=EIKONAL_TERMS, large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
     allow_partial::Bool=false,
 )
     current_x = Float64(seed_x)
@@ -926,14 +857,8 @@ function eikonal_split(
     middle_scratch = EikonalScratch(order)
     next_h_abs = Inf
     partial_result() = isempty(patches) ? nothing : (
-        patches=patches,
-        value=value,
-        derivative=derivative,
-        x=current_x,
-        max_step=max_step,
-        min_step=isfinite(min_step) ? min_step : 0.0,
-        max_residual=max_residual,
-        max_check=max_check,
+        patches=patches, value=value, derivative=derivative, x=current_x, max_step=max_step,
+        min_step=isfinite(min_step) ? min_step : 0.0, max_residual=max_residual, max_check=max_check,
         max_split=max_split,
     )
     while direction * (target - current_x) > 100eps(Float64)
@@ -1043,21 +968,9 @@ end
 # Paired form of `eikonal_split` with a common step size for both solutions.
 # Returns nothing (no partial result) when any step fails.
 function eikonal_split_pair(
-    coefficients::CoefficientSet,
-    seed_x,
-    seed_X1,
-    seed_dXdx1,
-    seed_X2,
-    seed_dXdx2,
-    target_x;
-    avec,
-    bvec,
-    pq,
-    scratch=EikonalScratch(),
-    residual_limit=EIKONAL_RESIDUAL_LIMIT,
-    check_limit=EIKONAL_CHECK_LIMIT,
-    split_limit=EIKONAL_SPLIT_LIMIT,
-    terms::Integer=EIKONAL_TERMS,
+    coefficients::CoefficientSet, seed_x, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2, target_x; avec, bvec, pq,
+    scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
+    split_limit=EIKONAL_SPLIT_LIMIT, terms::Integer=EIKONAL_TERMS,
     large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
@@ -1214,21 +1127,9 @@ end
 # Paired form of `eikonal_path`: two solutions share one plan per step (they
 # differ only in cplus/cminus) and advance with a common step size.
 function eikonal_pair(
-    coefficients::CoefficientSet,
-    seed_x,
-    seed_X1,
-    seed_dXdx1,
-    seed_X2,
-    seed_dXdx2,
-    target_x;
-    avec,
-    bvec,
-    pq,
-    scratch=EikonalScratch(),
-    residual_limit=EIKONAL_RESIDUAL_LIMIT,
-    check_limit=EIKONAL_CHECK_LIMIT,
-    terms::Integer=EIKONAL_TERMS,
-    large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
+    coefficients::CoefficientSet, seed_x, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2, target_x; avec, bvec, pq,
+    scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
+    terms::Integer=EIKONAL_TERMS, large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
     target = Float64(target_x)
@@ -1292,16 +1193,7 @@ end
 
 function _patch_kernel(patch::EikonalPatch)
     return EikonalKernel(
-        patch.A,
-        patch.B,
-        patch.xi,
-        patch.eta,
-        patch.Z,
-        patch.aint,
-        patch.plus,
-        patch.minus,
-        patch.cplus,
-        patch.cminus,
+        patch.A, patch.B, patch.xi, patch.eta, patch.Z, patch.aint, patch.plus, patch.minus, patch.cplus, patch.cminus,
     )
 end
 

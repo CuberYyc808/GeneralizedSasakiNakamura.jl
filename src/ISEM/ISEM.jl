@@ -195,8 +195,7 @@ function _conjugate_teukolsky_solution(solution)
     hasproperty(solution, :pair_value) && hasproperty(solution, :radial_value) ||
         return full_value
     return ConjugatedTeukolskySolution(
-        full_value,
-        _conjugate_solution_function(solution.pair_value),
+        full_value, _conjugate_solution_function(solution.pair_value),
         _conjugate_solution_function(solution.radial_value),
     )
 end
@@ -204,36 +203,22 @@ end
 function _conjugate_teukolsky_radial_function(f::TeukolskyRadialFunction, m::Int, omega)
     mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return TeukolskyRadialFunction(
-        mode,
-        f.boundary_condition,
-        _conjugate_or_missing(f.transmission_amplitude),
-        _conjugate_or_missing(f.incidence_amplitude),
-        _conjugate_or_missing(f.reflection_amplitude),
+        mode, f.boundary_condition, _conjugate_or_missing(f.transmission_amplitude),
+        _conjugate_or_missing(f.incidence_amplitude), _conjugate_or_missing(f.reflection_amplitude),
         _conjugate_solution_function(f.P_solution),
         f.GSN_solution === missing ? missing : _conjugate_gsn_radial_function(f.GSN_solution, m, omega),
-        _conjugate_teukolsky_solution(f.Teukolsky_solution),
-        f.normalization_convention,
+        _conjugate_teukolsky_solution(f.Teukolsky_solution), f.normalization_convention,
     )
 end
 
 function _conjugate_gsn_radial_function(f::GSNRadialFunction, m::Int, omega)
     mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return GSNRadialFunction(
-        mode,
-        f.boundary_condition,
-        f.rsin,
-        f.rsout,
-        f.rsmp,
-        f.horizon_expansion_order,
-        f.infinity_expansion_order,
-        _conjugate_or_missing(f.transmission_amplitude),
-        _conjugate_or_missing(f.incidence_amplitude),
-        _conjugate_or_missing(f.reflection_amplitude),
-        f.numerical_GSN_solution,
-        _conjugate_solution_function(f.numerical_Riccati_solution),
-        _conjugate_solution_function(f.GSN_solution),
-        f.normalization_convention,
-        f.method,
+        mode, f.boundary_condition, f.rsin, f.rsout, f.rsmp, f.horizon_expansion_order, f.infinity_expansion_order,
+        _conjugate_or_missing(f.transmission_amplitude), _conjugate_or_missing(f.incidence_amplitude),
+        _conjugate_or_missing(f.reflection_amplitude), f.numerical_GSN_solution,
+        _conjugate_solution_function(f.numerical_Riccati_solution), _conjugate_solution_function(f.GSN_solution),
+        f.normalization_convention, f.method,
     )
 end
 
@@ -246,29 +231,19 @@ _conjugate_y_solution(f::RadialFunctions.RstarYSolution) = ConjugatedYSolution(f
 function _conjugate_y_radial_function(f::YRadialFunction, m::Int, omega)
     mode = Mode(f.mode.s, f.mode.l, m, f.mode.a, omega, conj(f.mode.lambda))
     return YRadialFunction(
-        mode,
-        f.boundary_condition,
-        _conjugate_or_missing(f.transmission_amplitude),
-        _conjugate_or_missing(f.incidence_amplitude),
-        _conjugate_or_missing(f.reflection_amplitude),
-        _conjugate_solution_function(f.P_solution),
-        _conjugate_teukolsky_solution(f.Teukolsky_solution),
-        _conjugate_solution_function(f.X_solution),
-        _conjugate_solution_function(f.Y_scalar_solution),
-        _conjugate_y_solution(f.Y_solution),
-        f.normalization_convention,
+        mode, f.boundary_condition, _conjugate_or_missing(f.transmission_amplitude),
+        _conjugate_or_missing(f.incidence_amplitude), _conjugate_or_missing(f.reflection_amplitude),
+        _conjugate_solution_function(f.P_solution), _conjugate_teukolsky_solution(f.Teukolsky_solution),
+        _conjugate_solution_function(f.X_solution), _conjugate_solution_function(f.Y_scalar_solution),
+        _conjugate_y_solution(f.Y_solution), f.normalization_convention,
     )
 end
 
 function _spin_reflection_metadata(metadata, source_a, source_m, target_a, target_m)
     metadata isa NamedTuple || return metadata
     return merge(metadata, (
-        spin_reflection_applied=true,
-        spin_reflection_map=:a_m_to_minus_a_minus_m,
-        spin_reflection_source_a=source_a,
-        spin_reflection_source_m=source_m,
-        spin_reflection_target_a=target_a,
-        spin_reflection_target_m=target_m,
+        spin_reflection_applied=true, spin_reflection_map=:a_m_to_minus_a_minus_m, spin_reflection_source_a=source_a,
+        spin_reflection_source_m=source_m, spin_reflection_target_a=target_a, spin_reflection_target_m=target_m,
     ))
 end
 
@@ -276,15 +251,8 @@ function _spin_reflect_teukolsky_radial_function(
         f::TeukolskyRadialFunction, m::Int, a)
     mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
     return TeukolskyRadialFunction(
-        mode,
-        f.boundary_condition,
-        f.transmission_amplitude,
-        f.incidence_amplitude,
-        f.reflection_amplitude,
-        f.P_solution,
-        f.GSN_solution,
-        f.Teukolsky_solution,
-        f.normalization_convention,
+        mode, f.boundary_condition, f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude,
+        f.P_solution, f.GSN_solution, f.Teukolsky_solution, f.normalization_convention,
     )
 end
 
@@ -294,21 +262,9 @@ function _spin_reflect_gsn_radial_function(f::GSNRadialFunction, m::Int, a)
     metadata = _spin_reflection_metadata(
         f.numerical_GSN_solution, f.mode.a, f.mode.m, a, m)
     return GSNRadialFunction(
-        mode,
-        f.boundary_condition,
-        f.rsin,
-        f.rsout,
-        f.rsmp,
-        f.horizon_expansion_order,
-        f.infinity_expansion_order,
-        f.transmission_amplitude,
-        f.incidence_amplitude,
-        f.reflection_amplitude,
-        metadata,
-        f.numerical_Riccati_solution,
-        f.GSN_solution,
-        f.normalization_convention,
-        f.method,
+        mode, f.boundary_condition, f.rsin, f.rsout, f.rsmp, f.horizon_expansion_order, f.infinity_expansion_order,
+        f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude, metadata, f.numerical_Riccati_solution,
+        f.GSN_solution, f.normalization_convention, f.method,
     )
 end
 
@@ -316,17 +272,8 @@ end
 function _spin_reflect_y_radial_function(f::YRadialFunction, m::Int, a)
     mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
     return YRadialFunction(
-        mode,
-        f.boundary_condition,
-        f.transmission_amplitude,
-        f.incidence_amplitude,
-        f.reflection_amplitude,
-        f.P_solution,
-        f.Teukolsky_solution,
-        f.X_solution,
-        f.Y_scalar_solution,
-        f.Y_solution,
-        f.normalization_convention,
+        mode, f.boundary_condition, f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude,
+        f.P_solution, f.Teukolsky_solution, f.X_solution, f.Y_scalar_solution, f.Y_solution, f.normalization_convention,
     )
 end
 
@@ -357,22 +304,13 @@ function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
     parent = parentmodule(@__MODULE__)
     X_func = if _is_exact_extremal_spin(a)
         getfield(parent, :GSN_radial)(
-            s, l, m, a, omega, boundary_condition;
-            method=method,
+            s, l, m, a, omega, boundary_condition; method=method,
             tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
         )
     else
         getfield(parent, :GSN_radial)(
-            s,
-            l,
-            m,
-            a,
-            omega,
-            boundary_condition,
-            getfield(parent, :_DEFAULT_rsin),
-            getfield(parent, :_DEFAULT_rsout);
-            method=method,
-            tolerance = tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
+            s, l, m, a, omega, boundary_condition, getfield(parent, :_DEFAULT_rsin), getfield(parent, :_DEFAULT_rsout);
+            method=method, tolerance = tol === nothing ? Solutions._DEFAULTTOLERANCE : tol,
             horizon_expansion_order = _y_fallback_horizon_expansion_order(a),
             infinity_expansion_order = _y_fallback_infinity_expansion_order(omega),
         )
@@ -433,14 +371,7 @@ function _build_y_solution_from_gsn(s, l, m, a, omega, boundary_condition;
 
     Ysoln, near_horizon_mismatch = RadialFunctions.near_horizon_y(
         TeukolskyTransformation.GSN_to_Y_solution_from_matrix(
-            r -> rstar_from_r(a, r),
-            teukolsky_from_gsn_matrix,
-            X_func.GSN_solution,
-            s,
-            m,
-            a,
-            omega,
-            lambda,
+            r -> rstar_from_r(a, r), teukolsky_from_gsn_matrix, X_func.GSN_solution, s, m, a, omega, lambda,
             branch_transmission_amplitude,
         ),
         s, m, a, omega, lambda,

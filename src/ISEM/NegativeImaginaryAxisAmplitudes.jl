@@ -66,34 +66,22 @@ end
 @inline _finite(value) =
     isfinite(real(value)) && isfinite(imag(value))
 
-function ComplexFrequency._state_at_r(
-    evaluator::ScaledEvaluator,
-    r::Real,
-)
+function ComplexFrequency._state_at_r(evaluator::ScaledEvaluator, r::Real)
     state = ComplexFrequency._state_at_r(evaluator.evaluator, r)
     return (
-        X=ComplexF64(evaluator.scale * state.X),
-        dXdrstar=ComplexF64(evaluator.scale * state.dXdrstar),
+        X=ComplexF64(evaluator.scale * state.X), dXdrstar=ComplexF64(evaluator.scale * state.dXdrstar),
         error=state.error,
     )
 end
 
 function (evaluator::ScaledEvaluator)(rstar::Real)
     X, dXdrstar, error = evaluator.evaluator(rstar)
-    return (
-        ComplexF64(evaluator.scale * X),
-        ComplexF64(evaluator.scale * dXdrstar),
-        error,
-    )
+    return (ComplexF64(evaluator.scale * X), ComplexF64(evaluator.scale * dXdrstar), error,)
 end
 
 function (evaluator::ScaledEvaluator)(rstars::AbstractVector{<:Real})
     states = map(evaluator, rstars)
-    return (
-        getindex.(states, 1),
-        getindex.(states, 2),
-        getindex.(states, 3),
-    )
+    return (getindex.(states, 1), getindex.(states, 2), getindex.(states, 3),)
 end
 
 @inline _rational_core(evaluator::ComplexRationalEvaluator) =
@@ -167,15 +155,8 @@ function _anchor_switch_x(anchored, original)
 end
 
 @inline function _pair_error(first, second)
-    scale = max(
-        abs(first[1]), abs(first[2]),
-        abs(second[1]), abs(second[2]),
-        floatmin(Float64),
-    )
-    return max(
-        abs(first[1] - second[1]),
-        abs(first[2] - second[2]),
-    ) / scale
+    scale = max(abs(first[1]), abs(first[2]), abs(second[1]), abs(second[2]), floatmin(Float64))
+    return max(abs(first[1] - second[1]), abs(first[2] - second[2])) / scale
 end
 
 # Least-squares complex scale c minimizing |target - c * candidate| over the
@@ -226,20 +207,11 @@ function _in_real_axis_anchor(route, evaluator)
         _FAST_ANCHOR_RATIO_LOW * abs(imag(omega)) ||
         return rejected(:outside_real_axis_sector)
     controls = gsn_controls(
-        rational.params;
-        N=rational.settings.order,
-        xm=rational.match_x,
-        tol=route.plan.controls.tolerance,
-        small_frequency_expansion=false,
-        large_frequency_expansion=false,
+        rational.params; N=rational.settings.order, xm=rational.match_x, tol=route.plan.controls.tolerance,
+        small_frequency_expansion=false, large_frequency_expansion=false,
     )
     basis = try
-        iterate_from_zero(
-            rational.coefficients,
-            :in;
-            controls,
-            match_x=rational.match_x,
-        )
+        iterate_from_zero(rational.coefficients, :in; controls, match_x=rational.match_x)
     catch caught
         absorbable(caught) || rethrow()
         return rejected(:construction_error)
@@ -247,65 +219,39 @@ function _in_real_axis_anchor(route, evaluator)
     basis.endpoint_valid ||
         return rejected(:invalid_endpoint; steps=basis.step_count)
     target = (basis.match_X, basis.match_dXdx)
-    current = (
-        existing_scale * rational.match_state.X,
-        existing_scale * rational.match_state.dXdx,
-    )
+    current = (existing_scale * rational.match_state.X, existing_scale * rational.match_state.dXdx,)
     all(_finite, (target..., current...)) ||
         return rejected(:nonfinite_state; steps=basis.step_count)
     correction = _fit_pair_scale(target, current)
     correction === nothing &&
         return rejected(:rejected_scale; steps=basis.step_count)
-    corrected = (
-        correction * current[1],
-        correction * current[2],
-    )
+    corrected = (correction * current[1], correction * current[2],)
     projective_error = Float64(_pair_error(corrected, target))
     departure = Float64(abs(correction - 1))
     projective_error <= _STATE_ANCHOR_MAX_ERROR || return rejected(
-        :rejected_projective;
-        projective_error,
-        scale=correction,
-        departure,
-        steps=basis.step_count,
+        :rejected_projective; projective_error, scale=correction, departure, steps=basis.step_count,
     )
     departure > _REAL_AXIS_ANCHOR_MIN_DEPARTURE || return rejected(
-        :retained;
-        projective_error,
-        scale=correction,
-        departure,
-        steps=basis.step_count,
+        :retained; projective_error, scale=correction, departure, steps=basis.step_count,
     )
     # A projective match cannot certify the normalization of a dominant state.
     # Require the reference propagation to converge before using its scale.
     confirmation_controls = gsn_controls(
-        rational.params;
-        N=rational.settings.order,
-        horizon_order=ComplexRational._horizon_series_order(rational.settings.order),
-        xm=rational.match_x,
-        tol=route.plan.controls.tolerance,
-        small_frequency_expansion=false,
-        large_frequency_expansion=false,
+        rational.params; N=rational.settings.order,
+        horizon_order=ComplexRational._horizon_series_order(rational.settings.order), xm=rational.match_x,
+        tol=route.plan.controls.tolerance, small_frequency_expansion=false, large_frequency_expansion=false,
     )
     confirmation = iterate_from_zero(rational.coefficients, :in;
         controls=confirmation_controls, match_x=rational.match_x)
     reference_error = _pair_error(target,
         (confirmation.match_X,confirmation.match_dXdx))
     reference_error <= _STATE_ANCHOR_MAX_ERROR || return rejected(
-        :uncertified_reference;
-        projective_error,
-        scale=correction,
-        departure,
-        steps=basis.step_count,
+        :uncertified_reference; projective_error, scale=correction, departure, steps=basis.step_count,
     )
     return (
-        evaluator=ScaledEvaluator(evaluator, correction),
-        metadata=(;
-            real_axis_state_anchor_status=:rescaled,
-            real_axis_state_anchor_projective_error=projective_error,
-            real_axis_state_anchor_scale=correction,
-            real_axis_state_anchor_departure=departure,
-            real_axis_state_anchor_steps=basis.step_count,
+        evaluator=ScaledEvaluator(evaluator, correction), metadata=(; real_axis_state_anchor_status=:rescaled,
+        real_axis_state_anchor_projective_error=projective_error, real_axis_state_anchor_scale=correction,
+        real_axis_state_anchor_departure=departure, real_axis_state_anchor_steps=basis.step_count,
         ),
     )
 end
@@ -314,32 +260,14 @@ end
 # a != 0, and omega within _REAL_RATIO_MAX of the negative imaginary axis with
 # _MIN_ABS_IMAG_OMEGA <= |Im(omega)| <= _MAX_ABS_IMAG_OMEGA.
 @inline function _pretrigger(
-    s,
-    a,
-    omega;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
+    s, a, omega; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
     pole_normalization,
 )
     backend == :direct_rational || return false
     controls === nothing || return false
     # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
     )) || return false
     pole_normalization && return false
     omegac = ComplexF64(omega)
@@ -358,18 +286,10 @@ end
 # analytic certificate in the metadata. Returns the route unchanged if any
 # value is not finite.
 function _overlay(
-    route::ComplexRoute,
-    result;
-    amplitude_backend::Symbol=:nia_mst_analytic,
-    state_evaluator=route.state_evaluator,
+    route::ComplexRoute, result; amplitude_backend::Symbol=:nia_mst_analytic, state_evaluator=route.state_evaluator,
     state_metadata=(;),
 )
-    values = (
-        route.transmission,
-        route.teukolsky_transmission,
-        result.gsn...,
-        result.teuk...,
-    )
+    values = (route.transmission, route.teukolsky_transmission, result.gsn..., result.teuk...,)
     all(_finite, values) || return route
     iszero(route.transmission) && return route
     iszero(route.teukolsky_transmission) && return route
@@ -380,12 +300,7 @@ function _overlay(
         ComplexF64(route.teukolsky_transmission * result.teuk[1])
     teukolsky_reflection =
         ComplexF64(route.teukolsky_transmission * result.teuk[2])
-    all(_finite, (
-        incidence,
-        reflection,
-        teukolsky_incidence,
-        teukolsky_reflection,
-    )) || return route
+    all(_finite, (incidence, reflection, teukolsky_incidence, teukolsky_reflection,)) || return route
     # The real-axis state is not rebuilt from the reported amplitudes: a
     # change of the state at the match point that is within the amplitudes'
     # error grows along the real axis (weak-damping UP solutions), so the
@@ -423,25 +338,11 @@ function _overlay(
         )),
     ))
     plan = ComplexRoutePlan(
-        route.plan.contour,
-        route.plan.matching,
-        route.plan.controls,
-        amplitudes,
-        route.plan.patch_count,
+        route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
     )
     return ComplexRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.p_solution,
-        state_evaluator,
-        metadata,
-        plan,
-        route.transmission,
-        incidence,
-        reflection,
-        route.teukolsky_transmission,
-        teukolsky_incidence,
+        route.branch, route.params, route.controls, route.p_solution, state_evaluator, metadata, plan,
+        route.transmission, incidence, reflection, route.teukolsky_transmission, teukolsky_incidence,
         teukolsky_reflection,
     )
 end
@@ -450,19 +351,9 @@ function _state_overlay(route::ComplexRoute, anchor)
     anchor.evaluator === route.state_evaluator &&
         isempty(anchor.metadata) && return route
     return ComplexRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.p_solution,
-        anchor.evaluator,
-        merge(route.metadata, anchor.metadata),
-        route.plan,
-        route.transmission,
-        route.incidence,
-        route.reflection,
-        route.teukolsky_transmission,
-        route.teukolsky_incidence,
-        route.teukolsky_reflection,
+        route.branch, route.params, route.controls, route.p_solution, anchor.evaluator,
+        merge(route.metadata, anchor.metadata), route.plan, route.transmission, route.incidence, route.reflection,
+        route.teukolsky_transmission, route.teukolsky_incidence, route.teukolsky_reflection,
     )
 end
 
@@ -471,18 +362,8 @@ function _with_amplitude_errors(route, errors)
         incidence_error=Float64(errors[1]),
         reflection_error=Float64(errors[2])))
     return ComplexRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.p_solution,
-        route.state_evaluator,
-        metadata,
-        route.plan,
-        route.transmission,
-        route.incidence,
-        route.reflection,
-        route.teukolsky_transmission,
-        route.teukolsky_incidence,
+        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
+        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
         route.teukolsky_reflection,
     )
 end
@@ -512,18 +393,8 @@ function _retain_analytic_agreement(route, result, agreement)
             Int(result.coefficient_source_shift) : 0,
     ))
     return ComplexRoute(
-        route.branch,
-        route.params,
-        route.controls,
-        route.p_solution,
-        route.state_evaluator,
-        metadata,
-        route.plan,
-        route.transmission,
-        route.incidence,
-        route.reflection,
-        route.teukolsky_transmission,
-        route.teukolsky_incidence,
+        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
+        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
         route.teukolsky_reflection,
     )
 end
@@ -561,22 +432,11 @@ end
 # Outgoing MST state at x = _STATE_ANCHOR_X. Uses the monodromy state at the
 # complex nu when nu is away from an integer and the sum converges, else the
 # principal-branch anchor; `certified` and `source` record which was used.
-function _mano_suzuki_takasugi_out_anchor(
-    source;
-    nu=nothing,
-    allow_relaxed::Bool=false,
-)
+function _mano_suzuki_takasugi_out_anchor(source; nu=nothing, allow_relaxed::Bool=false)
     params = hasproperty(source, :params) ? source.params : source
     selected_nu = if nu === nothing
         try
-            mano_suzuki_takasugi_nu_complex(
-                params.s,
-                params.l,
-                params.m,
-                params.a,
-                params.omega,
-                params.lambda,
-            )
+            mano_suzuki_takasugi_nu_complex(params.s, params.l, params.m, params.a, params.omega, params.lambda)
         catch caught
             absorbable(caught) || rethrow()
             nothing
@@ -590,10 +450,7 @@ function _mano_suzuki_takasugi_out_anchor(
         if nu_delta > _MANO_SUZUKI_TAKASUGI_STATE_NU_DELTA_MIN
             selected = try
                 ManoSuzukiTakasugiInfinity.mano_suzuki_takasugi_monodromy_state(
-                    params,
-                    _STATE_ANCHOR_X;
-                    tolerance=_STATE_ANCHOR_SUM_TOLERANCE,
-                    nu=selected_nu,
+                    params, _STATE_ANCHOR_X; tolerance=_STATE_ANCHOR_SUM_TOLERANCE, nu=selected_nu,
                 )
             catch caught
                 absorbable(caught) || rethrow()
@@ -603,11 +460,7 @@ function _mano_suzuki_takasugi_out_anchor(
                     selected.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR &&
                     all(_finite, (selected.X, selected.dXdx))
                 return merge(selected, (
-                    source=:complex_nu,
-                    nu_delta,
-                    selector_nu=selected_nu,
-                    certified=true,
-                    relaxed_sum=false,
+                    source=:complex_nu, nu_delta, selector_nu=selected_nu, certified=true, relaxed_sum=false,
                 ))
             end
         end
@@ -617,11 +470,7 @@ function _mano_suzuki_takasugi_out_anchor(
         allow_relaxed && _allows_relaxed_state_anchor(params.omega) ?
         _STATE_ANCHOR_RELAXED_TOLERANCE : nothing
     principal = mano_suzuki_takasugi_anchor(
-        source,
-        :out,
-        _STATE_ANCHOR_X;
-        tolerance=_STATE_ANCHOR_SUM_TOLERANCE,
-        fallback_tolerance,
+        source, :out, _STATE_ANCHOR_X; tolerance=_STATE_ANCHOR_SUM_TOLERANCE, fallback_tolerance,
     )
     relaxed_sum = hasproperty(principal, :relaxed_sum) &&
         principal.relaxed_sum
@@ -637,11 +486,8 @@ function _mano_suzuki_takasugi_out_anchor(
     nu_delta = _nu_delta(selected_nu)
     nu_delta <= _MANO_SUZUKI_TAKASUGI_STATE_NU_DELTA_MIN &&
         return merge(principal, (
-            source=relaxed_sum ? :principal_relaxed : :principal,
-            nu_delta,
-            selector_nu=selected_nu,
-            certified=!relaxed_sum,
-            relaxed_sum,
+            source=relaxed_sum ? :principal_relaxed : :principal, nu_delta, selector_nu=selected_nu,
+            certified=!relaxed_sum, relaxed_sum,
         ))
     return merge(principal, (
         source=relaxed_sum ?
@@ -656,45 +502,23 @@ end
 # UP state anchor for P-state evaluators: compare the evaluator's state at
 # _STATE_ANCHOR_X with the MST outgoing anchor; keep it when they agree, rescale
 # it when a projective fit agrees, otherwise record the rejection in the metadata.
-function _p_state_anchor(
-    route,
-    evaluator;
-    nu=nothing,
-    require_certificate::Bool=false,
-)
+function _p_state_anchor(route, evaluator; nu=nothing, require_certificate::Bool=false)
     params = evaluator.params
-    mst_params = gsn_parameters(
-        params.s,
-        params.l,
-        params.m,
-        params.a,
-        params.omega;
-        lambda=params.lambda,
-    )
+    mst_params = gsn_parameters(params.s, params.l, params.m, params.a, params.omega; lambda=params.lambda)
     anchor = _mano_suzuki_takasugi_out_anchor(mst_params; nu)
     source = anchor.source
     !_anchor_accepted(anchor, params.omega, require_certificate) && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:uncertified,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:uncertified, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
     anchor.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR || return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_error,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_error, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
     r = ManoSuzukiTakasugiInfinity._x_to_r(params, _STATE_ANCHOR_X)
@@ -702,88 +526,51 @@ function _p_state_anchor(
     current = (current_state.X, current_state.dXdrstar)
     target = (
         anchor.X,
-        anchor.dXdx * ManoSuzukiTakasugiInfinity._dx_drstar(
-            params, _STATE_ANCHOR_X),
-    )
+        anchor.dXdx * ManoSuzukiTakasugiInfinity._dx_drstar(params, _STATE_ANCHOR_X))
     disagreement = all(_finite, current) ?
         Float64(_pair_error(current, target)) : Inf
     disagreement <= _STATE_ANCHOR_MAX_ERROR && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:retained,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=disagreement,
-            mst_state_anchor_scale=ComplexF64(1),
+        evaluator, metadata=(; mst_state_anchor_status=:retained, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=disagreement,
+        mst_state_anchor_scale=ComplexF64(1),
         ),
     )
     correction = _fit_pair_scale(target, current)
     correction === nothing && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_scale,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_scale, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
-    corrected = (
-        correction * current[1],
-        correction * current[2],
-    )
+    corrected = (correction * current[1], correction * current[2],)
     projective_error = Float64(_pair_error(corrected, target))
     projective_error <= _STATE_ANCHOR_MAX_ERROR || return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_projective,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=projective_error,
-            mst_state_anchor_scale=correction,
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_projective, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=projective_error,
+        mst_state_anchor_scale=correction,
         ),
     )
     anchored = ComplexStateEvaluator(
-        evaluator.params,
-        evaluator.p_solution,
-        evaluator.coefficients,
-        ComplexF64(evaluator.scale * correction),
+        evaluator.params, evaluator.p_solution, evaluator.coefficients, ComplexF64(evaluator.scale * correction),
     )
     return (
-        evaluator=anchored,
-        metadata=(;
-            mst_state_anchor_status=:rescaled,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=projective_error,
-            mst_state_anchor_scale=correction,
+        evaluator=anchored, metadata=(; mst_state_anchor_status=:rescaled, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=projective_error,
+        mst_state_anchor_scale=correction,
         ),
     )
 end
 
 # As _p_state_anchor, for small-frequency-expansion evaluators.
-function _small_frequency_expansion_state_anchor(
-    route,
-    evaluator;
-    nu=nothing,
-    require_certificate::Bool=false,
-)
+function _small_frequency_expansion_state_anchor(route, evaluator; nu=nothing, require_certificate::Bool=false)
     coefficients = evaluator.route.coefficients
     anchor = _mano_suzuki_takasugi_out_anchor(coefficients; nu)
     source = anchor.source
-    !_anchor_accepted(
-        anchor,
-        coefficients.params.omega,
-        require_certificate,
-    ) && return (
+    !_anchor_accepted(anchor, coefficients.params.omega, require_certificate) && return (
         evaluator,
         metadata=(;
             mst_state_anchor_status=:uncertified,
@@ -796,15 +583,10 @@ function _small_frequency_expansion_state_anchor(
         ),
     )
     anchor.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR || return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_error,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_error, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
     params = evaluator.route.params
@@ -817,57 +599,34 @@ function _small_frequency_expansion_state_anchor(
     disagreement = all(_finite, current) ?
         Float64(_pair_error(current, target)) : Inf
     disagreement <= _STATE_ANCHOR_MAX_ERROR && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:retained,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=disagreement,
-            mst_state_anchor_scale=ComplexF64(1),
+        evaluator, metadata=(; mst_state_anchor_status=:retained, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=disagreement,
+        mst_state_anchor_scale=ComplexF64(1),
         ),
     )
     correction = _fit_pair_scale(target, current)
     correction === nothing && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_scale,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_scale, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
-    corrected = (
-        correction * current[1],
-        correction * current[2],
-    )
+    corrected = (correction * current[1], correction * current[2],)
     projective_error = Float64(_pair_error(corrected, target))
     projective_error <= _STATE_ANCHOR_MAX_ERROR || return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_projective,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=projective_error,
-            mst_state_anchor_scale=correction,
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_projective, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=projective_error,
+        mst_state_anchor_scale=correction,
         ),
     )
     return (
-        evaluator=ScaledEvaluator(evaluator, correction),
-        metadata=(;
-            mst_state_anchor_status=:rescaled,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
-            mst_state_anchor_projective_error=projective_error,
-            mst_state_anchor_scale=correction,
+        evaluator=ScaledEvaluator(evaluator, correction), metadata=(; mst_state_anchor_status=:rescaled,
+        mst_state_anchor_source=source, mst_state_anchor_x=_STATE_ANCHOR_X,
+        mst_state_anchor_error=anchor.estimated_relerr, mst_state_anchor_disagreement=disagreement,
+        mst_state_anchor_projective_error=projective_error, mst_state_anchor_scale=correction,
         ),
     )
 end
@@ -875,49 +634,21 @@ end
 # Check the route state against an independent reference and rescale or
 # replace its evaluator when they disagree: the real-axis propagation for IN,
 # the MST outgoing anchor for UP. Returns (evaluator, metadata).
-function _state_anchor(
-    route;
-    nu=nothing,
-    require_certificate::Bool=false,
-)
+function _state_anchor(route; nu=nothing, require_certificate::Bool=false)
     route.branch == :IN &&
         return _in_real_axis_anchor(route, route.state_evaluator)
-    route.branch == :UP || return (
-        evaluator=route.state_evaluator,
-        metadata=(;),
-    )
+    route.branch == :UP || return (evaluator=route.state_evaluator, metadata=(;),)
     evaluator = route.state_evaluator
     evaluator isa ComplexSmallFrequencyExpansionEvaluator &&
-        return _small_frequency_expansion_state_anchor(
-            route,
-            evaluator;
-            nu,
-            require_certificate,
-        )
+        return _small_frequency_expansion_state_anchor(route, evaluator; nu, require_certificate)
     evaluator isa ComplexStateEvaluator &&
-        return _p_state_anchor(
-            route,
-            evaluator;
-            nu,
-            require_certificate,
-        )
-    evaluator isa ComplexRationalEvaluator || return (
-        evaluator,
-        metadata=(;),
-    )
-    anchor = _mano_suzuki_takasugi_out_anchor(
-        evaluator.coefficients;
-        nu,
-        allow_relaxed=true,
-    )
+        return _p_state_anchor(route, evaluator; nu, require_certificate)
+    evaluator isa ComplexRationalEvaluator || return (evaluator, metadata=(;),)
+    anchor = _mano_suzuki_takasugi_out_anchor(evaluator.coefficients; nu, allow_relaxed=true)
     source = anchor.source
     relaxed_sum = hasproperty(anchor, :relaxed_sum) &&
         anchor.relaxed_sum
-    !_anchor_accepted(
-        anchor,
-        evaluator.coefficients.params.omega,
-        require_certificate,
-    ) && return (
+    !_anchor_accepted(anchor, evaluator.coefficients.params.omega, require_certificate) && return (
         evaluator,
         metadata=(;
             mst_state_anchor_status=:uncertified,
@@ -931,13 +662,9 @@ function _state_anchor(
         _STATE_ANCHOR_RELAXED_TOLERANCE :
         _STATE_ANCHOR_MAX_ERROR
     anchor.estimated_relerr <= anchor_error_limit || return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:rejected_error,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
+        evaluator, metadata=(; mst_state_anchor_status=:rejected_error, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf,
         ),
     )
     current = try
@@ -954,66 +681,39 @@ function _state_anchor(
     if relaxed_sum
         correction = _fit_pair_scale(target, current)
         correction === nothing && return (
-            evaluator,
-            metadata=(;
-                mst_state_anchor_status=:rejected_scale,
-                mst_state_anchor_source=source,
-                mst_state_anchor_x=_STATE_ANCHOR_X,
-                mst_state_anchor_error=anchor.estimated_relerr,
-                mst_state_anchor_disagreement=disagreement,
-                mst_state_anchor_projective_error=Inf,
-                mst_state_anchor_scale=ComplexF64(NaN, NaN),
-                mst_state_anchor_relaxed_sum=true,
+            evaluator, metadata=(; mst_state_anchor_status=:rejected_scale, mst_state_anchor_source=source,
+            mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+            mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=Inf,
+            mst_state_anchor_scale=ComplexF64(NaN, NaN), mst_state_anchor_relaxed_sum=true,
             ),
         )
-        corrected = (
-            correction * current[1],
-            correction * current[2],
-        )
+        corrected = (correction * current[1], correction * current[2],)
         projective_error =
             Float64(_pair_error(corrected, target))
         projective_error <= _STATE_ANCHOR_MAX_ERROR || return (
-            evaluator,
-            metadata=(;
-                mst_state_anchor_status=:rejected_projective,
-                mst_state_anchor_source=source,
-                mst_state_anchor_x=_STATE_ANCHOR_X,
-                mst_state_anchor_error=anchor.estimated_relerr,
-                mst_state_anchor_disagreement=disagreement,
-                mst_state_anchor_projective_error=projective_error,
-                mst_state_anchor_scale=correction,
-                mst_state_anchor_relaxed_sum=true,
+            evaluator, metadata=(; mst_state_anchor_status=:rejected_projective, mst_state_anchor_source=source,
+            mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+            mst_state_anchor_disagreement=disagreement, mst_state_anchor_projective_error=projective_error,
+            mst_state_anchor_scale=correction, mst_state_anchor_relaxed_sum=true,
             ),
         )
         return (
-            evaluator=ScaledEvaluator(evaluator, correction),
-            metadata=(;
-                mst_state_anchor_status=:rescaled_relaxed,
-                mst_state_anchor_source=source,
-                mst_state_anchor_x=_STATE_ANCHOR_X,
-                mst_state_anchor_error=anchor.estimated_relerr,
-                mst_state_anchor_disagreement=disagreement,
-                mst_state_anchor_projective_error=projective_error,
-                mst_state_anchor_scale=correction,
-                mst_state_anchor_relaxed_sum=true,
+            evaluator=ScaledEvaluator(evaluator, correction), metadata=(; mst_state_anchor_status=:rescaled_relaxed,
+            mst_state_anchor_source=source, mst_state_anchor_x=_STATE_ANCHOR_X,
+            mst_state_anchor_error=anchor.estimated_relerr, mst_state_anchor_disagreement=disagreement,
+            mst_state_anchor_projective_error=projective_error, mst_state_anchor_scale=correction,
+            mst_state_anchor_relaxed_sum=true,
             ),
         )
     end
     disagreement <= _STATE_ANCHOR_MAX_ERROR && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:retained,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=disagreement,
+        evaluator, metadata=(; mst_state_anchor_status=:retained, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=disagreement,
         ),
     )
     anchored = ComplexRationalEvaluator(
-        evaluator.params,
-        evaluator.coefficients,
-        evaluator.settings,
-        _STATE_ANCHOR_X,
+        evaluator.params, evaluator.coefficients, evaluator.settings, _STATE_ANCHOR_X,
         ComplexRationalState(anchor.X, anchor.dXdx),
     )
     switch_x = evaluator.match_x > _STATE_ANCHOR_X ?
@@ -1061,14 +761,7 @@ function _analytic_result(route)
     if refined_nu !== nothing
         refined = try
             mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
-                p.s,
-                p.l,
-                p.m,
-                p.a,
-                p.omega,
-                p.lambda,
-                route.branch;
-                nu=refined_nu,
+                p.s, p.l, p.m, p.a, p.omega, p.lambda, route.branch; nu=refined_nu,
             )
         catch caught
             absorbable(caught) || rethrow()
@@ -1084,33 +777,14 @@ end
 # P-consensus limit, Im(omega) < 0 with Re(omega) != 0, |omega| in
 # (_FAST_ANCHOR_MIN_OMEGA, max_omega], and omega close to either axis.
 @inline function _fast_anchor_pretrigger(
-    a,
-    omega,
-    branch;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
-    max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
+    a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+    large_frequency_expansion, pole_normalization, max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
 )
     backend == :direct_rational || return false
     controls === nothing || return false
     # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
     )) || return false
     pole_normalization && return false
     branch_symbol = try
@@ -1145,42 +819,13 @@ end
 # an MST state anchor at x = _STATE_ANCHOR_X, without a two-ray propagation.
 # Returns nothing whenever a precondition, certificate or tolerance fails.
 function _fast_route(
-    s,
-    l,
-    m,
-    a,
-    omega,
-    branch;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
-    max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
+    s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+    large_frequency_expansion, pole_normalization, max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
     rescue_source::Symbol=:prebuild,
 )
     _fast_anchor_pretrigger(
-        a,
-        omega,
-        branch;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
-        pole_normalization,
-        max_omega,
+        a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion, pole_normalization, max_omega,
     ) || return nothing
     branch_symbol = ComplexFrequency._normalize_branch(branch)
 
@@ -1210,11 +855,7 @@ function _fast_route(
         (tol === nothing ? _FAST_ANCHOR_TOLERANCE : tol) || return nothing
     state_data = data
     direct_controls = gsn_controls(
-        params;
-        N=_FAST_ANCHOR_ORDER,
-        xm=_STATE_ANCHOR_X,
-        tol=_FAST_ANCHOR_TOLERANCE,
-        small_frequency_expansion=false,
+        params; N=_FAST_ANCHOR_ORDER, xm=_STATE_ANCHOR_X, tol=_FAST_ANCHOR_TOLERANCE, small_frequency_expansion=false,
         large_frequency_expansion=false,
     )
     coefficients = try
@@ -1225,41 +866,24 @@ function _fast_route(
     end
     state = try
         if branch_symbol == :UP
-            anchor = _mano_suzuki_takasugi_out_anchor(
-                coefficients;
-                nu=nothing,
-                allow_relaxed=true,
-            )
+            anchor = _mano_suzuki_takasugi_out_anchor(coefficients; nu=nothing, allow_relaxed=true)
             (
-                X=ComplexF64(anchor.X),
-                dXdx=ComplexF64(anchor.dXdx),
-                estimated_relerr=Float64(anchor.estimated_relerr),
-                nu=ComplexF64(anchor.nu),
-                condition=Float64(anchor.condition),
-                source=anchor.source,
+                X=ComplexF64(anchor.X), dXdx=ComplexF64(anchor.dXdx), estimated_relerr=Float64(anchor.estimated_relerr),
+                nu=ComplexF64(anchor.nu), condition=Float64(anchor.condition), source=anchor.source,
                 certified=Bool(anchor.certified),
             )
         else
             plan = (
                 data=state_data,
                 converter=ManoSuzukiTakasugiInfinity._p_converter(params),
-                pin_norm=ManoSuzukiTakasugiInfinity._incoming_raw_factor(
-                    state_data),
-                pin_scale=nothing,
-            )
+                pin_norm=ManoSuzukiTakasugiInfinity._incoming_raw_factor(state_data), pin_scale=nothing)
             pin = ManoSuzukiTakasugiInfinity.mano_suzuki_takasugi_pin_state(
-                coefficients,
-                plan,
-                _STATE_ANCHOR_X;
-                scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
+                coefficients, plan, _STATE_ANCHOR_X; scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
             )
             (
                 X=ComplexF64(pin.X),
                 dXdx=ComplexF64(pin.dXdx),
-                estimated_relerr=Float64(max(
-                    pin.estimated_relerr,
-                    pin.residual,
-                )),
+                estimated_relerr=Float64(max(pin.estimated_relerr, pin.residual)),
                 nu=ComplexF64(NaN, NaN),
                 condition=hasproperty(pin, :condition) ?
                     Float64(pin.condition) : NaN,
@@ -1276,31 +900,16 @@ function _fast_route(
     all(_finite, (state.X, state.dXdx)) || return nothing
     state.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR ||
         return nothing
-    _anchor_accepted(
-        state,
-        params.omega,
-        false,
-    ) || return nothing
+    _anchor_accepted(state, params.omega, false) || return nothing
 
     settings = ComplexRational.ComplexRationalSettings(
         _FAST_ANCHOR_ORDER, _FAST_ANCHOR_TOLERANCE)
     evaluator = ComplexRationalEvaluator(
-        params,
-        coefficients,
-        settings,
-        _STATE_ANCHOR_X,
-        ComplexRationalState(state.X, state.dXdx),
+        params, coefficients, settings, _STATE_ANCHOR_X, ComplexRationalState(state.X, state.dXdx),
     )
 
     complex_params = try
-        ComplexFrequency.complex_parameters(
-            params.s,
-            params.l,
-            params.m,
-            params.a,
-            params.omega,
-            params.lambda,
-        )
+        ComplexFrequency.complex_parameters(params.s, params.l, params.m, params.a, params.omega, params.lambda)
     catch caught
         absorbable(caught) || rethrow()
         return nothing
@@ -1317,41 +926,23 @@ function _fast_route(
     teukolsky_reflection =
         ComplexF64(teukolsky_transmission * result.teuk[2])
     all(_finite, (
-        transmission,
-        incidence,
-        reflection,
-        teukolsky_transmission,
-        teukolsky_incidence,
-        teukolsky_reflection,
+        transmission, incidence, reflection, teukolsky_transmission, teukolsky_incidence, teukolsky_reflection,
     )) || return nothing
 
     requested = ComplexFrequency.complex_controls()
     resolved = (
-        xm=_STATE_ANCHOR_X,
-        rhom=nothing,
-        N=_FAST_ANCHOR_ORDER,
-        tolerance=_FAST_ANCHOR_TOLERANCE,
-        small_frequency_expansion=false,
-        large_frequency_expansion=false,
-        rescue_source=:none,
+        xm=_STATE_ANCHOR_X, rhom=nothing, N=_FAST_ANCHOR_ORDER, tolerance=_FAST_ANCHOR_TOLERANCE,
+        small_frequency_expansion=false, large_frequency_expansion=false, rescue_source=:none,
     )
     contour = ComplexFrequency.complex_contour_parameters(
         complex_params; rho_match=1.0)
     matching = (
-        requested_x=nothing,
-        allowed_min_x=0.0,
-        allowed_max_x=1.0,
-        candidate_x=_STATE_ANCHOR_X,
-        selected_x=_STATE_ANCHOR_X,
-        split_mismatch=state.estimated_relerr,
-        condition=1.0,
-        policy=:mst_anchor,
+        requested_x=nothing, allowed_min_x=0.0, allowed_max_x=1.0, candidate_x=_STATE_ANCHOR_X,
+        selected_x=_STATE_ANCHOR_X, split_mismatch=state.estimated_relerr, condition=1.0, policy=:mst_anchor,
     )
     amplitude_summary = (
         teukolsky=(
-            transmission=teukolsky_transmission,
-            incidence=teukolsky_incidence,
-            reflection=teukolsky_reflection,
+            transmission=teukolsky_transmission, incidence=teukolsky_incidence, reflection=teukolsky_reflection,
         ),
         conversion_factors=factors,
         raw_gsn_transmission=transmission,
@@ -1361,13 +952,7 @@ function _fast_route(
             reflection,
         ),
     )
-    plan = ComplexRoutePlan(
-        contour,
-        matching,
-        resolved,
-        amplitude_summary,
-        0,
-    )
+    plan = ComplexRoutePlan(contour, matching, resolved, amplitude_summary, 0)
     metadata = (
         backend=:direct_gsn_mst_anchor,
         match_policy=:mst_anchor,
@@ -1420,35 +1005,18 @@ function _fast_route(
         mst_fast_rescue_source=rescue_source,
     )
     return ComplexRoute(
-        branch_symbol,
-        complex_params,
-        requested,
-        nothing,
-        evaluator,
-        metadata,
-        plan,
-        transmission,
-        incidence,
-        reflection,
-        teukolsky_transmission,
-        teukolsky_incidence,
-        teukolsky_reflection,
+        branch_symbol, complex_params, requested, nothing, evaluator, metadata, plan, transmission, incidence,
+        reflection, teukolsky_transmission, teukolsky_incidence, teukolsky_reflection,
     )
 end
 
 # Whether an IN route from the P-route fallback or consensus backend, with
 # _FAST_ANCHOR_MAX_OMEGA < |omega| <= max_omega, is retried with `_fast_route`.
-@inline function _fast_p_pretrigger(
-    route::ComplexRoute;
-    max_omega::Float64=_MAX_ABS_IMAG_OMEGA,
-)
+@inline function _fast_p_pretrigger(route::ComplexRoute; max_omega::Float64=_MAX_ABS_IMAG_OMEGA)
     route.branch == :IN || return false
     route_backend = hasproperty(route.metadata, :backend) ?
         route.metadata.backend : :unknown
-    route_backend in (
-        :direct_gsn_p_build_fallback,
-        :direct_gsn_p_consensus,
-    ) || return false
+    route_backend in (:direct_gsn_p_build_fallback, :direct_gsn_p_consensus,) || return false
     omega_abs = abs(ComplexF64(route.params.omega))
     return _FAST_ANCHOR_MAX_OMEGA < omega_abs <= max_omega
 end
@@ -1458,31 +1026,14 @@ end
 # axis or a route whose amplitudes came from the complex-rational or
 # log-scaled MST backends.
 @inline function _offaxis_pretrigger(
-    route::ComplexRoute,
-    ;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
+    route::ComplexRoute, ; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+    large_frequency_expansion, pole_normalization,
 )
     backend == :direct_rational || return false
     controls === nothing || return false
     # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
     )) || return false
     pole_normalization && return false
     omega = ComplexF64(route.params.omega)
@@ -1496,10 +1047,7 @@ end
     match_policy = hasproperty(route.metadata, :match_policy) ?
         route.metadata.match_policy : :unknown
     match_policy == :branch_shift_consensus && return false
-    amplitude_backend in (
-        :complex_rational,
-        :principal_mst_logscaled,
-    ) && return true
+    amplitude_backend in (:complex_rational, :principal_mst_logscaled,) && return true
     # Any other route whose own amplitude errors are unusable is compared with the analytic amplitudes too.
     errors = (hasproperty(route.metadata, :incidence_error) ? route.metadata.incidence_error : 0.0,
         hasproperty(route.metadata, :reflection_error) ? route.metadata.reflection_error : 0.0)
@@ -1507,31 +1055,14 @@ end
 end
 
 @inline function _state_pretrigger(
-    route::ComplexRoute,
-    ;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
+    route::ComplexRoute, ; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+    large_frequency_expansion, pole_normalization,
 )
     backend == :direct_rational || return false
     controls === nothing || return false
     # A tolerance alone sets accuracy targets and does not fix the route.
     all(value === nothing for value in (
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
     )) || return false
     pole_normalization && return false
     route.branch == :UP || return false
@@ -1549,52 +1080,16 @@ end
 # the analytic MST ones and re-anchors the UP/IN state. Returns the route
 # unchanged when nothing applies.
 @noinline function _post_overlay(
-    route::ComplexRoute,
-    s,
-    l,
-    m,
-    a,
-    omega,
-    branch;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
+    route::ComplexRoute, s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol,
+    small_frequency_expansion, large_frequency_expansion, pole_normalization,
 )
     Base.@nospecialize route
     amplitude_trigger = _offaxis_pretrigger(
-        route;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        route; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
         pole_normalization,
     )
     state_trigger = _state_pretrigger(
-        route;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
+        route; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
         pole_normalization,
     )
     (amplitude_trigger || state_trigger) || return route
@@ -1681,10 +1176,7 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
     result, nu_value, _ = analytic
     amplitude_agreement = if _finite(route.transmission) &&
             !iszero(route.transmission)
-        current = (
-            route.incidence / route.transmission,
-            route.reflection / route.transmission,
-        )
+        current = (route.incidence / route.transmission, route.reflection / route.transmission,)
         _pair_error(current, result.gsn)
     else
         Inf
@@ -1700,20 +1192,12 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
         decision === nothing || (route = _with_amplitude_errors(route,
             decision.reported))
         anchor = try
-            _state_anchor(
-                route;
-                nu=nu_value,
-                require_certificate=true,
-            )
+            _state_anchor(route; nu=nu_value, require_certificate=true)
         catch caught
             absorbable(caught) || rethrow()
             (evaluator=route.state_evaluator, metadata=(;))
         end
-        return _retain_analytic_agreement(
-            _state_overlay(route, anchor),
-            result,
-            amplitude_agreement,
-        )
+        return _retain_analytic_agreement(_state_overlay(route, anchor), result, amplitude_agreement)
     end
     # The real-axis state is chosen by its own certificate, as on the retain
     # path; which amplitude values are reported does not change it.
@@ -1724,18 +1208,12 @@ function _post_overlay_triggered(route, amplitude_trigger, state_trigger)
         (evaluator=route.state_evaluator, metadata=(;))
     end
     anchored_route = _state_overlay(route, anchor)
-    near_nia && !(result.certificate_kind in (
-        :global_medoid,
-        :principal_single_nu,
-    )) &&
+    near_nia && !(result.certificate_kind in (:global_medoid, :principal_single_nu,)) &&
         return anchored_route
     decision === nothing || all(decision.replace) ||
         return _overlay_part(anchored_route, route, result, decision, anchor)
     return _overlay(
-        anchored_route,
-        result;
-        amplitude_backend=:complex_mst_analytic,
-        state_evaluator=anchored_route.state_evaluator,
+        anchored_route, result; amplitude_backend=:complex_mst_analytic, state_evaluator=anchored_route.state_evaluator,
         state_metadata=anchor.metadata,
     )
 end
@@ -1754,10 +1232,7 @@ function _overlay_part(anchored_route, route, result, decision, anchor)
     ))
     errors = pick(decision.bound, decision.reported)
     overlaid = _overlay(
-        anchored_route,
-        part;
-        amplitude_backend=:complex_mst_partial,
-        state_evaluator=anchored_route.state_evaluator,
+        anchored_route, part; amplitude_backend=:complex_mst_partial, state_evaluator=anchored_route.state_evaluator,
         state_metadata=anchor.metadata,
     )
     return _with_amplitude_errors(overlaid, errors)
@@ -1768,60 +1243,17 @@ end
 # negative imaginary axis the two-ray route with the analytic MST amplitudes
 # overlaid; nothing lets the caller build its usual route.
 @noinline function build(
-    s,
-    l,
-    m,
-    a,
-    omega,
-    branch;
-    backend,
-    controls,
-    lambda,
-    nu,
-    xm,
-    rhom,
-    N,
-    tol,
-    small_frequency_expansion,
-    large_frequency_expansion,
-    pole_normalization,
+    s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+    large_frequency_expansion, pole_normalization,
 )
     fast = _fast_route(
-        s,
-        l,
-        m,
-        a,
-        omega,
-        branch;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
-        pole_normalization,
-        max_omega=_MAX_ABS_IMAG_OMEGA,
+        s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion, pole_normalization, max_omega=_MAX_ABS_IMAG_OMEGA,
     )
     fast === nothing || return fast
     _pretrigger(
-        s,
-        a,
-        omega;
-        backend,
-        controls,
-        lambda,
-        nu,
-        xm,
-        rhom,
-        N,
-        tol,
-        small_frequency_expansion,
-        large_frequency_expansion,
-        pole_normalization,
+        s, a, omega; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion, pole_normalization,
     ) || return nothing
     # Function barrier: the triggered work is compiled only when it runs.
     return Base.inferencebarrier(_build_triggered)(s, l, m, a, omega, branch)
@@ -1837,12 +1269,7 @@ function _build_triggered(s, l, m, a, omega, branch)
     end
     result = try
         mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
-            route.params.s,
-            route.params.l,
-            route.params.m,
-            route.params.a,
-            route.params.omega,
-            route.params.lambda,
+            route.params.s, route.params.l, route.params.m, route.params.a, route.params.omega, route.params.lambda,
             route.branch,
         )
     catch caught
@@ -1856,12 +1283,7 @@ function _build_triggered(s, l, m, a, omega, branch)
         absorbable(caught) || rethrow()
         (evaluator=route.state_evaluator, metadata=(;))
     end
-    return _overlay(
-        route,
-        result;
-        state_evaluator=anchor.evaluator,
-        state_metadata=anchor.metadata,
-    )
+    return _overlay(route, result; state_evaluator=anchor.evaluator, state_metadata=anchor.metadata)
 end
 
 ComplexFrequency._special_route(args...; kwargs...) = build(args...; kwargs...)

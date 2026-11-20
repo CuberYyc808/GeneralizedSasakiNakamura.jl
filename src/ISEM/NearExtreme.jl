@@ -228,8 +228,7 @@ function near_extreme_prepare(coefficients::CoefficientSet, controls)
     horizon = EndpointCoefficientSet(factored.A, factored.B, factored.basis, laurent)
     full_compensation = use_small_frequency_expansion || spin.regime == :near_extremal
     metadata = merge(coefficients.metadata, (
-        near_extreme_compensated=full_compensation,
-        near_extreme_horizon_compensated=true,
+        near_extreme_compensated=full_compensation, near_extreme_horizon_compensated=true,
     ))
     return CoefficientSet(params, horizon, coefficients.infinity,
         coefficients.ordinary, metadata)

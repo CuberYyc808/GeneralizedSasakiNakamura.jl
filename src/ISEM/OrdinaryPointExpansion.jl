@@ -152,13 +152,8 @@ function _check_regular_leading_terms(numerator, shift::Integer)
 end
 
 function _ordinary_rational_series_from_pq_len!(
-    out::AbstractVector{<:Complex},
-    out_len::Integer,
-    pq::AbstractVector{<:Complex},
-    p_start::Integer,
-    p_len::Integer,
-    q_start::Integer,
-    q_len::Integer,
+    out::AbstractVector{<:Complex}, out_len::Integer, pq::AbstractVector{<:Complex}, p_start::Integer, p_len::Integer,
+    q_start::Integer, q_len::Integer,
 )
     out_len <= length(out) || throw(ArgumentError("output buffer is too short."))
     q0 = pq[q_start]
@@ -182,13 +177,7 @@ end
 
 # Taylor shift of a polynomial (times x^pole_order) to the point `center`,
 # written into `work` starting at `start`; returns the number of coefficients.
-function _shift_poly!(
-    work::Vector{<:Number},
-    start::Integer,
-    source,
-    pole_order::Integer,
-    center,
-)
+function _shift_poly!(work::Vector{<:Number}, start::Integer, source, pole_order::Integer, center)
     count = length(source) + pole_order
     start + count - 1 <= length(work) ||
         throw(ArgumentError("shift workspace is too short."))
@@ -209,13 +198,7 @@ end
 
 # Condition number of the Taylor shift: sum of absolute contributions over the
 # magnitude of each shifted coefficient.
-function _shift_condition(
-    work::Vector{<:Number},
-    start::Integer,
-    source,
-    pole_order::Integer,
-    center,
-)
+function _shift_condition(work::Vector{<:Number}, start::Integer, source, pole_order::Integer, center)
     count = length(source) + pole_order
     degree = count - 1
     maximum_condition = 1.0
@@ -238,12 +221,7 @@ end
 # Series division of the shifted numerator by the shifted denominator; returns
 # the largest cancellation ratio met in the recurrence.
 function _shift_series!(
-    out::Vector{<:Number},
-    out_len::Integer,
-    work::Vector{<:Number},
-    p_start::Integer,
-    p_len::Integer,
-    q_start::Integer,
+    out::Vector{<:Number}, out_len::Integer, work::Vector{<:Number}, p_start::Integer, p_len::Integer, q_start::Integer,
     q_len::Integer,
 )
     q0 = work[q_start]
@@ -267,12 +245,8 @@ function _shift_series!(
 end
 
 function _shift_rational!(
-    out::Vector{<:Number},
-    out_len::Integer,
-    work::Vector{<:Number},
-    rational::RationalCoefficients,
-    pole_order::Integer,
-    center,
+    out::Vector{<:Number}, out_len::Integer, work::Vector{<:Number}, rational::RationalCoefficients,
+    pole_order::Integer, center,
 )
     p_start = 1
     p_len = _shift_poly!(work, p_start, rational.numerator, 0, center)
@@ -364,14 +338,8 @@ end
 # Taylor coefficients of A and B about x0 obtained by shifting the endpoint
 # rational functions. Returns (accepted, A terms, B terms, error estimate).
 function shifted_ab!(
-    a_out::Vector{ComplexF64},
-    b_out::Vector{ComplexF64},
-    work::Vector{ComplexF64},
-    endpoint::EndpointCoefficientSet,
-    x0,
-    order::Integer;
-    eps_limit::Real=_SHIFT_EPS_LIMIT,
-    radius::Real=_shift_weight_radius(x0),
+    a_out::Vector{ComplexF64}, b_out::Vector{ComplexF64}, work::Vector{ComplexF64}, endpoint::EndpointCoefficientSet,
+    x0, order::Integer; eps_limit::Real=_SHIFT_EPS_LIMIT, radius::Real=_shift_weight_radius(x0),
 )
     center = x0 isa Real ? Float64(x0) : ComplexF64(x0)
     _valid_shift_center(center) ||
@@ -397,14 +365,8 @@ end
 # As shifted_ab!, for the infinity rational functions about y0; A is negated
 # so that the result is for derivatives in y.
 function shifted_infinity_ab!(
-    a_out::Vector{ComplexF64},
-    b_out::Vector{ComplexF64},
-    work::Vector{ComplexF64},
-    endpoint::EndpointCoefficientSet,
-    y0,
-    order::Integer;
-    eps_limit::Real=_SHIFT_EPS_LIMIT,
-    radius::Real=_shift_weight_radius(y0),
+    a_out::Vector{ComplexF64}, b_out::Vector{ComplexF64}, work::Vector{ComplexF64}, endpoint::EndpointCoefficientSet,
+    y0, order::Integer; eps_limit::Real=_SHIFT_EPS_LIMIT, radius::Real=_shift_weight_radius(y0),
 )
     center = y0 isa Real ? Float64(y0) : ComplexF64(y0)
     _valid_shift_center(center) ||
@@ -435,12 +397,7 @@ end
 # Power series of numerator/denominator by recursive division into the first
 # `out_len` entries of `out`, after removing a common leading power of the
 # argument from the denominator.
-function rational_series_from_coefficients!(
-    out::AbstractVector{<:Complex},
-    out_len::Integer,
-    numerator,
-    denominator,
-)
+function rational_series_from_coefficients!(out::AbstractVector{<:Complex}, out_len::Integer, numerator, denominator)
     out_len <= length(out) || throw(ArgumentError("output buffer is too short."))
     shift = _denominator_leading_shift(denominator)
     _check_regular_leading_terms(numerator, shift)
@@ -462,10 +419,7 @@ end
 # Laurent series of A and B about the horizon (:H, in x) or infinity (:I, in y),
 # written into `a_out` and `b_out`; returns the numbers of terms.
 function endpoint_ab_series!(
-    a_out::AbstractVector{<:Complex},
-    b_out::AbstractVector{<:Complex},
-    endpoint::EndpointCoefficientSet,
-    group::Symbol,
+    a_out::AbstractVector{<:Complex}, b_out::AbstractVector{<:Complex}, endpoint::EndpointCoefficientSet, group::Symbol,
     order::Integer,
 )
     a_terms, b_terms = ab_term_counts(group, order)
@@ -501,10 +455,7 @@ end
 
 # Taylor series of A and B from P/Q values already evaluated at the expansion point.
 function ordinary_ab_series!(
-    a_out::AbstractVector{<:Complex},
-    b_out::AbstractVector{<:Complex},
-    pq::AbstractVector{<:Complex},
-    s::Integer,
+    a_out::AbstractVector{<:Complex}, b_out::AbstractVector{<:Complex}, pq::AbstractVector{<:Complex}, s::Integer,
     order::Integer,
 )
     layout = pq_layout(s, :O)
@@ -714,13 +665,8 @@ end
 # off by up to 2.1e-11 with a 1.5e-12 Chebyshev tail over 129 points; 9.9e-12 and 2.5e-13 with the closed form.
 # A horizon-coordinate closed form up to 0.7 put 2e-9 into a = 0.95, omega = 0.74 - 0.81.)
 function ordinary_ab_series!(
-    a_out::AbstractVector{<:Complex},
-    b_out::AbstractVector{<:Complex},
-    pq::AbstractVector{<:Complex},
-    coefficients::CoefficientSet,
-    x0,
-    order::Integer;
-    shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
+    a_out::AbstractVector{<:Complex}, b_out::AbstractVector{<:Complex}, pq::AbstractVector{<:Complex},
+    coefficients::CoefficientSet, x0, order::Integer; shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
     closed_form_march::Bool=false,
 )
     if x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X && eltype(a_out) === ComplexF64 &&
@@ -762,14 +708,7 @@ end
 
 # Taylor coefficients of a solution about an ordinary point from the A and B
 # series and the initial value c0 and slope c1.
-function ordinary_point_coeffs!(
-    coeffs::AbstractVector{<:Complex},
-    a_coeffs,
-    b_coeffs,
-    c0,
-    c1,
-    order::Integer,
-)
+function ordinary_point_coeffs!(coeffs::AbstractVector{<:Complex}, a_coeffs, b_coeffs, c0, c1, order::Integer)
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("solution coefficient buffer is too short."))
     C = eltype(coeffs)

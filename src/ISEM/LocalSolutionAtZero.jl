@@ -52,14 +52,7 @@ end
 # Frobenius recurrence at x = 0 for X'' + A X' + B X = 0 with A ~ x^-1, B ~ x^-2
 # and exponent mu. With `guarded`, stops at the first ill-conditioned denominator
 # or suspicious coefficient and returns (effective order, reason).
-function _horizon_coefficients!(
-    coeffs::AbstractVector{<:Complex},
-    a_power,
-    b_power,
-    mu,
-    order::Integer,
-    guarded::Bool,
-)
+function _horizon_coefficients!(coeffs::AbstractVector{<:Complex}, a_power, b_power, mu, order::Integer, guarded::Bool)
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("coefficient buffer is too short."))
     C = eltype(coeffs)
@@ -92,38 +85,20 @@ function _horizon_coefficients!(
 end
 
 # Guarded horizon Frobenius series for the :in or :out branch, with metadata.
-function zero_local_solution(
-    coefficients::CoefficientSet,
-    branch::Symbol,
-    order::Integer,
-)
+function zero_local_solution(coefficients::CoefficientSet, branch::Symbol, order::Integer)
     a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :H, order)
     mu = horizon_exponent(coefficients.params, branch)
     a_power = endpoint_power_lookup(a_coeffs, -1)
     b_power = endpoint_power_lookup(b_coeffs, -2)
     solution_coeffs = Vector{eltype(a_coeffs)}(undef, order + 1)
-    effective_order, reason = _horizon_coefficients!(
-        solution_coeffs,
-        a_power,
-        b_power,
-        mu,
-        order,
-        true,
-    )
+    effective_order, reason = _horizon_coefficients!(solution_coeffs, a_power, b_power, mu, order, true)
     minimum_order = min(2, Int(order))
     effective_order >= minimum_order || error(
         "ISEM GSN horizon recurrence lost floating-point credibility before order $minimum_order: $reason")
     effective_order < order && resize!(solution_coeffs, effective_order + 1)
     return (
-        branch=branch,
-        exponent=mu,
-        coefficients=solution_coeffs,
-        A=a_coeffs,
-        B=b_coeffs,
-        variable=:x,
-        requested_order=Int(order),
-        effective_order=effective_order,
-        truncation_reason=reason,
+        branch=branch, exponent=mu, coefficients=solution_coeffs, A=a_coeffs, B=b_coeffs, variable=:x,
+        requested_order=Int(order), effective_order=effective_order, truncation_reason=reason,
     )
 end
 
@@ -152,11 +127,7 @@ end
 
 # At the threshold frequency (nu_h = 0) the two horizon exponents coincide; this
 # returns the logarithmic companion X = log(x) X_in + x^mu sum c_n x^n.
-function zero_log_solution(
-    coefficients::CoefficientSet,
-    branch::Symbol,
-    order::Integer,
-)
+function zero_log_solution(coefficients::CoefficientSet, branch::Symbol, order::Integer)
     is_horizon_threshold(coefficients.params) ||
         throw(ArgumentError(
             "logarithmic horizon solution requires the threshold frequency."))
@@ -190,18 +161,9 @@ function zero_log_solution(
             error("threshold logarithmic horizon recurrence lost floating-point credibility at n=$n")
     end
     return (
-        branch=normalized,
-        exponent=mu,
-        coefficients=companion,
-        A=base.A,
-        B=base.B,
-        variable=:x,
-        requested_order=Int(order),
-        effective_order=last_order,
-        truncation_reason=:threshold_log_companion,
-        representation=:threshold_log_frobenius,
-        log_exponent=mu,
-        log_coefficient=one(C),
+        branch=normalized, exponent=mu, coefficients=companion, A=base.A, B=base.B, variable=:x,
+        requested_order=Int(order), effective_order=last_order, truncation_reason=:threshold_log_companion,
+        representation=:threshold_log_frobenius, log_exponent=mu, log_coefficient=one(C),
         log_coefficients=base.coefficients,
     )
 end

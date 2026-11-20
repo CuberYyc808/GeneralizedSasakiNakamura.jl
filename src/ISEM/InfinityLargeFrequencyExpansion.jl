@@ -316,11 +316,7 @@ end
 function large_frequency_expansion_infinity_state(patch::InfinityLargeFrequencyExpansionPatch, x)
     state = _state(
         patch.plan, 1 - x, length(patch.plan.coeffs) - 1)
-    return (
-        X=patch.scale * state.X,
-        dXdx=patch.scale * state.dXdx,
-        d2Xdx2=patch.scale * state.d2Xdx2,
-    )
+    return (X=patch.scale * state.X, dXdx=patch.scale * state.dXdx, d2Xdx2=patch.scale * state.d2Xdx2,)
 end
 
 large_frequency_expansion_infinity_value(patch::InfinityLargeFrequencyExpansionPatch, x) = large_frequency_expansion_infinity_state(patch, x).X
@@ -394,13 +390,9 @@ function large_frequency_expansion_infinity_pair(coefficients::CoefficientSet,
         1 - Float64(seed_y), Float64(match_x), selected2.branch,
         ComplexF64(scale2))
     return (
-        patch1,
-        patch2,
-        state1=large_frequency_expansion_infinity_state(patch1, match_x),
-        state2=large_frequency_expansion_infinity_state(patch2, match_x),
-        tail=max(selected1.tail, selected2.tail),
-        residual=max(selected1.residual, selected2.residual),
-        check=max(selected1.check, selected2.check),
+        patch1, patch2, state1=large_frequency_expansion_infinity_state(patch1, match_x),
+        state2=large_frequency_expansion_infinity_state(patch2, match_x), tail=max(selected1.tail, selected2.tail),
+        residual=max(selected1.residual, selected2.residual), check=max(selected1.check, selected2.check),
     )
 end
 
@@ -448,13 +440,9 @@ function large_frequency_expansion_infinity_reach_pair(coefficients::Coefficient
         1 - selected.y, plan2, scale2)
     check1, check2 = selected.checks
     return (
-        patch1,
-        patch2,
-        state1=large_frequency_expansion_infinity_state(patch1, 1 - selected.y),
-        state2=large_frequency_expansion_infinity_state(patch2, 1 - selected.y),
-        tail=max(check1.tail, check2.tail),
-        residual=max(check1.residual, check2.residual),
-        check=max(check1.check, check2.check),
+        patch1, patch2, state1=large_frequency_expansion_infinity_state(patch1, 1 - selected.y),
+        state2=large_frequency_expansion_infinity_state(patch2, 1 - selected.y), tail=max(check1.tail, check2.tail),
+        residual=max(check1.residual, check2.residual), check=max(check1.check, check2.check),
     )
 end
 
@@ -512,15 +500,11 @@ function large_frequency_expansion_infinity_anchor_pair(coefficients::Coefficien
     patch2 = InfinityLargeFrequencyExpansionPatch(
         1.0 - canonical_seed, next_x, plan2, ComplexF64(scale2))
     return (
-        patch1,
-        patch2,
-        seed1=large_frequency_expansion_infinity_state(patch1, patch1.center_x),
+        patch1, patch2, seed1=large_frequency_expansion_infinity_state(patch1, patch1.center_x),
         seed2=large_frequency_expansion_infinity_state(patch2, patch2.center_x),
         state1=large_frequency_expansion_infinity_state(patch1, patch1.next_x),
-        state2=large_frequency_expansion_infinity_state(patch2, patch2.next_x),
-        tail=max(check1.tail, check2.tail),
-        residual=max(check1.residual, check2.residual),
-        check=max(check1.check, check2.check),
+        state2=large_frequency_expansion_infinity_state(patch2, patch2.next_x), tail=max(check1.tail, check2.tail),
+        residual=max(check1.residual, check2.residual), check=max(check1.check, check2.check),
     )
 end
 

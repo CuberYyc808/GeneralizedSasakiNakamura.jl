@@ -220,8 +220,7 @@ function iterate_inf_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trunc
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, z, rho, P, Pp, N)
         Δρ = min(
             convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            rho - rho_m,
+            convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol), rho - rho_m,
         )
         Δρ > 0 || error("Step size Δρ invalid: $Δρ")
         rho -= Δρ
@@ -288,8 +287,7 @@ function iterate_inf_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trun
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, z, rho, P, Pp, N)
         Δρ = min(
             convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            rho - rho_m,
+            convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol), rho - rho_m,
         )
         Δρ > 0 || error("Step size Δρ invalid: $Δρ")
         rho -= Δρ
@@ -338,8 +336,7 @@ function iterate_zero_in_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Trun
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, z, rho, P, Pp, N)
         Δρ = min(
             convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            rho_m - rho,
+            convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol), rho_m - rho,
         )
         Δρ > 0 || error("Step size Δρ invalid: $Δρ")
         rho += Δρ
@@ -391,8 +388,7 @@ function iterate_zero_out_rho(rho_m, s, epsilon, tau, kappa, lambda, z, N = _Tru
         coeffs_ord = ordinary_point_coeffs(s, epsilon, tau, kappa, lambda, z, rho, P, Pp, N)
         Δρ = min(
             convergence_radius_rho_right(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol),
-            rho_m - rho,
+            convergence_radius_rho_left(rho, s, epsilon, tau, kappa, lambda, z, coeffs_ord, tol), rho_m - rho,
         )
         Δρ > 0 || error("Step size Δρ invalid: $Δρ")
         rho += Δρ

@@ -26,22 +26,12 @@ function _qnm_radial_solutions(root)
             mode.s, mode.l, mode.m, inputs.a, inputs.omega, y_boundary;
             method="ISEM")
         return (
-            X=X,
-            Y=Y,
-            R=R,
-            boundary_condition=radial_boundary,
-            Y_boundary_condition=y_boundary,
-            evaluation_a=inputs.a,
-            evaluation_omega=inputs.omega,
-            evaluation_policy=inputs.policy,
-            frequency_projection_drift=inputs.projection_drift,
-            source_precision_bits=inputs.source_precision_bits,
-            evaluation_precision_bits=inputs.evaluation_precision_bits,
-            isem_route=missing,
-            Y_isem_route=missing,
+            X=X, Y=Y, R=R, boundary_condition=radial_boundary, Y_boundary_condition=y_boundary, evaluation_a=inputs.a,
+            evaluation_omega=inputs.omega, evaluation_policy=inputs.policy,
+            frequency_projection_drift=inputs.projection_drift, source_precision_bits=inputs.source_precision_bits,
+            evaluation_precision_bits=inputs.evaluation_precision_bits, isem_route=missing, Y_isem_route=missing,
             pole_normalization=:exact_extremal_irregular_horizon_unit_transmission,
-            coordinate_conventions=(X=:rstar, Y=:boyer_lindquist_r,
-                R=:boyer_lindquist_r),
+            coordinate_conventions=(X=:rstar, Y=:boyer_lindquist_r, R=:boyer_lindquist_r),
         )
     end
     isem_route = ISEM.complex_route(
@@ -63,32 +53,18 @@ function _qnm_radial_solutions(root)
     Y = y_route === nothing ? missing :
         ISEM.y_radial_function(y_route)
     return (
-        X=X,
-        Y=Y,
-        R=R,
-        boundary_condition=radial_boundary,
-        Y_boundary_condition=y_boundary,
-        evaluation_a=inputs.a,
-        evaluation_omega=inputs.omega,
-        evaluation_policy=inputs.policy,
-        frequency_projection_drift=inputs.projection_drift,
-        source_precision_bits=inputs.source_precision_bits,
-        evaluation_precision_bits=inputs.evaluation_precision_bits,
-        isem_route=isem_route,
-        Y_isem_route=y_route,
-        pole_normalization=:exact_incidence_zero,
-        coordinate_conventions=(X=:rstar, Y=:boyer_lindquist_r,
-            R=:boyer_lindquist_r),
+        X=X, Y=Y, R=R, boundary_condition=radial_boundary, Y_boundary_condition=y_boundary, evaluation_a=inputs.a,
+        evaluation_omega=inputs.omega, evaluation_policy=inputs.policy,
+        frequency_projection_drift=inputs.projection_drift, source_precision_bits=inputs.source_precision_bits,
+        evaluation_precision_bits=inputs.evaluation_precision_bits, isem_route=isem_route, Y_isem_route=y_route,
+        pole_normalization=:exact_incidence_zero, coordinate_conventions=(X=:rstar, Y=:boyer_lindquist_r,
+        R=:boyer_lindquist_r),
     )
 end
 
 function _finite_qnm_observables(validation, excitation)
     return all(isfinite, (
-        validation.incidence,
-        validation.reflection,
-        validation.transmission,
-        excitation.alpha,
-        excitation.reflection,
+        validation.incidence, validation.reflection, validation.transmission, excitation.alpha, excitation.reflection,
         excitation.B_gsn,
     ))
 end
@@ -107,21 +83,10 @@ function _qnm_branch_observables(root, excitation_options;
         input_a=root.a, detailed::Bool=false)
     if !(root.status in (:accepted, :estimated))
         return QNMResult((
-            a=input_a,
-            mode=root.mode,
-            frequency=root.omega,
-            omega=root.omega,
-            convention=root.convention,
-            overtone_index=root.overtone_index,
-            inversion_index=root.inversion_index,
-            segment=_qnm_root_segment(root),
-            root=root,
-            validation=missing,
-            excitation=missing,
-            stage=:root,
-            status=:failed,
-            stop_reason=root.stop_reason,
-            formalism=:GSN,
+            a=input_a, mode=root.mode, frequency=root.omega, omega=root.omega, convention=root.convention,
+            overtone_index=root.overtone_index, inversion_index=root.inversion_index, segment=_qnm_root_segment(root),
+            root=root, validation=missing, excitation=missing, stage=:root, status=:failed,
+            stop_reason=root.stop_reason, formalism=:GSN,
         ))
     end
     if get(root.provenance, :extremal_endpoint, false) &&
@@ -161,24 +126,12 @@ function _qnm_branch_observables(root, excitation_options;
     end
     if !get(root.provenance, :gsn_amplitude_limit_implemented, true)
         return QNMResult((
-            a=input_a,
-            mode=root.mode,
-            frequency=root.omega,
-            omega=root.omega,
-            angular_A=root.angular_A,
-            lambda=root.lambda,
-            convention=root.convention,
-            overtone_index=root.overtone_index,
-            inversion_index=root.inversion_index,
-            segment=_qnm_root_segment(root),
-            root=root,
-            validation=missing,
-            excitation=missing,
-            stage=:pole_skipping_endpoint,
-            status=:failed,
+            a=input_a, mode=root.mode, frequency=root.omega, omega=root.omega, angular_A=root.angular_A,
+            lambda=root.lambda, convention=root.convention, overtone_index=root.overtone_index,
+            inversion_index=root.inversion_index, segment=_qnm_root_segment(root), root=root, validation=missing,
+            excitation=missing, stage=:pole_skipping_endpoint, status=:failed,
             stop_reason=:matsubara_qnm_pole_skipping_no_simple_gsn_residue,
-            criterion=:gsn_incident_amplitude_simple_zero,
-            formalism=:GSN,
+            criterion=:gsn_incident_amplitude_simple_zero, formalism=:GSN,
         ))
     end
     if _is_extremal_damped_simple_pole(root) &&
@@ -202,23 +155,11 @@ function _qnm_branch_observables(root, excitation_options;
     catch error
         absorbable(error) || rethrow()
         return QNMResult((
-            a=input_a,
-            mode=root.mode,
-            frequency=root.omega,
-            omega=root.omega,
-            convention=root.convention,
-            overtone_index=root.overtone_index,
-            inversion_index=root.inversion_index,
-            segment=_qnm_root_segment(root),
-            root=root,
-            validation=missing,
-            excitation=missing,
-            stage=:radial_evaluation,
-            status=:failed,
-            stop_reason=:radial_evaluation_error,
-            error_type=Symbol(nameof(typeof(error))),
-            error_message=sprint(showerror, error),
-            formalism=:GSN,
+            a=input_a, mode=root.mode, frequency=root.omega, omega=root.omega, convention=root.convention,
+            overtone_index=root.overtone_index, inversion_index=root.inversion_index, segment=_qnm_root_segment(root),
+            root=root, validation=missing, excitation=missing, stage=:radial_evaluation, status=:failed,
+            stop_reason=:radial_evaluation_error, error_type=Symbol(nameof(typeof(error))),
+            error_message=sprint(showerror, error), formalism=:GSN,
         ))
     end
     validation = excitation.metadata.validation
@@ -259,12 +200,9 @@ function _qnm_branch_observables(root, excitation_options;
             :richardson_step_and_scaled_incidence_gates :
             :scaled_incidence_gate : :richardson_step_gate
     gsn = (
-        incidence_amplitude=validation.incidence,
-        reflection_amplitude=excitation.reflection,
-        transmission_amplitude=validation.transmission,
-        incidence_derivative=excitation.alpha,
-        excitation_factor=excitation.B_gsn,
-        normalization=:gsn_unit_transmission,
+        incidence_amplitude=validation.incidence, reflection_amplitude=excitation.reflection,
+        transmission_amplitude=validation.transmission, incidence_derivative=excitation.alpha,
+        excitation_factor=excitation.B_gsn, normalization=:gsn_unit_transmission,
     )
     compact = (
         a=input_a,
@@ -317,10 +255,8 @@ function _qnm_branch_observables(root, excitation_options;
     detailed || return QNMResult(compact)
 
     teukolsky = (
-        reflection_amplitude=excitation.reflection_teukolsky,
-        incidence_derivative=excitation.alpha_teukolsky,
-        excitation_factor=excitation.B_teukolsky,
-        normalization=:teukolsky_unit_transmission,
+        reflection_amplitude=excitation.reflection_teukolsky, incidence_derivative=excitation.alpha_teukolsky,
+        excitation_factor=excitation.B_teukolsky, normalization=:teukolsky_unit_transmission,
     )
     # The callable X, Y, R come from the ISEM complex route at the root frequency, which can be
     # unusable (its error estimate above 0.01, e.g. s = 2, a = 0.999, n = 2) where the observables
@@ -331,22 +267,12 @@ function _qnm_branch_observables(root, excitation_options;
     catch error
         ISEM.Certification.second_pass_error(error) || rethrow()
         return QNMResult(merge(compact, (
-            X=missing,
-            Y=missing,
-            R=missing,
-            solutions=missing,
-            solutions_error=sprint(showerror, error),
-            teukolsky=teukolsky,
-            detailed=true,
+            X=missing, Y=missing, R=missing, solutions=missing, solutions_error=sprint(showerror, error),
+            teukolsky=teukolsky, detailed=true,
         )))
     end
     return QNMResult(merge(compact, (
-        X=solutions.X,
-        Y=solutions.Y,
-        R=solutions.R,
-        solutions=solutions,
-        teukolsky=teukolsky,
-        detailed=true,
+        X=solutions.X, Y=solutions.Y, R=solutions.R, solutions=solutions, teukolsky=teukolsky, detailed=true,
     )))
 end
 
@@ -556,9 +482,7 @@ function qnm_pair(a, s::Integer, l::Integer, m::Integer, n::Integer;
         mirror.status != :accepted ?
         Symbol("mirror_", mirror.stop_reason) : :accepted
     partner_summary = partner_root === nothing ? nothing : (
-        mode=partner_root.mode,
-        frequency=partner_root.omega,
-        status=partner_root.status,
+        mode=partner_root.mode, frequency=partner_root.omega, status=partner_root.status,
         root_residual=partner_root.root_residual,
     )
     return QNMPairResult((

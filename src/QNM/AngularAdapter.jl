@@ -13,9 +13,7 @@ struct AngularBranchResult{T,C,V,M}
     metadata::M
 end
 
-const _QNM_REQUIRED_ANGULAR_APIS = (
-    :continue_angular_mode,
-)
+const _QNM_REQUIRED_ANGULAR_APIS = (:continue_angular_mode,)
 
 # The BigFloat angular spectral matrix is `_big_spectral_matrix` in SpinWeightedSpheroidalHarmonics 1.4.0 and
 # the precision-generic `construct_spectral_matrix` in later versions; both give the same matrix.
@@ -80,12 +78,9 @@ function _angular_branch_float64(mode::QNMMode, c;
         pair.sheet_id,
         pair.status,
         (
-            route=:fast_eigenvalue_continuation,
-            previous_overlap=pair.previous_overlap,
-            overlap_margin=pair.overlap_margin,
-            spectral_gap=pair.spectral_gap,
-            eigenvector_condition=pair.eigenvector_condition,
-            matrix_size=pair.matrix_size,
+            route=:fast_eigenvalue_continuation, previous_overlap=pair.previous_overlap,
+            overlap_margin=pair.overlap_margin, spectral_gap=pair.spectral_gap,
+            eigenvector_condition=pair.eigenvector_condition, matrix_size=pair.matrix_size,
         ),
     )
 end
@@ -141,12 +136,8 @@ function _angular_branch_bigfloat(mode::QNMMode, c::Complex{BigFloat};
         c, value, lambda, coefficients, residual, truncation_order,
         precision(BigFloat), sheet_id, status,
         (
-            route=:fast_eigenvalue_bigfloat_refinement,
-            seed_c=seed.c,
-            seed_residual=seed.residual,
-            seed_overlap=overlap,
-            matrix_size=seed.matrix_size,
-            refinement_iterations=iterations,
+            route=:fast_eigenvalue_bigfloat_refinement, seed_c=seed.c, seed_residual=seed.residual,
+            seed_overlap=overlap, matrix_size=seed.matrix_size, refinement_iterations=iterations,
         ),
     )
 end

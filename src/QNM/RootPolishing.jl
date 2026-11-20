@@ -235,12 +235,8 @@ function _near_extremal_zdm_seed(mode::QNMMode, a::T,
     omega = complex(mode.m * horizon_frequency,
         -surface_gravity * (T(mode.n) + T(0.5)))
     return (
-        seed=omega,
-        seed_spin=a,
-        source=:near_extremal_zdm_asymptotic_seed,
-        seed_inversion_index=inversion_index,
-        seed_predictor=:synchronous_frequency_surface_gravity,
-        seed_duplicate_distance=T(Inf),
+        seed=omega, seed_spin=a, source=:near_extremal_zdm_asymptotic_seed, seed_inversion_index=inversion_index,
+        seed_predictor=:synchronous_frequency_surface_gravity, seed_duplicate_distance=T(Inf),
     )
 end
 
@@ -381,9 +377,7 @@ function _counterrotating_near_extremal_seed(
     kappa2 = sqrt(max(zero(T), one(T) - spin2^2))
     weight = (kappa - kappa1) / (kappa2 - kappa1)
     return (
-        seed=omega1 + weight * (omega2 - omega1),
-        source=:frozen_qnm_0p4p4_kappa_predictor,
-        anchor_spins=(spin1, spin2),
+        seed=omega1 + weight * (omega2 - omega1), source=:frozen_qnm_0p4p4_kappa_predictor, anchor_spins=(spin1, spin2),
         interpolation_weight=weight,
     )
 end
@@ -570,10 +564,7 @@ function _continuation_branch_guard(spins, roots, next_spin, predictor,
     history_move = abs(roots[end] - roots[end - 1]) * step_ratio
     predicted_move = abs(predictor - roots[end])
     scale = max(one(T), abs(candidate), abs(predictor))
-    allowance = max(
-        T(32) * sqrt(T(root_tolerance)) * scale,
-        T(0.2) * max(history_move, predicted_move),
-    )
+    allowance = max(T(32) * sqrt(T(root_tolerance)) * scale, T(0.2) * max(history_move, predicted_move))
     discrepancy = abs(candidate - predictor)
     return (accepted=discrepancy <= allowance,
         discrepancy=discrepancy, allowance=allowance)
@@ -626,12 +617,8 @@ function _polish_leaver_root(mode::QNMMode, a::T, initial::Complex{T};
         residual = T(abs(evaluation.value))
         deflated_residual = T(abs(deflated_value(evaluation.value, omega)))
         push!(history, (
-            iteration=iteration,
-            omega=omega,
-            residual=residual,
-            deflated_residual=deflated_residual,
-            cf_error=evaluation.error,
-            cf_iterations=evaluation.iterations,
+            iteration=iteration, omega=omega, residual=residual, deflated_residual=deflated_residual,
+            cf_error=evaluation.error, cf_iterations=evaluation.iterations,
             angular_residual=evaluation.angular.residual,
         ))
         residual <= root_tolerance && position_tolerance === nothing && return (
@@ -852,24 +839,14 @@ function _mano_suzuki_takasugi_incidence_evaluation(mode::QNMMode, a::Float64,
         abs(route.reflection))
     metadata = route.metadata
     representation_error = maximum((
-        abs(metadata.mst_amplitude_truncation),
-        abs(metadata.mst_amplitude_spread),
-        abs(metadata.mst_amplitude_nearest),
-        abs(metadata.mst_nu_residual),
-        abs(metadata.mst_anchor_error),
-        abs(metadata.mst_anchor_residual),
+        abs(metadata.mst_amplitude_truncation), abs(metadata.mst_amplitude_spread), abs(metadata.mst_amplitude_nearest),
+        abs(metadata.mst_nu_residual), abs(metadata.mst_anchor_error), abs(metadata.mst_anchor_residual),
     ))
     angular = angular_branch(mode, a, omega;
         truncation_order=angular_order, sheet_id)
     return (
-        value=route.incidence,
-        scaled_residual=abs(route.incidence) / scale,
-        error=Float64(representation_error),
-        iterations=0,
-        angular,
-        route,
-        scale,
-        root_equation=:gsn_mst_incidence,
+        value=route.incidence, scaled_residual=abs(route.incidence) / scale, error=Float64(representation_error),
+        iterations=0, angular, route, scale, root_equation=:gsn_mst_incidence,
     )
 end
 
@@ -886,14 +863,8 @@ function _polish_mano_suzuki_takasugi_incidence_root(mode::QNMMode, a::Float64,
     for iteration in 1:maximum_root_iterations
         residual = evaluation.scaled_residual
         push!(history, (
-            iteration,
-            omega,
-            residual,
-            deflated_residual=residual,
-            cf_error=evaluation.error,
-            cf_iterations=0,
-            angular_residual=evaluation.angular.residual,
-            root_equation=:gsn_mst_incidence,
+            iteration, omega, residual, deflated_residual=residual, cf_error=evaluation.error, cf_iterations=0,
+            angular_residual=evaluation.angular.residual, root_equation=:gsn_mst_incidence,
         ))
         residual <= root_tolerance && return (
             omega, evaluation, history, converged=true,
@@ -954,12 +925,9 @@ function _polish_frequency_root(mode::QNMMode, a::T, initial::Complex{T};
         position_tolerance=nothing) where {T<:AbstractFloat}
     if _near_as_mano_suzuki_takasugi_required(mode, a, T, near_as_role)
         return _polish_mano_suzuki_takasugi_incidence_root(
-            mode, Float64(a), ComplexF64(initial);
-            angular_order, sheet_id,
-            root_tolerance=Float64(max(root_tolerance, T(2.0e-11))),
-            maximum_root_iterations,
-            trust_radius=Float64(trust_radius),
-            derivative_step_scale=Float64(derivative_step_scale),
+            mode, Float64(a), ComplexF64(initial); angular_order, sheet_id,
+            root_tolerance=Float64(max(root_tolerance, T(2.0e-11))), maximum_root_iterations,
+            trust_radius=Float64(trust_radius), derivative_step_scale=Float64(derivative_step_scale),
         )
     end
     return _polish_leaver_root(
@@ -981,12 +949,9 @@ function _near_as_anchor_seed(mode::QNMMode, target_spin::T,
     if near_as_role == :counterrotating
         seed = _complex_of_type(T, _KERR_L2_COUNTER_N8_ANCHOR)
         return (
-            seed=mode.branch == :positive_real ? seed : -conj(seed),
-            seed_spin=T(0.5),
-            source=:published_finite_spin_anchor_repolished_locally,
-            seed_inversion_index=8,
-            seed_predictor=:counterrotating_a0p5,
-            seed_duplicate_distance=T(Inf),
+            seed=mode.branch == :positive_real ? seed : -conj(seed), seed_spin=T(0.5),
+            source=:published_finite_spin_anchor_repolished_locally, seed_inversion_index=8,
+            seed_predictor=:counterrotating_a0p5, seed_duplicate_distance=T(Inf),
         )
     end
     _near_as_complete_scope(mode, near_as_role) || throw(ArgumentError(
@@ -1069,11 +1034,8 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
     target_key = (mode.s, mode.l, mode.n)
     if haskey(_SCHWARZSCHILD_SEEDS, target_key)
         return (
-            seed=_complex_of_type(T, _SCHWARZSCHILD_SEEDS[target_key]),
-            seed_spin=zero(T),
-            source=:frozen_schwarzschild_seed,
-            seed_inversion_index=mode.n,
-            seed_predictor=:frozen,
+            seed=_complex_of_type(T, _SCHWARZSCHILD_SEEDS[target_key]), seed_spin=zero(T),
+            source=:frozen_schwarzschild_seed, seed_inversion_index=mode.n, seed_predictor=:frozen,
             seed_duplicate_distance=T(Inf),
         )
     end
@@ -1123,10 +1085,7 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
                         cf_minimum_iterations,
                         cf_maximum_iterations,
                         root_tolerance,
-                        maximum_root_iterations=max(
-                            maximum_root_iterations, 60),
-                        trust_radius,
-                    )
+                        maximum_root_iterations=max(maximum_root_iterations, 60), trust_radius)
                     polished.converged || continue
                     duplicate_distance = isempty(excluded_roots) ? T(Inf) :
                         minimum(abs(polished.omega - root)
@@ -1144,10 +1103,7 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
                         polished,
                         inversion,
                         predictor=trial_predictor,
-                        predictor_distance=abs(
-                            polished.omega - trial_predictor),
-                        duplicate_distance,
-                    ))
+                        predictor_distance=abs(polished.omega - trial_predictor), duplicate_distance))
                     # The physical-overtone predictor with n_inv=n is the
                     # least ambiguous route.  Once it passes all guards there
                     # is no benefit in solving the remaining fallback roots.
@@ -1166,17 +1122,13 @@ function _schwarzschild_seed(mode::QNMMode, ::Type{T};
                 predictor=selected.predictor,
                 duplicate_distance=Float64(selected.duplicate_distance),
                 root_residual=Float64(abs(
-                    selected.polished.evaluation.value)),
-                cf_error=Float64(selected.polished.evaluation.error),
+                    selected.polished.evaluation.value)), cf_error=Float64(selected.polished.evaluation.error),
             )
         end
         metadata = generated_metadata[mode.n]
         return (
-            seed=roots[mode.n],
-            seed_spin=zero(T),
-            source=:generated_schwarzschild_overtone_sequence,
-            seed_inversion_index=metadata.inversion_index,
-            seed_predictor=metadata.predictor,
+            seed=roots[mode.n], seed_spin=zero(T), source=:generated_schwarzschild_overtone_sequence,
+            seed_inversion_index=metadata.inversion_index, seed_predictor=metadata.predictor,
             seed_duplicate_distance=T(metadata.duplicate_distance),
         )
     end
@@ -1246,10 +1198,7 @@ function _automatic_precision_fallback(mode::QNMMode, a, omega;
                 abs(branch_reference))
             precision_candidate_allowance =
                 BigFloat(64) * sqrt(BigFloat(stability_tolerance))
-            precision_predictor_allowance = max(
-                precision_candidate_allowance,
-                raw_branch_allowance / branch_scale,
-            )
+            precision_predictor_allowance = max(precision_candidate_allowance, raw_branch_allowance / branch_scale)
             precision_predictor_drift = abs(result.omega - branch_reference) /
                 branch_scale
             precision_branch_drift = min(
@@ -1259,25 +1208,15 @@ function _automatic_precision_fallback(mode::QNMMode, a, omega;
                 BigFloat(precision_drift) <= precision_candidate_allowance ||
                 precision_predictor_drift <= precision_predictor_allowance
             provenance = merge(result.provenance, (
-                precision_policy=:automatic_bigfloat_fallback,
-                high_damping_near_extremal,
-                fallback_cf_maximum_iterations,
-                float64_candidate=omega,
-                float64_bigfloat_drift=precision_drift,
-                precision_branch_reference=branch_reference,
-                precision_candidate_drift=precision_drift,
-                precision_candidate_allowance,
-                precision_predictor_drift,
-                precision_predictor_allowance,
-                precision_branch_drift,
-                precision_branch_allowance,
-                precision_branch_guard_passed,
-                float64_provenance=float64_provenance,
-                continuation_axis_touches=get(float64_provenance,
-                    :continuation_axis_touches,
-                    get(result.provenance, :continuation_axis_touches, 0)),
+                precision_policy=:automatic_bigfloat_fallback, high_damping_near_extremal,
+                fallback_cf_maximum_iterations, float64_candidate=omega, float64_bigfloat_drift=precision_drift,
+                precision_branch_reference=branch_reference, precision_candidate_drift=precision_drift,
+                precision_candidate_allowance, precision_predictor_drift, precision_predictor_allowance,
+                precision_branch_drift, precision_branch_allowance, precision_branch_guard_passed,
+                float64_provenance=float64_provenance, continuation_axis_touches=get(float64_provenance,
+                :continuation_axis_touches, get(result.provenance, :continuation_axis_touches, 0)),
                 nia_restart_rows=get(float64_provenance, :nia_restart_rows,
-                    get(result.provenance, :nia_restart_rows, NamedTuple[])),
+                get(result.provenance, :nia_restart_rows, NamedTuple[])),
             ))
             status = result.status in (:accepted, :estimated) &&
                 precision_branch_guard_passed ? result.status : :failed
@@ -1562,28 +1501,15 @@ function _tabulated_extremal_root(mode::QNMMode, a::T; guess, convention::Symbol
         _precision_bits(T),
         :accepted, :accepted_exact_extremal_root,
         (
-            family_classification=:DM,
-            input_type=string(typeof(a)),
-            working_type=string(T),
-            label_convention=contract.label_convention,
-            branch_label=contract.branch_label,
-            endpoint_kind=contract.endpoint_kind,
-            extremal_endpoint=true,
-            endpoint_method=:exact_extremal_recurrence,
-            spectrum_object=:discrete_damped_pole,
-            simple_pole=true,
-            radial_observables=:exact_extremal_gsn_scattering_basis,
-            gsn_amplitude_limit_implemented=true,
-            exact_extremal_depth=exact.depth,
-            exact_extremal_depth_drift=exact.depth_drift,
-            exact_extremal_depth_rows=exact.depth_rows,
-            exact_extremal_seed_shift=exact.seed_shift,
-            extremal_seed_source=:packaged_table,
-            angular_route=angular.metadata.route,
-            angular_sheet=angular.sheet_id,
-            angular_order=angular_order + 8,
-            root_equation=:richartz_extremal_recurrence,
-            family=:DM,
+            family_classification=:DM, input_type=string(typeof(a)), working_type=string(T),
+            label_convention=contract.label_convention, branch_label=contract.branch_label,
+            endpoint_kind=contract.endpoint_kind, extremal_endpoint=true, endpoint_method=:exact_extremal_recurrence,
+            spectrum_object=:discrete_damped_pole, simple_pole=true,
+            radial_observables=:exact_extremal_gsn_scattering_basis, gsn_amplitude_limit_implemented=true,
+            exact_extremal_depth=exact.depth, exact_extremal_depth_drift=exact.depth_drift,
+            exact_extremal_depth_rows=exact.depth_rows, exact_extremal_seed_shift=exact.seed_shift,
+            extremal_seed_source=:packaged_table, angular_route=angular.metadata.route, angular_sheet=angular.sheet_id,
+            angular_order=angular_order + 8, root_equation=:richartz_extremal_recurrence, family=:DM,
             claim_boundary=:exact_extremal_frequency_root,
         ),
     )
@@ -1615,34 +1541,18 @@ function _extremal_moderate_spin_result(mode::QNMMode, a::T;
         source_guess = isempty(roots) ? nothing :
             _polynomial_predictor(xs[1:length(roots)], roots, xs[index])
         result = _qnm_frequency_labeled(
-            mode, spin;
-            guess=source_guess,
-            convention=:overtone,
-            inversion_index=selected_inversion,
-            angular_order,
-            sheet_id=Symbol(sheet_id, :_extremal_moderate_, index),
-            cf_tolerance,
-            cf_minimum_iterations,
-            cf_maximum_iterations,
-            root_tolerance,
-            stability_tolerance,
-            maximum_root_iterations,
-            trust_radius,
-            automatic_precision_fallback,
-            fallback_precision_bits,
+            mode, spin; guess=source_guess, convention=:overtone, inversion_index=selected_inversion, angular_order,
+            sheet_id=Symbol(sheet_id, :_extremal_moderate_, index), cf_tolerance, cf_minimum_iterations,
+            cf_maximum_iterations, root_tolerance, stability_tolerance, maximum_root_iterations, trust_radius,
+            automatic_precision_fallback, fallback_precision_bits,
         )
         result.status == :accepted || return nothing
         omega = _complex_of_type(T, result.omega)
         push!(roots, omega)
         push!(rows, (
-            a=spin, one_minus_a_squared=xs[index], omega,
-            root_residual=T(result.root_residual),
-            cf_error=T(result.cf_error),
-            cf_iterations=result.cf_iterations,
-            precision_bits=result.precision_bits,
-            inversion_index=result.inversion_index,
-            status=result.status,
-            stop_reason=result.stop_reason,
+            a=spin, one_minus_a_squared=xs[index], omega, root_residual=T(result.root_residual),
+            cf_error=T(result.cf_error), cf_iterations=result.cf_iterations, precision_bits=result.precision_bits,
+            inversion_index=result.inversion_index, status=result.status, stop_reason=result.stop_reason,
         ))
         if selected_inversion === :auto && result.inversion_index isa Integer
             selected_inversion = result.inversion_index
@@ -1748,22 +1658,10 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                 roots[max(1, length(roots) - 2):end],
                 spin_defects[index]) : previous
         result = _qnm_frequency_labeled(
-            mode, spin;
-            guess=source_guess,
-            convention,
-            inversion_index=selected_inversion,
-            continuation_coordinate=:nu,
-            angular_order,
-            sheet_id=Symbol(sheet_id, :_extremal_limit_, index),
-            cf_tolerance,
-            cf_minimum_iterations,
-            cf_maximum_iterations,
-            root_tolerance,
-            stability_tolerance,
-            maximum_root_iterations,
-            trust_radius,
-            automatic_precision_fallback,
-            fallback_precision_bits,
+            mode, spin; guess=source_guess, convention, inversion_index=selected_inversion, continuation_coordinate=:nu,
+            angular_order, sheet_id=Symbol(sheet_id, :_extremal_limit_, index), cf_tolerance, cf_minimum_iterations,
+            cf_maximum_iterations, root_tolerance, stability_tolerance, maximum_root_iterations, trust_radius,
+            automatic_precision_fallback, fallback_precision_bits,
         )
         initial_failure = result.status == :accepted ? nothing : result
         source_precision_fallback = false
@@ -1871,10 +1769,8 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
                 endpoint.precision_bits, :estimated,
                 :extremal_family_unverified,
                 merge(endpoint.provenance, (
-                    family_classification=:unverified_source_failure,
-                    failed_spin=spin,
-                    failed_source_reason=result.stop_reason,
-                    source_rows=rows,
+                    family_classification=:unverified_source_failure, failed_spin=spin,
+                    failed_source_reason=result.stop_reason, source_rows=rows,
                 )))
         end
         (result.status == :accepted ||
@@ -1997,29 +1893,16 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
             family.family != :DM ? :extremal_family_ambiguous :
             exact.stop_reason,
         merge(ladder, (
-            input_type=string(typeof(a)),
-            working_type=string(T),
-            label_convention=contract.label_convention,
-            branch_label=contract.branch_label,
-            endpoint_kind=contract.endpoint_kind,
-            extremal_endpoint=true,
-            endpoint_method=:exact_extremal_recurrence,
-            spectrum_object=:discrete_damped_pole,
-            simple_pole=true,
-            radial_observables=:exact_extremal_gsn_scattering_basis,
-            gsn_amplitude_limit_implemented=true,
-            exact_extremal_depth=exact.depth,
-            exact_extremal_depth_drift=exact.depth_drift,
-            exact_extremal_depth_rows=exact.depth_rows,
-            exact_extremal_seed_shift=exact.seed_shift,
-            ladder_continuity=continuity,
-            ladder_last_step=last_step,
+            input_type=string(typeof(a)), working_type=string(T), label_convention=contract.label_convention,
+            branch_label=contract.branch_label, endpoint_kind=contract.endpoint_kind, extremal_endpoint=true,
+            endpoint_method=:exact_extremal_recurrence, spectrum_object=:discrete_damped_pole, simple_pole=true,
+            radial_observables=:exact_extremal_gsn_scattering_basis, gsn_amplitude_limit_implemented=true,
+            exact_extremal_depth=exact.depth, exact_extremal_depth_drift=exact.depth_drift,
+            exact_extremal_depth_rows=exact.depth_rows, exact_extremal_seed_shift=exact.seed_shift,
+            ladder_continuity=continuity, ladder_last_step=last_step,
             angular_route=angular_usable ? angular.metadata.route : :failed,
-            angular_sheet=angular_usable ? angular.sheet_id : :failed,
-            angular_order=angular_order + 8,
-            root_equation=:richartz_extremal_recurrence,
-            family=:DM,
-            claim_boundary=:exact_extremal_frequency_root,
+            angular_sheet=angular_usable ? angular.sheet_id : :failed, angular_order=angular_order + 8,
+            root_equation=:richartz_extremal_recurrence, family=:DM, claim_boundary=:exact_extremal_frequency_root,
         )),
     )
 end
@@ -2083,8 +1966,7 @@ function _spin_reflected_result(
                 spin_reflection=:nonfinite_source_root_mapped_unchanged,)))
     end
     angular = angular_branch(
-        requested_mode, mapped_a, source.omega;
-        truncation_order=angular_order,
+        requested_mode, mapped_a, source.omega; truncation_order=angular_order,
         sheet_id=Symbol(sheet_id, :_spin_reflection_guard),
     )
     scale = max(one(real(abs(angular.angular_A))),
@@ -2109,16 +1991,11 @@ function _spin_reflected_result(
         source.status,
         source.stop_reason,
         merge(source.provenance, (
-            spin_reflection_applied=true,
-            spin_reflection_map=:a_m_to_minus_a_minus_m,
-            spin_reflection_source_a=source.a,
-            spin_reflection_source_m=source.mode.m,
-            spin_reflection_target_a=mapped_a,
-            spin_reflection_target_m=requested_mode.m,
-            spin_reflection_frequency_map=:identity,
-            spin_reflection_angular_drift=angular_drift,
-            angular_route=angular.metadata.route,
-            angular_sheet=angular.sheet_id,
+            spin_reflection_applied=true, spin_reflection_map=:a_m_to_minus_a_minus_m,
+            spin_reflection_source_a=source.a, spin_reflection_source_m=source.mode.m,
+            spin_reflection_target_a=mapped_a, spin_reflection_target_m=requested_mode.m,
+            spin_reflection_frequency_map=:identity, spin_reflection_angular_drift=angular_drift,
+            angular_route=angular.metadata.route, angular_sheet=angular.sheet_id,
             angular_order=angular.truncation_order,
         )),
     )
@@ -2133,9 +2010,7 @@ function _mirror_reflected_result(
         angular_order::Int, sheet_id::Symbol)
     omega = -conj(source.omega)
     angular = angular_branch(
-        mirror_mode, source.a, omega;
-        truncation_order=angular_order,
-        sheet_id=Symbol(sheet_id, :_mirror_reflection),
+        mirror_mode, source.a, omega; truncation_order=angular_order, sheet_id=Symbol(sheet_id, :_mirror_reflection),
     )
     endpoint_fields = hasproperty(source.provenance, :synchronous_frequency) ?
         (synchronous_frequency=omega,) : NamedTuple()
@@ -2158,12 +2033,9 @@ function _mirror_reflected_result(
         source.status,
         source.stop_reason,
         merge(source.provenance, endpoint_fields, (
-            mirror_reflection_applied=true,
-            mirror_reflection_map=:omega_to_minus_conj_omega_m_to_minus_m,
-            mirror_reflection_source_m=source.mode.m,
-            angular_route=angular.metadata.route,
-            angular_sheet=angular.sheet_id,
-            angular_order=angular.truncation_order,
+            mirror_reflection_applied=true, mirror_reflection_map=:omega_to_minus_conj_omega_m_to_minus_m,
+            mirror_reflection_source_m=source.mode.m, angular_route=angular.metadata.route,
+            angular_sheet=angular.sheet_id, angular_order=angular.truncation_order,
         )),
     )
 end
@@ -2355,9 +2227,7 @@ function _continue_in_spin!(state, mode::QNMMode, sequence_target::T;
             curvature = max(
                 _continuation_curvature(
                     accepted_coordinates, accepted_roots),
-                _continuation_curvature(
-                    accepted_coordinates, accepted_angular_A),
-            )
+                _continuation_curvature(accepted_coordinates, accepted_angular_A))
             if curvature > zero(T) && isfinite(curvature)
                 proposed_step = clamp(T(0.05) / sqrt(curvature),
                     minimum_step, maximum_step)
@@ -2413,18 +2283,10 @@ function _continue_in_spin!(state, mode::QNMMode, sequence_target::T;
             end
 
             push!(rejected_continuation_rows, (
-                a=next_spin,
-                continuation_coordinate=selected_coordinate,
-                coordinate_value=next_coordinate,
-                attempted_step=attempted_step,
-                attempt=attempt,
-                predictor=predictor,
-                candidate=polished.omega,
-                converged=polished.converged,
-                stop_reason=polished.stop_reason,
-                branch_discrepancy=branch_guard.discrepancy,
-                branch_allowance=branch_guard.allowance,
-                axis_crossing,
+                a=next_spin, continuation_coordinate=selected_coordinate, coordinate_value=next_coordinate,
+                attempted_step=attempted_step, attempt=attempt, predictor=predictor, candidate=polished.omega,
+                converged=polished.converged, stop_reason=polished.stop_reason,
+                branch_discrepancy=branch_guard.discrepancy, branch_allowance=branch_guard.allowance, axis_crossing,
             ))
             attempted_step /= 2
             if attempted_step < minimum_step
@@ -2506,24 +2368,18 @@ function _near_axis_position_precision_recovery(mode::QNMMode, a, omega;
             source_frequency=omega, promoted_seed=precise_seed,
             recovered_frequency=result.omega, recovery_options=options,
             continuation_recomputed=false, child_position_verified=child_position_verified,
-            previous_attempt=(precision_bits=lower_precision_bits,
-                final_primary=failed_primary, guard=failed_guard,
-                provenance=context.provenance),
-            child_final_primary_rows=get(p, :final_primary_rows, NamedTuple[]),
-            child_guard_rows=get(p, :guard_rows, NamedTuple[]),
-            branch_guard=branch_guard,
+            previous_attempt=(precision_bits=lower_precision_bits, final_primary=failed_primary, guard=failed_guard,
+            provenance=context.provenance), child_final_primary_rows=get(p, :final_primary_rows, NamedTuple[]),
+            child_guard_rows=get(p, :guard_rows, NamedTuple[]), branch_guard=branch_guard,
             terminal_label_uncertain=terminal_label_uncertain,
         )
         # Report the 192-bit solve's metrics and histories, with the parent's
         # seed and continuation path.
         merged = merge(context.provenance, p, (
-            input_type=context.provenance.input_type,
-            guess_source=context.provenance.guess_source,
-            seed_inversion_index=context.provenance.seed_inversion_index,
-            seed_spin=context.seed_spin,
+            input_type=context.provenance.input_type, guess_source=context.provenance.guess_source,
+            seed_inversion_index=context.provenance.seed_inversion_index, seed_spin=context.seed_spin,
             seed_predictor=context.provenance.seed_predictor,
-            seed_duplicate_distance=context.provenance.seed_duplicate_distance,
-            spin_path=context.provenance.spin_path,
+            seed_duplicate_distance=context.provenance.seed_duplicate_distance, spin_path=context.provenance.spin_path,
             coordinate_path=context.provenance.coordinate_path,
             continuation_coordinate=context.provenance.continuation_coordinate,
             continuation_rows=context.provenance.continuation_rows,
@@ -2532,10 +2388,8 @@ function _near_axis_position_precision_recovery(mode::QNMMode, a, omega;
             terminal_extrapolation=context.provenance.terminal_extrapolation,
             continuation_axis_touches=context.provenance.continuation_axis_touches,
             nia_restart_rows=context.provenance.nia_restart_rows,
-            final_primary_rows=get(p, :final_primary_rows, NamedTuple[]),
-            guard_rows=get(p, :guard_rows, NamedTuple[]),
-            final_position_branch_guard=branch_guard,
-            near_axis_position_recovery=recovery,
+            final_primary_rows=get(p, :final_primary_rows, NamedTuple[]), guard_rows=get(p, :guard_rows, NamedTuple[]),
+            final_position_branch_guard=branch_guard, near_axis_position_recovery=recovery,
             conditioned_root=terminal_label_uncertain || get(p, :conditioned_root, false),
         ))
         return _with_provenance(result, merged; status, stop_reason)
@@ -2581,27 +2435,11 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         source_mode = QNMMode(
             mode.s, mode.l, -mode.m, mode.n, mode.branch)
         source = _qnm_frequency_labeled(
-            source_mode, -aT;
-            guess,
-            convention=selected_convention,
-            inversion_index,
-            continuation_coordinate,
-            angular_order,
-            sheet_id=Symbol(sheet_id, :_positive_spin_source),
-            cf_tolerance,
-            cf_minimum_iterations,
-            cf_maximum_iterations,
-            root_tolerance,
-            stability_tolerance,
-            maximum_root_iterations,
-            initial_spin_step,
-            maximum_spin_step,
-            minimum_spin_step,
-            trust_radius,
-            automatic_precision_fallback=fallback_on,
-            fallback_precision_bits=fallback_bits,
-            segment,
-            spin_seed,
+            source_mode, -aT; guess, convention=selected_convention, inversion_index, continuation_coordinate,
+            angular_order, sheet_id=Symbol(sheet_id, :_positive_spin_source), cf_tolerance, cf_minimum_iterations,
+            cf_maximum_iterations, root_tolerance, stability_tolerance, maximum_root_iterations, initial_spin_step,
+            maximum_spin_step, minimum_spin_step, trust_radius, automatic_precision_fallback=fallback_on,
+            fallback_precision_bits=fallback_bits, segment, spin_seed,
         )
         mapped_order = hasproperty(source.provenance, :angular_order) ?
             source.provenance.angular_order : angular_order
@@ -2663,31 +2501,18 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
     if abs(aT) == one(T) && segment != 0
         return _failed_result(mode, aT, complex(T(NaN), T(NaN)),
             :segment_unsupported_at_extremal, (
-                input_type=string(typeof(a)),
-                label_convention=label_contract.label_convention,
-                branch_label=label_contract.branch_label,
-                sequence_segment=segment,
+                input_type=string(typeof(a)), label_convention=label_contract.label_convention,
+                branch_label=label_contract.branch_label, sequence_segment=segment,
             );
             convention=selected_convention, overtone_index,
             inversion_index=selected_inversion)
     end
     if abs(aT) == one(T)
         return _extremal_damped_limit_result(
-            mode, aT;
-            guess,
-            convention=selected_convention,
-            inversion_index,
-            angular_order,
-            sheet_id,
-            cf_tolerance=tolerance_cf,
-            cf_minimum_iterations,
-            cf_maximum_iterations=maximum_cf_iterations,
-            root_tolerance=tolerance_root,
-            stability_tolerance=tolerance_stability,
-            maximum_root_iterations,
-            trust_radius=radius,
-            automatic_precision_fallback=fallback_on,
-            fallback_precision_bits=fallback_bits,
+            mode, aT; guess, convention=selected_convention, inversion_index, angular_order, sheet_id,
+            cf_tolerance=tolerance_cf, cf_minimum_iterations, cf_maximum_iterations=maximum_cf_iterations,
+            root_tolerance=tolerance_root, stability_tolerance=tolerance_stability, maximum_root_iterations,
+            trust_radius=radius, automatic_precision_fallback=fallback_on, fallback_precision_bits=fallback_bits,
         )
     end
 
@@ -2706,16 +2531,9 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         _counterrotating_near_extremal_seed(mode, aT) : nothing
     if counterrotating_seed !== nothing
         return _counterrotating_conditioned_result(
-            mode, aT, counterrotating_seed;
-            convention=selected_convention,
-            overtone_index,
-            inversion_index=selected_inversion,
-            angular_order,
-            sheet_id,
-            cf_tolerance=tolerance_cf,
-            cf_minimum_iterations,
-            cf_maximum_iterations=maximum_cf_iterations,
-            root_tolerance=tolerance_root,
+            mode, aT, counterrotating_seed; convention=selected_convention, overtone_index,
+            inversion_index=selected_inversion, angular_order, sheet_id, cf_tolerance=tolerance_cf,
+            cf_minimum_iterations, cf_maximum_iterations=maximum_cf_iterations, root_tolerance=tolerance_root,
             stability_tolerance=tolerance_stability,
         )
     end
@@ -2743,23 +2561,14 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         guess === nothing && spin_seed !== nothing && segment == 0 &&
             automatic_coordinate && selected_convention == :overtone &&
             automatic_inversion && T === Float64 ? (
-            seed=complex(T(real(spin_seed.seed)), T(imag(spin_seed.seed))),
-            seed_spin=aT,
-            source=spin_seed.source,
-            seed_inversion_index=spin_seed.inversion,
-            seed_predictor=spin_seed.predictor,
-            seed_duplicate_distance=T(Inf),
+                seed=complex(T(real(spin_seed.seed)), T(imag(spin_seed.seed))), seed_spin=aT, source=spin_seed.source,
+                seed_inversion_index=spin_seed.inversion, seed_predictor=spin_seed.predictor,
+                seed_duplicate_distance=T(Inf),
         ) : guess === nothing ?
         _schwarzschild_seed(
-            seed_mode, T;
-            angular_order,
-            sheet_id,
-            cf_tolerance=tolerance_cf,
-            cf_minimum_iterations,
-            cf_maximum_iterations=maximum_cf_iterations,
-            root_tolerance=continuation_root_tolerance,
-            maximum_root_iterations,
-            trust_radius=radius,
+            seed_mode, T; angular_order, sheet_id, cf_tolerance=tolerance_cf, cf_minimum_iterations,
+            cf_maximum_iterations=maximum_cf_iterations, root_tolerance=continuation_root_tolerance,
+            maximum_root_iterations, trust_radius=radius,
         ) : (
         seed=_complex_of_type(T, guess),
         seed_spin=aT,
@@ -2821,11 +2630,8 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
             if !polished.converged
                 return failed_result(polished.omega,
                     polished.stop_reason, (
-                        input_type=string(typeof(a)),
-                        guess_source=guess_source,
-                        spin_path=accepted_spins,
-                        continuation_rows=continuation_rows,
-                        rejected_continuation_rows=rejected_continuation_rows,
+                        input_type=string(typeof(a)), guess_source=guess_source, spin_path=accepted_spins,
+                        continuation_rows=continuation_rows, rejected_continuation_rows=rejected_continuation_rows,
                     ))
             end
             current = polished.omega
@@ -2947,14 +2753,9 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                     accepted_coordinates, accepted_roots, aT, predictor,
                     polished.omega, continuation_root_tolerance)
                 push!(terminal_extrapolation_rows, (
-                    a=aT,
-                    attempted_step=abs(aT - sequence_target),
-                    attempt=1,
-                    predictor=predictor,
-                    candidate=polished.omega,
-                    converged=polished.converged,
-                    stop_reason=:terminal_extrapolation_diagnostic,
-                    branch_discrepancy=branch_guard.discrepancy,
+                    a=aT, attempted_step=abs(aT - sequence_target), attempt=1, predictor=predictor,
+                    candidate=polished.omega, converged=polished.converged,
+                    stop_reason=:terminal_extrapolation_diagnostic, branch_discrepancy=branch_guard.discrepancy,
                     branch_allowance=branch_guard.allowance,
                 ))
                 current = polished.omega
@@ -2978,11 +2779,8 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                     sequence_segment=segment, after_birth=segment >= 1)
                 return failed_result(polished.omega,
                     classified.reason, merge((
-                        input_type=string(typeof(a)),
-                        guess_source=:explicit_guess,
-                        spin_path=T[aT],
-                        continuation_rows=continuation_rows,
-                        rejected_continuation_rows=rejected_continuation_rows,
+                        input_type=string(typeof(a)), guess_source=:explicit_guess, spin_path=T[aT],
+                        continuation_rows=continuation_rows, rejected_continuation_rows=rejected_continuation_rows,
                     ), classified.provenance))
             end
             current = polished.omega
@@ -3007,21 +2805,14 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         if _near_as_mano_suzuki_takasugi_finalization_required(
                 mode, aT, T, near_as_role)
             mst_primary = _polish_mano_suzuki_takasugi_incidence_root(
-                mode, Float64(aT), ComplexF64(current);
-                angular_order,
-                sheet_id=Symbol(sheet_id, :_mst_final),
-                root_tolerance=Float64(max(tolerance_root, T(2.0e-11))),
-                maximum_root_iterations,
+                mode, Float64(aT), ComplexF64(current); angular_order, sheet_id=Symbol(sheet_id, :_mst_final),
+                root_tolerance=Float64(max(tolerance_root, T(2.0e-11))), maximum_root_iterations,
                 trust_radius=Float64(radius),
             )
             guard = mst_primary.converged ? _polish_mano_suzuki_takasugi_incidence_root(
-                mode, Float64(aT), ComplexF64(mst_primary.omega);
-                angular_order=angular_order + 8,
-                sheet_id=Symbol(sheet_id, :_mst_guard),
-                root_tolerance=Float64(max(tolerance_root, T(2.0e-11))),
-                maximum_root_iterations,
-                trust_radius=Float64(radius),
-                derivative_step_scale=0.5,
+                mode, Float64(aT), ComplexF64(mst_primary.omega); angular_order=angular_order + 8,
+                sheet_id=Symbol(sheet_id, :_mst_guard), root_tolerance=Float64(max(tolerance_root, T(2.0e-11))),
+                maximum_root_iterations, trust_radius=Float64(radius), derivative_step_scale=0.5,
             ) : mst_primary
             current = mst_primary.omega
         else
@@ -3335,11 +3126,8 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
     catch error
         absorbable(error) || rethrow()
         return failed_result(current, :evaluation_error, (
-            input_type=string(typeof(a)),
-            spin_path=accepted_spins,
-            continuation_rows=continuation_rows,
-            rejected_continuation_rows=rejected_continuation_rows,
-            error=sprint(showerror, error),
+            input_type=string(typeof(a)), spin_path=accepted_spins, continuation_rows=continuation_rows,
+            rejected_continuation_rows=rejected_continuation_rows, error=sprint(showerror, error),
             last_polish=last_polish,
         ))
     end

@@ -80,12 +80,7 @@ const _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS = 3
 const _EIKONAL_SLOW_VARIATION = 0.015
 const _EIKONAL_CERTIFIED_VARIATION = 0.02
 const _SCALED_Y_CANDIDATES = (0.005, 0.01, 0.02, 0.04, 0.08, 0.12, 0.16, 0.24, 0.32, 0.48, 0.64, 0.8, 1.0)
-const _INFINITY_ENDPOINT_PHASES = (
-    1.0,
-    0.8408964152537145,
-    0.7071067811865476,
-    0.5946035575013605,
-)
+const _INFINITY_ENDPOINT_PHASES = (1.0, 0.8408964152537145, 0.7071067811865476, 0.5946035575013605,)
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_ORDER = 32
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_TARGET_Y = 1.0e-3
 const _SMALL_FREQUENCY_EXPANSION_BRIDGE_STEP_SAFETY = 0.8
@@ -195,24 +190,8 @@ struct Basis{P}
 end
 
 Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    max_step,
-    min_step,
-    endpoint_variable_scale,
-    truncations,
-    endpoint_valid,
+    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
+    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale, truncations, endpoint_valid,
 ) = Basis(
     kind,
     scale,
@@ -237,22 +216,8 @@ Basis(
 )
 
 Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    max_step,
-    min_step,
-    endpoint_variable_scale,
+    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
+    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale,
 ) = Basis(
     kind,
     scale,
@@ -275,23 +240,8 @@ Basis(
 )
 
 Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    max_step,
-    min_step,
-    endpoint_variable_scale,
-    truncations,
+    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
+    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale, truncations,
 ) = Basis(
     kind,
     scale,
@@ -357,15 +307,7 @@ function Base.showerror(io::IO, err::EndpointCertificateError)
 end
 
 
-InfinitySelection(
-    endpoint_y,
-    out_coeffs,
-    in_coeffs,
-    out_order,
-    in_order,
-    score,
-    variable_scale,
-) = InfinitySelection(
+InfinitySelection(endpoint_y, out_coeffs, in_coeffs, out_order, in_order, score, variable_scale) = InfinitySelection(
     endpoint_y,
     out_coeffs,
     in_coeffs,
@@ -401,12 +343,8 @@ struct IterationScratch{L<:Union{Nothing,LargeFrequencyExpansionRouting}}
 end
 
 function IterationScratch(
-    coefficients::CoefficientSet,
-    order::Integer;
-    force_eikonal::Bool=false,
-    large_frequency_expansion::Bool=false,
-    small_frequency_expansion::Bool=false,
-    route_branch::Union{Nothing,Symbol}=nothing,
+    coefficients::CoefficientSet, order::Integer; force_eikonal::Bool=false, large_frequency_expansion::Bool=false,
+    small_frequency_expansion::Bool=false, route_branch::Union{Nothing,Symbol}=nothing,
     closed_form_march::Bool=near_extreme_march(coefficients),
 )
     order_int = Int(order)
@@ -416,17 +354,13 @@ function IterationScratch(
     eikonal_order = large_frequency_expansion ? LARGE_FREQUENCY_EXPANSION_EIKONAL_ORDER : EIKONAL_ORDER
     buffer_order = use_eikonal ? max(order_int, eikonal_order) : order_int
     return IterationScratch(
-        Vector{ComplexF64}(undef, coefficients.ordinary.value_count),
-        Vector{ComplexF64}(undef, buffer_order + 1),
-        Vector{ComplexF64}(undef, buffer_order + 1),
-        Vector{ComplexF64}(undef, buffer_order + 1),
-        Vector{ComplexF64}(undef, buffer_order + 1),
-        Vector{Float64}(undef, buffer_order + 1),
+        Vector{ComplexF64}(undef, coefficients.ordinary.value_count), Vector{ComplexF64}(undef, buffer_order + 1),
+        Vector{ComplexF64}(undef, buffer_order + 1), Vector{ComplexF64}(undef, buffer_order + 1),
+        Vector{ComplexF64}(undef, buffer_order + 1), Vector{Float64}(undef, buffer_order + 1),
         Vector{Float64}(undef, buffer_order + 1),
         buffer_order >= 2 ? [1.0 / ((n + 2) * (n + 1)) for n in 0:(buffer_order - 2)] : Float64[],
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
-        large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing,
-        closed_form_march,
+        large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing, closed_form_march,
     )
 end
 
@@ -603,13 +537,7 @@ function _endpoint_state(kind::Symbol, coeffs, exponent1, exponent2, x, variable
         value, derivative, _ = horizon_series_triple(coeffs, exponent1, x)
         return value, derivative
     end
-    value, derivative, _ = _scaled_infinity_series_triple(
-        coeffs,
-        exponent1,
-        exponent2,
-        1 - x,
-        variable_scale,
-    )
+    value, derivative, _ = _scaled_infinity_series_triple(coeffs, exponent1, exponent2, 1 - x, variable_scale)
     return value, derivative
 end
 
@@ -676,13 +604,7 @@ end
 # Taylor coefficients about an ordinary point of X'' + a X' + b X = 0 with
 # X(0) = c0, X'(0) = c1, given the series of a and b.
 function _ordinary_point_coeffs!(
-    coeffs::Vector{ComplexF64},
-    a_coeffs,
-    b_coeffs,
-    c0,
-    c1,
-    order::Integer,
-    denom_inv::Vector{Float64},
+    coeffs::Vector{ComplexF64}, a_coeffs, b_coeffs, c0, c1, order::Integer, denom_inv::Vector{Float64},
 )
     coeffs[1] = ComplexF64(c0)
     order >= 1 && (coeffs[2] = ComplexF64(c1))
@@ -699,15 +621,7 @@ function _ordinary_point_coeffs!(
 end
 
 function _ordinary_point_pair!(
-    coeffs1::Vector{ComplexF64},
-    coeffs2::Vector{ComplexF64},
-    a_coeffs,
-    b_coeffs,
-    c01,
-    c11,
-    c02,
-    c12,
-    order::Integer,
+    coeffs1::Vector{ComplexF64}, coeffs2::Vector{ComplexF64}, a_coeffs, b_coeffs, c01, c11, c02, c12, order::Integer,
     denom_inv::Vector{Float64},
 )
     coeffs1[1] = ComplexF64(c01)
@@ -941,21 +855,13 @@ function _pair_step(coeffs1, coeffs2, direction, h_start, min_step, tol,
         end
         score <= tol && break
         factor = (limited1 || limited2) ? 0.5 : min(
-            _step_factor(score1, tol, order1),
-            _step_factor(score2, tol, order2),
+            _step_factor(score1, tol, order1), _step_factor(score2, tol, order2),
         )
         next_h = max(min_step, factor * h_abs)
         next_h < h_abs * (1 - 8eps(Float64)) || break
         h_abs = next_h
     end
-    return (
-        score=best_score,
-        h=best_h,
-        value1=best_value1,
-        deriv1=best_deriv1,
-        value2=best_value2,
-        deriv2=best_deriv2,
-    )
+    return (score=best_score, h=best_h, value1=best_value1, deriv1=best_deriv1, value2=best_value2, deriv2=best_deriv2,)
 end
 
 # Highest order whose coefficients pass `series_issue`, and the reason
@@ -972,13 +878,7 @@ end
 
 function _record_truncation!(records, location, branch, requested, effective, reason)
     reason == :none && return records
-    push!(records, Truncation(
-        Symbol(location),
-        Symbol(branch),
-        Int(requested),
-        Int(effective),
-        Symbol(reason),
-    ))
+    push!(records, Truncation(Symbol(location), Symbol(branch), Int(requested), Int(effective), Symbol(reason)))
     return records
 end
 
@@ -1148,39 +1048,20 @@ function _scaled_y_infinity_selection(coefficients::CoefficientSet, order::Int)
     for branch in (:out, :in)
         rho, sigma = infinity_exponents(params, branch)
         Sigma = sigma / omega
-        guarded = infinity_guarded(
-            a_scaled,
-            b_scaled,
-            rho,
-            Sigma,
-            order;
-            a_first_power=-1,
-            b_first_power=-4,
-        )
+        guarded = infinity_guarded(a_scaled, b_scaled, rho, Sigma, order; a_first_power=-1, b_first_power=-4)
         scaled_coeffs = guarded.coefficients
         best = _best_scaled_y_branch_metric(a_scaled, b_scaled, scaled_coeffs, rho, Sigma)
         candidates[branch] = (
-            coeffs=ComplexF64.(scaled_coeffs[1:(best.order + 1)]),
-            y=abs(omega) * best.Y,
-            order=best.order,
-            score=best.score,
-            reason=guarded.truncation_reason,
+            coeffs=ComplexF64.(scaled_coeffs[1:(best.order + 1)]), y=abs(omega) * best.Y, order=best.order,
+            score=best.score, reason=guarded.truncation_reason,
         )
     end
     out = candidates[:out]
     inn = candidates[:in]
     endpoint_y = max(100eps(Float64), min(out.y, inn.y))
     return InfinitySelection(
-        endpoint_y,
-        out.coeffs,
-        inn.coeffs,
-        out.order,
-        inn.order,
-        max(out.score, inn.score),
-        ComplexF64(omega),
-        order,
-        out.reason,
-        inn.reason,
+        endpoint_y, out.coeffs, inn.coeffs, out.order, inn.order, max(out.score, inn.score), ComplexF64(omega), order,
+        out.reason, inn.reason,
     )
 end
 
@@ -1192,24 +1073,14 @@ end
 # Wronskian in * out' - out * in' (x-derivatives) of the two normalized infinity
 # series at endpoint_y.
 function infinity_seed_wronskian(
-    coefficients::CoefficientSet,
-    endpoint_y::Float64,
-    out_coeffs,
-    out_order::Int,
-    in_coeffs,
-    in_order::Int,
+    coefficients::CoefficientSet, endpoint_y::Float64, out_coeffs, out_order::Int, in_coeffs, in_order::Int,
     variable_scale=1.0 + 0.0im,
 )
     function endpoint_state(branch, coeffs, order)
         kind = _kind(:infinity, branch)
         rho, sigma = infinity_exponents(coefficients.params, branch)
         raw, derivative = _endpoint_pair(
-            kind,
-            @view(coeffs[1:(order + 1)]),
-            rho,
-            sigma / variable_scale,
-            endpoint_y,
-            variable_scale,
+            kind, @view(coeffs[1:(order + 1)]), rho, sigma / variable_scale, endpoint_y, variable_scale,
         )
         scale = endpoint_seed_scale(kind, coefficients.params)
         return scale * raw, scale * derivative
@@ -1220,18 +1091,10 @@ function infinity_seed_wronskian(
     return in_value * out_derivative - out_value * in_derivative
 end
 
-function infinity_seed_wronskian(
-    coefficients::CoefficientSet,
-    selection::InfinitySelection,
-)
+function infinity_seed_wronskian(coefficients::CoefficientSet, selection::InfinitySelection)
     return infinity_seed_wronskian(
-        coefficients,
-        selection.endpoint_y,
-        selection.out_coeffs,
-        selection.out_order,
-        selection.in_coeffs,
-        selection.in_order,
-        selection.variable_scale,
+        coefficients, selection.endpoint_y, selection.out_coeffs, selection.out_order, selection.in_coeffs,
+        selection.in_order, selection.variable_scale,
     )
 end
 
@@ -1239,11 +1102,7 @@ end
 # both infinity series pass tail, adjacent-order and residual checks and the
 # optional `certificate` is met; throws EndpointCertificateError if none.
 function _select_infinity_endpoint_order(
-    coefficients::CoefficientSet,
-    match_x::Float64,
-    order::Int;
-    controls,
-    certificate=nothing,
+    coefficients::CoefficientSet, match_x::Float64, order::Int; controls, certificate=nothing,
 )
     a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :I, order)
     rho_out, sigma_out = infinity_exponents(coefficients.params, :out)
@@ -1281,36 +1140,18 @@ function _select_infinity_endpoint_order(
                 in_best = _best_infinity_order_metrics(
                     a_coeffs, b_coeffs, in_full, rho_in, sigma_in, y)
                 certificate_score = certificate === nothing ? 0.0 : Float64(certificate(
-                    coefficients,
-                    y,
-                    out_full,
-                    out_best.order,
-                    in_full,
-                    in_best.order,
-                    1.0 + 0.0im,
+                    coefficients, y, out_full, out_best.order, in_full, in_best.order, 1.0 + 0.0im,
                 ))
                 branch_score = max(out_best.score, in_best.score)
                 score = max(branch_score, certificate_score)
                 if best === nothing || score < best.score
-                    best = (
-                        score=score,
-                        y=y,
-                        out_order=out_best.order,
-                        in_order=in_best.order,
-                    )
+                    best = (score=score, y=y, out_order=out_best.order, in_order=in_best.order,)
                 end
                 if branch_score <= endpoint_target &&
                         certificate_score <= certificate_target
                     return InfinitySelection(
-                        y,
-                        ComplexF64.(out_full[1:(out_best.order + 1)]),
-                        ComplexF64.(in_full[1:(in_best.order + 1)]),
-                        out_best.order,
-                        in_best.order,
-                        score,
-                        1.0 + 0.0im,
-                        order,
-                        out_guarded.truncation_reason,
+                        y, ComplexF64.(out_full[1:(out_best.order + 1)]), ComplexF64.(in_full[1:(in_best.order + 1)]),
+                        out_best.order, in_best.order, score, 1.0 + 0.0im, order, out_guarded.truncation_reason,
                         in_guarded.truncation_reason,
                     )
                 end
@@ -1320,23 +1161,14 @@ function _select_infinity_endpoint_order(
         end
     end
     throw(EndpointCertificateError(
-        :infinity,
-        endpoint_target,
-        best === nothing ? Inf : best.score,
-        best === nothing ? initial_y : best.y,
-        order,
+        :infinity, endpoint_target, best === nothing ? Inf : best.score, best === nothing ? initial_y : best.y, order,
     ))
 end
 
 # Infinity endpoint selection: the scaled-y selection for the low-frequency
 # basis, else `_select_infinity_endpoint_order`, retried at order 32 (non-large_frequency_expansion,
 # requested order < 32) when it fails or gives an endpoint closer than _MIN_STEP.
-function select_infinity_endpoint(
-    coefficients::CoefficientSet,
-    match_x::Float64;
-    controls,
-    certificate=nothing,
-)
+function select_infinity_endpoint(coefficients::CoefficientSet, match_x::Float64; controls, certificate=nothing)
     order = _infinity_work_order(controls)
     if getproperty(controls, :basis) == :low_frequency_scaled_y
         scaled = _scaled_y_infinity_selection(coefficients, order)
@@ -1379,32 +1211,16 @@ end
 # `endpoint_seed_scale` and propagated to match_x. With certified_steps it
 # returns nothing when a step misses the tolerance; step_budget caps the steps.
 function _build_basis_series(
-    coefficients::CoefficientSet,
-    kind::Symbol,
-    endpoint_coeffs::Vector{ComplexF64},
-    exponent1,
-    exponent2,
-    match_x::Float64,
-    seed_coord::Float64,
-    order::Integer;
-    controls,
-    scratch=nothing,
-    endpoint_variable_scale=1.0 + 0.0im,
-    endpoint_requested_order=length(endpoint_coeffs) - 1,
-    endpoint_effective_order=length(endpoint_coeffs) - 1,
-    endpoint_reason=:none,
-    certified_steps=false,
+    coefficients::CoefficientSet, kind::Symbol, endpoint_coeffs::Vector{ComplexF64}, exponent1, exponent2,
+    match_x::Float64, seed_coord::Float64, order::Integer; controls, scratch=nothing,
+    endpoint_variable_scale=1.0 + 0.0im, endpoint_requested_order=length(endpoint_coeffs) - 1,
+    endpoint_effective_order=length(endpoint_coeffs) - 1, endpoint_reason=:none, certified_steps=false,
     step_budget=nothing,
 )
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
     seed_x = _is_horizon(kind) ? seed_coord : 1.0 - seed_coord
     raw_seed, raw_dseed = _endpoint_pair(
-        kind,
-        endpoint_coeffs,
-        exponent1,
-        exponent2,
-        seed_coord,
-        endpoint_variable_scale,
+        kind, endpoint_coeffs, exponent1, exponent2, seed_coord, endpoint_variable_scale,
     )
     scale = endpoint_seed_scale(kind, coefficients.params)
     current_x = seed_x
@@ -1412,43 +1228,17 @@ function _build_basis_series(
     current_derivative = scale * raw_dseed
     if _eikonal_enabled(controls, coefficients, work) && !_is_horizon(kind)
         hybrid = _hybrid_state(
-            coefficients,
-            kind,
-            seed_x,
-            current_value,
-            current_derivative,
-        match_x;
-        controls=controls,
-        scratch=work,
+            coefficients, kind, seed_x, current_value, current_derivative, match_x; controls=controls, scratch=work,
     )
         truncations = Truncation[]
         _record_truncation!(
-            truncations,
-            :infinity,
-            kind,
-            endpoint_requested_order,
-            endpoint_effective_order,
-            endpoint_reason,
+            truncations, :infinity, kind, endpoint_requested_order, endpoint_effective_order, endpoint_reason,
         )
         append!(truncations, hybrid.truncations)
         return Basis(
-            kind,
-            scale,
-            ComplexF64(exponent1),
-            ComplexF64(exponent2),
-            seed_x,
-            seed_coord,
-            current_value,
-            current_derivative,
-            endpoint_coeffs,
-            hybrid.patches,
-            hybrid.match_X,
-            hybrid.match_dXdx,
-            hybrid.step_count,
-            hybrid.max_step,
-            hybrid.min_step,
-            ComplexF64(endpoint_variable_scale),
-            truncations,
+            kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, current_value,
+            current_derivative, endpoint_coeffs, hybrid.patches, hybrid.match_X, hybrid.match_dXdx, hybrid.step_count,
+            hybrid.max_step, hybrid.min_step, ComplexF64(endpoint_variable_scale), truncations,
         )
     end
     direction = match_x >= current_x ? 1.0 : -1.0
@@ -1460,11 +1250,7 @@ function _build_basis_series(
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
     _record_truncation!(
-        truncations,
-        _is_horizon(kind) ? :horizon : :infinity,
-        kind,
-        endpoint_requested_order,
-        endpoint_effective_order,
+        truncations, _is_horizon(kind) ? :horizon : :infinity, kind, endpoint_requested_order, endpoint_effective_order,
         endpoint_reason,
     )
 
@@ -1488,12 +1274,7 @@ function _build_basis_series(
         b_coeffs = @view work.bvec[1:b_terms]
         state_scale = _state_scale(current_value, current_derivative)
         local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs,
-            a_coeffs,
-            b_coeffs,
-            current_value / state_scale,
-            current_derivative / state_scale,
-            order,
+            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
             work.denom_inv,
         )
         effective_order, reason = _credible_solution_order(local_coeffs, order)
@@ -1525,23 +1306,9 @@ function _build_basis_series(
     end
     isempty(patches) && (min_step = 0.0)
     return Basis(
-        kind,
-        scale,
-        ComplexF64(exponent1),
-        ComplexF64(exponent2),
-        seed_x,
-        seed_coord,
-        scale * raw_seed,
-        scale * raw_dseed,
-        endpoint_coeffs,
-        patches,
-        current_value,
-        current_derivative,
-        step_count,
-        max_step,
-        isfinite(min_step) ? min_step : 0.0,
-        ComplexF64(endpoint_variable_scale),
-        truncations,
+        kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, scale * raw_seed,
+        scale * raw_dseed, endpoint_coeffs, patches, current_value, current_derivative, step_count, max_step,
+        isfinite(min_step) ? min_step : 0.0, ComplexF64(endpoint_variable_scale), truncations,
     )
 end
 
@@ -1549,15 +1316,8 @@ end
 # available, eikonal segments where the coefficients vary slowly, and Taylor
 # patches elsewhere. Returns a Basis with endpoint_valid = false.
 function _hybrid_state(
-    coefficients::CoefficientSet,
-    kind::Symbol,
-    seed_x::Real,
-    seed_X,
-    seed_dXdx,
-    match_x::Real;
-    controls,
-    scratch=nothing,
-    partial_eikonal=false,
+    coefficients::CoefficientSet, kind::Symbol, seed_x::Real, seed_X, seed_dXdx, match_x::Real; controls,
+    scratch=nothing, partial_eikonal=false,
 )
     order = getproperty(controls, :ordinary_order)
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
@@ -1597,20 +1357,10 @@ function _hybrid_state(
 
     if current_x != target_x && _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split(
-            coefficients,
-            current_x,
-            current_value,
-            current_derivative,
-            target_x;
-            avec=work.avec,
-            bvec=work.bvec,
-            pq=work.pq,
-            scratch=work.eikonal,
-            residual_limit=eikonal_limit,
-            check_limit=eikonal_limit,
+            coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
-            large_frequency_expansion=work.large_frequency_expansion,
-            allow_partial=partial_eikonal,
+            large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
         )
         if suffix !== nothing
             append!(patches, suffix.patches)
@@ -1639,20 +1389,11 @@ function _hybrid_state(
             min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split(
-                    coefficients,
-                    current_x,
-                    current_value,
-                    current_derivative,
-                    target_x;
-                    avec=work.avec,
-                    bvec=work.bvec,
-                    pq=work.pq,
-                    scratch=work.eikonal,
-                    residual_limit=eikonal_limit,
+                    coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec,
+                    bvec=work.bvec, pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit,
                     check_limit=eikonal_limit,
                     terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
-                    large_frequency_expansion=work.large_frequency_expansion,
-                    allow_partial=partial_eikonal,
+                    large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
                 )
                 if suffix !== nothing
                     append!(patches, suffix.patches)
@@ -1690,12 +1431,7 @@ function _hybrid_state(
                 _EIKONAL_SLOW_VARIATION
         state_scale = _state_scale(current_value, current_derivative)
         local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs,
-            a_coeffs,
-            b_coeffs,
-            current_value / state_scale,
-            current_derivative / state_scale,
-            order,
+            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
             work.denom_inv,
         )
         effective_order, reason = _credible_solution_order(local_coeffs, order)
@@ -1727,19 +1463,9 @@ function _hybrid_state(
         if eikonal_ready && !eikonal_attempted
             eikonal_attempted = true
             suffix = eikonal_split(
-                coefficients,
-                current_x,
-                current_value,
-                current_derivative,
-                target_x;
-                avec=work.avec,
-                bvec=work.bvec,
-                pq=work.pq,
-                scratch=work.eikonal,
-                residual_limit=eikonal_limit,
-                check_limit=eikonal_limit,
-                large_frequency_expansion=work.large_frequency_expansion,
-                allow_partial=partial_eikonal,
+                coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, bvec=work.bvec,
+                pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+                large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
             )
             if suffix !== nothing
                 append!(patches, suffix.patches)
@@ -1757,40 +1483,16 @@ function _hybrid_state(
     isempty(patches) && (min_step = 0.0)
     seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
     return Basis(
-        kind,
-        1.0 + 0.0im,
-        0.0 + 0.0im,
-        0.0 + 0.0im,
-        Float64(seed_x),
-        seed_coord,
-        ComplexF64(seed_X),
-        ComplexF64(seed_dXdx),
-        ComplexF64[ComplexF64(seed_X)],
-        patches,
-        current_value,
-        current_derivative,
-        step_count,
-        max_step,
-        isfinite(min_step) ? min_step : 0.0,
-        1.0 + 0.0im,
-        truncations,
-        false,
+        kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
+        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value, current_derivative, step_count,
+        max_step, isfinite(min_step) ? min_step : 0.0, 1.0 + 0.0im, truncations, false,
     )
 end
 
 # Paired form of `_hybrid_state` with common steps for both solutions.
 function _hybrid_pair(
-    coefficients::CoefficientSet,
-    kind1::Symbol,
-    kind2::Symbol,
-    seed_x::Real,
-    seed_X1,
-    seed_dXdx1,
-    seed_X2,
-    seed_dXdx2,
-    match_x::Real;
-    controls,
-    scratch=nothing,
+    coefficients::CoefficientSet, kind1::Symbol, kind2::Symbol, seed_x::Real, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2,
+    match_x::Real; controls, scratch=nothing,
 )
     order = getproperty(controls, :ordinary_order)
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
@@ -1845,21 +1547,9 @@ function _hybrid_pair(
     if current_x != target_x && work.large_frequency_expansion !== nothing &&
             _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split_pair(
-            coefficients,
-            current_x,
-            value1,
-            deriv1,
-            value2,
-            deriv2,
-            target_x;
-            avec=work.avec,
-            bvec=work.bvec,
-            pq=work.pq,
-            scratch=work.eikonal,
-            residual_limit=eikonal_limit,
-            check_limit=eikonal_limit,
-            terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
-            large_frequency_expansion=work.large_frequency_expansion,
+            coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS, large_frequency_expansion=work.large_frequency_expansion,
         )
         if suffix !== nothing
             append!(patches1, suffix.patches1)
@@ -1898,19 +1588,8 @@ function _hybrid_pair(
             min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split_pair(
-                    coefficients,
-                    current_x,
-                    value1,
-                    deriv1,
-                    value2,
-                    deriv2,
-                    target_x;
-                    avec=work.avec,
-                    bvec=work.bvec,
-                    pq=work.pq,
-                    scratch=work.eikonal,
-                    residual_limit=eikonal_limit,
-                    check_limit=eikonal_limit,
+                    coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+                    pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
                     terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
                     large_frequency_expansion=work.large_frequency_expansion,
                 )
@@ -1995,19 +1674,8 @@ function _hybrid_pair(
         if eikonal_ready && !eikonal_attempted
             eikonal_attempted = true
             suffix = eikonal_pair(
-                coefficients,
-                current_x,
-                value1,
-                deriv1,
-                value2,
-                deriv2,
-                target_x;
-                avec=work.avec,
-                bvec=work.bvec,
-                pq=work.pq,
-                scratch=work.eikonal,
-                residual_limit=eikonal_limit,
-                check_limit=eikonal_limit,
+                coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+                pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
                 large_frequency_expansion=work.large_frequency_expansion,
             )
             if suffix !== nothing
@@ -2050,28 +1718,13 @@ used when enabled for these parameters and either `kind` is not a horizon kind
 or `allow_eikonal` is set; Taylor patches are used otherwise.
 """
 function iterate_from_state(
-    coefficients::CoefficientSet,
-    kind::Symbol,
-    seed_x::Real,
-    seed_X,
-    seed_dXdx,
-    match_x::Real;
-    controls,
-    scratch=nothing,
-    allow_eikonal=false,
-    allow_partial=false,
+    coefficients::CoefficientSet, kind::Symbol, seed_x::Real, seed_X, seed_dXdx, match_x::Real; controls,
+    scratch=nothing, allow_eikonal=false, allow_partial=false,
 )
     if _eikonal_enabled(controls, coefficients, scratch) &&
             (!_is_horizon(kind) || allow_eikonal)
         return _hybrid_state(
-            coefficients,
-            kind,
-            seed_x,
-            seed_X,
-            seed_dXdx,
-            match_x;
-            controls=controls,
-            scratch=scratch,
+            coefficients, kind, seed_x, seed_X, seed_dXdx, match_x; controls=controls, scratch=scratch,
             partial_eikonal=allow_partial,
         )
     end
@@ -2109,12 +1762,7 @@ function iterate_from_state(
         b_coeffs = @view work.bvec[1:b_terms]
         state_scale = _state_scale(current_value, current_derivative)
         local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs,
-            a_coeffs,
-            b_coeffs,
-            current_value / state_scale,
-            current_derivative / state_scale,
-            order,
+            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
             work.denom_inv,
         )
         effective_order, reason = _credible_solution_order(local_coeffs, order)
@@ -2145,24 +1793,9 @@ function iterate_from_state(
     isempty(patches) && (min_step = 0.0)
     seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
     return Basis(
-        kind,
-        1.0 + 0.0im,
-        0.0 + 0.0im,
-        0.0 + 0.0im,
-        Float64(seed_x),
-        seed_coord,
-        ComplexF64(seed_X),
-        ComplexF64(seed_dXdx),
-        ComplexF64[ComplexF64(seed_X)],
-        patches,
-        current_value,
-        current_derivative,
-        step_count,
-        max_step,
-        isfinite(min_step) ? min_step : 0.0,
-        1.0 + 0.0im,
-        truncations,
-        false,
+        kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
+        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value, current_derivative, step_count,
+        max_step, isfinite(min_step) ? min_step : 0.0, 1.0 + 0.0im, truncations, false,
     )
 end
 
@@ -2182,11 +1815,7 @@ function logscaled_state(X, dXdx, log_scale::Real=0.0)
     total_log_scale = Float64(log_scale) + log(scale)
     isfinite(total_log_scale) ||
         error("ISEM GSN log-scaled state scale is nonfinite")
-    return LogScaledState(
-        ComplexF64(value / scale),
-        ComplexF64(derivative / scale),
-        total_log_scale,
-    )
+    return LogScaledState(ComplexF64(value / scale), ComplexF64(derivative / scale), total_log_scale)
 end
 
 function _materialize_logscaled_component(component, log_scale, phase)
@@ -2202,10 +1831,7 @@ end
 
 # Named tuple (X, dXdx) equal to `scale * exp(state.log_scale)` times the stored
 # components; errors when the result is not finite.
-function materialize_logscaled_state(
-    state::LogScaledState;
-    scale=1.0 + 0.0im,
-)
+function materialize_logscaled_state(state::LogScaledState; scale=1.0 + 0.0im)
     applied = ComplexF64(scale)
     _scaled_finite(applied) ||
         error("ISEM GSN log-scaled materialization scale is nonfinite")
@@ -2215,20 +1841,13 @@ function materialize_logscaled_state(
     return (
         X=_materialize_logscaled_component(
             state.X, applied_log, applied_phase),
-        dXdx=_materialize_logscaled_component(
-            state.dXdx, applied_log, applied_phase),
-    )
+        dXdx=_materialize_logscaled_component(state.dXdx, applied_log, applied_phase))
 end
 
 # Taylor propagation of a log-scaled state, renormalizing after every patch so
 # that states beyond the Float64 range stay representable.
 function iterate_logscaled_from_state(
-    coefficients::CoefficientSet,
-    kind::Symbol,
-    seed_x::Real,
-    seed_state::LogScaledState,
-    match_x::Real;
-    controls,
+    coefficients::CoefficientSet, kind::Symbol, seed_x::Real, seed_state::LogScaledState, match_x::Real; controls,
     scratch=nothing,
 )
     order = getproperty(controls, :ordinary_order)
@@ -2268,13 +1887,7 @@ function iterate_logscaled_from_state(
         a_coeffs = @view work.avec[1:a_terms]
         b_coeffs = @view work.bvec[1:b_terms]
         local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs,
-            a_coeffs,
-            b_coeffs,
-            state.X,
-            state.dXdx,
-            order,
-            work.denom_inv,
+            work.local_coeffs, a_coeffs, b_coeffs, state.X, state.dXdx, order, work.denom_inv,
         )
         effective_order, reason = _credible_solution_order(local_coeffs, order)
         effective_order >= 1 || error(
@@ -2297,12 +1910,7 @@ function iterate_logscaled_from_state(
         _scaled_finite(best.value) && _scaled_finite(best.derivative) ||
             error("ISEM GSN log-scaled propagation produced a nonfinite state")
         next_x = current_x + best.h
-        push!(patches, LogScaledPatch(
-            current_x,
-            next_x,
-            copy(finite_coeffs),
-            state.log_scale,
-        ))
+        push!(patches, LogScaledPatch(current_x, next_x, copy(finite_coeffs), state.log_scale))
         state = logscaled_state(
             best.value, best.derivative, state.log_scale)
         current_x = next_x
@@ -2311,14 +1919,7 @@ function iterate_logscaled_from_state(
     end
     isempty(patches) && (min_step = 0.0)
     return LogScaledBasis(
-        kind,
-        Float64(seed_x),
-        seed_state,
-        patches,
-        state,
-        step_count,
-        max_step,
-        isfinite(min_step) ? min_step : 0.0,
+        kind, Float64(seed_x), seed_state, patches, state, step_count, max_step, isfinite(min_step) ? min_step : 0.0,
         truncations,
     )
 end
@@ -2340,14 +1941,8 @@ Base.showerror(io::IO, err::ScaledMarchStepLimit) = print(io, err.message)
 # a step fails its checks. Returns a basis with ScaledPatch patches, or
 # nothing if no step was taken.
 function iterate_scaled_y(
-    coefficients::CoefficientSet,
-    kind::Symbol,
-    seed_x::Real,
-    seed_X,
-    seed_dXdx;
-    target_y=nothing,
-    order::Integer=_SMALL_FREQUENCY_EXPANSION_BRIDGE_ORDER,
-    tolerance::Real=_SMALL_FREQUENCY_EXPANSION_BRIDGE_TOLERANCE,
+    coefficients::CoefficientSet, kind::Symbol, seed_x::Real, seed_X, seed_dXdx; target_y=nothing,
+    order::Integer=_SMALL_FREQUENCY_EXPANSION_BRIDGE_ORDER, tolerance::Real=_SMALL_FREQUENCY_EXPANSION_BRIDGE_TOLERANCE,
     stop_check=nothing,
 )
     omega_scale = abs(_param_omega(coefficients.params))
@@ -2381,13 +1976,8 @@ function iterate_scaled_y(
         state_scale = _state_scale(current_value, current_derivative_y)
         isfinite(state_scale) || break
         local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs,
-            a_coeffs,
-            b_coeffs,
-            current_value / state_scale,
-            current_derivative_y / state_scale,
-            order,
-            work.denom_inv,
+            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative_y / state_scale,
+            order, work.denom_inv,
         )
         all(_scaled_finite, local_coeffs) || break
 
@@ -2411,25 +2001,14 @@ function iterate_scaled_y(
 
         next_x = 1.0 - omega_scale * next_y
         direction * (current_x - next_x) > 0 || break
-        push!(patches, ScaledPatch(
-            current_x,
-            next_x,
-            current_y,
-            omega_scale,
-            copy(local_coeffs),
-            state_scale,
-        ))
+        push!(patches, ScaledPatch(current_x, next_x, current_y, omega_scale, copy(local_coeffs), state_scale))
         x_step = abs(next_x - current_x)
         max_step = max(max_step, x_step)
         min_step = min(min_step, x_step)
         current_y = next_y
         current_value = next_value
         current_derivative_y = next_derivative_y
-        if stop_check !== nothing && stop_check(
-                next_x,
-                current_value,
-                ComplexF64(-current_derivative_y / omega_scale),
-            )
+        if stop_check !== nothing && stop_check(next_x, current_value, ComplexF64(-current_derivative_y / omega_scale))
             break
         end
     end
@@ -2439,24 +2018,10 @@ function iterate_scaled_y(
     isempty(patches) && return nothing
 
     return Basis(
-        kind,
-        1.0 + 0.0im,
-        0.0 + 0.0im,
-        0.0 + 0.0im,
-        Float64(seed_x),
-        start_y,
-        ComplexF64(seed_X),
-        ComplexF64(seed_dXdx),
-        ComplexF64[ComplexF64(seed_X)],
-        patches,
-        current_value,
-        ComplexF64(-current_derivative_y / omega_scale),
-        length(patches),
-        max_step,
-        isfinite(min_step) ? min_step : 0.0,
-        ComplexF64(-omega_scale),
-        Truncation[],
-        false,
+        kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), start_y, ComplexF64(seed_X),
+        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value,
+        ComplexF64(-current_derivative_y / omega_scale), length(patches), max_step, isfinite(min_step) ? min_step : 0.0,
+        ComplexF64(-omega_scale), Truncation[], false,
     )
 end
 
@@ -2464,30 +2029,12 @@ end
 # march for infinity kinds when eikonal patches are enabled); returns
 # (basis1, basis2) with endpoint_valid = false.
 function iterate_pair_from_state(
-    coefficients::CoefficientSet,
-    kind1::Symbol,
-    kind2::Symbol,
-    seed_x::Real,
-    seed_X1,
-    seed_dXdx1,
-    seed_X2,
-    seed_dXdx2,
-    match_x::Real;
-    controls,
-    scratch=nothing,
+    coefficients::CoefficientSet, kind1::Symbol, kind2::Symbol, seed_x::Real, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2,
+    match_x::Real; controls, scratch=nothing,
 )
     if _eikonal_enabled(controls, coefficients, scratch) && !_is_horizon(kind1)
         return _hybrid_pair(
-            coefficients,
-            kind1,
-            kind2,
-            seed_x,
-            seed_X1,
-            seed_dXdx1,
-            seed_X2,
-            seed_dXdx2,
-            match_x;
-            controls=controls,
+            coefficients, kind1, kind2, seed_x, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2, match_x; controls=controls,
             scratch=scratch,
         )
     end
@@ -2582,44 +2129,14 @@ function iterate_pair_from_state(
     seed_coord = _is_horizon(kind1) ? Float64(seed_x) : 1.0 - Float64(seed_x)
     common_min_step = isfinite(min_step) ? min_step : 0.0
     basis1 = Basis(
-        kind1,
-        1.0 + 0.0im,
-        0.0 + 0.0im,
-        0.0 + 0.0im,
-        Float64(seed_x),
-        seed_coord,
-        ComplexF64(seed_X1),
-        ComplexF64(seed_dXdx1),
-        ComplexF64[ComplexF64(seed_X1)],
-        patches1,
-        value1,
-        deriv1,
-        step_count,
-        max_step,
-        common_min_step,
-        1.0 + 0.0im,
-        truncations1,
-        false,
+        kind1, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X1),
+        ComplexF64(seed_dXdx1), ComplexF64[ComplexF64(seed_X1)], patches1, value1, deriv1, step_count, max_step,
+        common_min_step, 1.0 + 0.0im, truncations1, false,
     )
     basis2 = Basis(
-        kind2,
-        1.0 + 0.0im,
-        0.0 + 0.0im,
-        0.0 + 0.0im,
-        Float64(seed_x),
-        seed_coord,
-        ComplexF64(seed_X2),
-        ComplexF64(seed_dXdx2),
-        ComplexF64[ComplexF64(seed_X2)],
-        patches2,
-        value2,
-        deriv2,
-        step_count,
-        max_step,
-        common_min_step,
-        1.0 + 0.0im,
-        truncations2,
-        false,
+        kind2, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X2),
+        ComplexF64(seed_dXdx2), ComplexF64[ComplexF64(seed_X2)], patches2, value2, deriv2, step_count, max_step,
+        common_min_step, 1.0 + 0.0im, truncations2, false,
     )
     return basis1, basis2
 end
@@ -2645,15 +2162,8 @@ end
 # Taylor march of both horizon solutions from the common seed_x to match_x with
 # shared steps; the plain route of `iterate_pair_from_zero`.
 function _build_pair_from_horizon_seed(
-    coefficients::CoefficientSet,
-    solution1,
-    solution2,
-    branch1::Symbol,
-    branch2::Symbol,
-    seed_x::Float64,
-    match_x::Float64;
-    controls,
-    scratch=nothing,
+    coefficients::CoefficientSet, solution1, solution2, branch1::Symbol, branch2::Symbol, seed_x::Float64,
+    match_x::Float64; controls, scratch=nothing,
 )
     order = getproperty(controls, :ordinary_order)
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
@@ -2754,41 +2264,13 @@ function _build_pair_from_horizon_seed(
     isempty(patches1) && (min_step = 0.0)
     common_min_step = isfinite(min_step) ? min_step : 0.0
     basis1 = Basis(
-        kind1,
-        scale1,
-        ComplexF64(solution1.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        scale1 * raw1,
-        scale1 * draw1,
-        solution1.coefficients,
-        patches1,
-        value1,
-        deriv1,
-        step_count,
-        max_step,
-        common_min_step,
-        1.0 + 0.0im,
+        kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, scale1 * raw1, scale1 * draw1,
+        solution1.coefficients, patches1, value1, deriv1, step_count, max_step, common_min_step, 1.0 + 0.0im,
         truncations1,
     )
     basis2 = Basis(
-        kind2,
-        scale2,
-        ComplexF64(solution2.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        scale2 * raw2,
-        scale2 * draw2,
-        solution2.coefficients,
-        patches2,
-        value2,
-        deriv2,
-        step_count,
-        max_step,
-        common_min_step,
-        1.0 + 0.0im,
+        kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, scale2 * raw2, scale2 * draw2,
+        solution2.coefficients, patches2, value2, deriv2, step_count, max_step, common_min_step, 1.0 + 0.0im,
         truncations2,
     )
     return _with_horizon_log(basis1, solution1), _with_horizon_log(basis2, solution2)
@@ -2806,8 +2288,7 @@ function _with_horizon_log(basis::Basis, solution)
         basis.endpoint_coeffs, basis.patches, basis.match_X, basis.match_dXdx,
         basis.step_count, basis.max_step, basis.min_step,
         basis.endpoint_variable_scale, basis.truncations, basis.endpoint_valid,
-        ComplexF64.(solution.log_coefficient .* solution.log_coefficients),
-        ComplexF64(solution.log_exponent),
+        ComplexF64.(solution.log_coefficient .* solution.log_coefficients), ComplexF64(solution.log_exponent),
     )
 end
 
@@ -2834,12 +2315,7 @@ function _patch_range(patches, seed_x)
 end
 
 function _hybrid_horizon(
-    coefficients::CoefficientSet,
-    solution,
-    branch::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
+    coefficients::CoefficientSet, solution, branch::Symbol, seed_x::Float64, match_x::Float64, work::IterationScratch,
     controls,
 )
     kind = _kind(:horizon, branch)
@@ -2857,23 +2333,9 @@ function _hybrid_horizon(
         solution.truncation_reason)
     append!(truncations, result.truncations)
     return Basis(
-        kind,
-        scale,
-        ComplexF64(solution.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value,
-        seed_derivative,
-        solution.coefficients,
-        result.patches,
-        result.match_X,
-        result.match_dXdx,
-        result.step_count,
-        result.max_step,
-        result.min_step,
-        1.0 + 0.0im,
-        truncations,
+        kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
+        solution.coefficients, result.patches, result.match_X, result.match_dXdx, result.step_count, result.max_step,
+        result.min_step, 1.0 + 0.0im, truncations,
     )
 end
 
@@ -2882,12 +2344,7 @@ end
 # _EIKONAL_CERTIFIED_VARIATION is met and a residual `limit` is given; nothing
 # otherwise. `_eikonal_horizon_pair` is the two-branch version.
 function _eikonal_horizon(
-    coefficients::CoefficientSet,
-    solution,
-    branch::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
+    coefficients::CoefficientSet, solution, branch::Symbol, seed_x::Float64, match_x::Float64, work::IterationScratch,
     limit,
 )
     score = _eikonal_score(coefficients, seed_x, work)
@@ -2921,36 +2378,15 @@ function _eikonal_horizon(
     _record_truncation!(truncations, :horizon, kind,
         solution.requested_order, solution.effective_order, solution.truncation_reason)
     return Basis(
-        kind,
-        scale,
-        ComplexF64(solution.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value,
-        seed_derivative,
-        solution.coefficients,
-        result.patches,
-        result.value,
-        result.derivative,
-        length(result.patches),
-        result.max_step,
-        result.min_step,
-        1.0 + 0.0im,
-        truncations,
+        kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
+        solution.coefficients, result.patches, result.value, result.derivative, length(result.patches), result.max_step,
+        result.min_step, 1.0 + 0.0im, truncations,
     )
 end
 
 function _hybrid_horizon_pair(
-    coefficients::CoefficientSet,
-    solution1,
-    solution2,
-    branch1::Symbol,
-    branch2::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
-    controls,
+    coefficients::CoefficientSet, solution1, solution2, branch1::Symbol, branch2::Symbol, seed_x::Float64,
+    match_x::Float64, work::IterationScratch, controls,
 )
     kind1 = _kind(:horizon, branch1)
     kind2 = _kind(:horizon, branch2)
@@ -2981,56 +2417,21 @@ function _hybrid_horizon_pair(
     append!(truncations1, result1.truncations)
     append!(truncations2, result2.truncations)
     basis1 = Basis(
-        kind1,
-        scale1,
-        ComplexF64(solution1.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value1,
-        seed_derivative1,
-        solution1.coefficients,
-        result1.patches,
-        result1.match_X,
-        result1.match_dXdx,
-        result1.step_count,
-        result1.max_step,
-        result1.min_step,
-        1.0 + 0.0im,
-        truncations1,
+        kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
+        solution1.coefficients, result1.patches, result1.match_X, result1.match_dXdx, result1.step_count,
+        result1.max_step, result1.min_step, 1.0 + 0.0im, truncations1,
     )
     basis2 = Basis(
-        kind2,
-        scale2,
-        ComplexF64(solution2.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value2,
-        seed_derivative2,
-        solution2.coefficients,
-        result2.patches,
-        result2.match_X,
-        result2.match_dXdx,
-        result2.step_count,
-        result2.max_step,
-        result2.min_step,
-        1.0 + 0.0im,
-        truncations2,
+        kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
+        solution2.coefficients, result2.patches, result2.match_X, result2.match_dXdx, result2.step_count,
+        result2.max_step, result2.min_step, 1.0 + 0.0im, truncations2,
     )
     return basis1, basis2
 end
 
 function _eikonal_horizon_pair(
-    coefficients::CoefficientSet,
-    solution1,
-    solution2,
-    branch1::Symbol,
-    branch2::Symbol,
-    seed_x::Float64,
-    match_x::Float64,
-    work::IterationScratch,
-    limit,
+    coefficients::CoefficientSet, solution1, solution2, branch1::Symbol, branch2::Symbol, seed_x::Float64,
+    match_x::Float64, work::IterationScratch, limit,
 )
     score = _eikonal_score(coefficients, seed_x, work)
     fast = score <= _EIKONAL_SLOW_VARIATION
@@ -3075,42 +2476,14 @@ function _eikonal_horizon_pair(
     _record_truncation!(truncations2, :horizon, kind2,
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
     basis1 = Basis(
-        kind1,
-        scale1,
-        ComplexF64(solution1.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value1,
-        seed_derivative1,
-        solution1.coefficients,
-        result.patches1,
-        result.value1,
-        result.deriv1,
-        length(result.patches1),
-        result.max_step,
-        result.min_step,
-        1.0 + 0.0im,
-        truncations1,
+        kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
+        solution1.coefficients, result.patches1, result.value1, result.deriv1, length(result.patches1), result.max_step,
+        result.min_step, 1.0 + 0.0im, truncations1,
     )
     basis2 = Basis(
-        kind2,
-        scale2,
-        ComplexF64(solution2.exponent),
-        0.0 + 0.0im,
-        seed_x,
-        seed_x,
-        seed_value2,
-        seed_derivative2,
-        solution2.coefficients,
-        result.patches2,
-        result.value2,
-        result.deriv2,
-        length(result.patches2),
-        result.max_step,
-        result.min_step,
-        1.0 + 0.0im,
-        truncations2,
+        kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
+        solution2.coefficients, result.patches2, result.value2, result.deriv2, length(result.patches2), result.max_step,
+        result.min_step, 1.0 + 0.0im, truncations2,
     )
     return basis1, basis2
 end
@@ -3122,13 +2495,8 @@ end
         !isempty(solution.log_coefficients) ?
         solution.log_coefficients : solution.coefficients
     seed, _ = select_horizon_seed(
-        seed_coefficients,
-        solution.exponent,
-        solution.A,
-        solution.B,
-        match_x;
-        tol=max(getproperty(controls, :tolerance), _ENDPOINT_SEED_TARGET),
-        tail_aware=_tail_seed(coefficients),
+        seed_coefficients, solution.exponent, solution.A, solution.B, match_x;
+        tol=max(getproperty(controls, :tolerance), _ENDPOINT_SEED_TARGET), tail_aware=_tail_seed(coefficients),
         max_seed=isreal(coefficients.params.omega) ? _HORIZON_SEED_MAX_X : 1.0,
     )
     return seed
@@ -3232,10 +2600,7 @@ end
 # horizon, propagated outward to match_x: eikonal or hybrid paths when enabled,
 # otherwise Taylor patches.
 function iterate_from_zero(
-    coefficients::CoefficientSet,
-    branch::Symbol;
-    controls,
-    match_x::Float64=getproperty(controls, :match_x),
+    coefficients::CoefficientSet, branch::Symbol; controls, match_x::Float64=getproperty(controls, :match_x),
     scratch=nothing,
 )
     normalized = _normalized_horizon_branch(branch)
@@ -3256,19 +2621,10 @@ function iterate_from_zero(
         basis === nothing || return basis
     end
     return _build_basis_series(
-        coefficients,
-        _kind(:horizon, normalized),
-        endpoint_solution.coefficients,
-        endpoint_solution.exponent,
-        0.0 + 0.0im,
-        match_x,
-        seed_x,
-        getproperty(controls, :ordinary_order);
-        controls=controls,
-        scratch=scratch,
+        coefficients, _kind(:horizon, normalized), endpoint_solution.coefficients, endpoint_solution.exponent,
+        0.0 + 0.0im, match_x, seed_x, getproperty(controls, :ordinary_order); controls=controls, scratch=scratch,
         endpoint_requested_order=endpoint_solution.requested_order,
-        endpoint_effective_order=endpoint_solution.effective_order,
-        endpoint_reason=endpoint_solution.truncation_reason,
+        endpoint_effective_order=endpoint_solution.effective_order, endpoint_reason=endpoint_solution.truncation_reason,
     )
 end
 
@@ -3276,12 +2632,8 @@ end
 # (basis1, basis2). At the superradiant threshold the outgoing branch uses the
 # logarithmic solution and the eikonal routes are skipped.
 function iterate_pair_from_zero(
-    coefficients::CoefficientSet,
-    branch1::Symbol,
-    branch2::Symbol;
-    controls,
-    match_x::Float64=getproperty(controls, :match_x),
-    scratch=nothing,
+    coefficients::CoefficientSet, branch1::Symbol, branch2::Symbol; controls,
+    match_x::Float64=getproperty(controls, :match_x), scratch=nothing,
 )
     normalized1 = _normalized_horizon_branch(branch1)
     normalized2 = _normalized_horizon_branch(branch2)
@@ -3298,15 +2650,7 @@ function iterate_pair_from_zero(
             getproperty(controls, :ordinary_order), controls) : scratch
         limit = _INFINITY_EIKONAL_LIMIT
         bases = _eikonal_horizon_pair(
-            coefficients,
-            solution1,
-            solution2,
-            normalized1,
-            normalized2,
-            seed_x,
-            match_x,
-            work,
-            limit,
+            coefficients, solution1, solution2, normalized1, normalized2, seed_x, match_x, work, limit,
         )
         if bases === nothing && getproperty(controls, :large_frequency_expansion)
             bases = _hybrid_horizon_pair(
@@ -3316,14 +2660,7 @@ function iterate_pair_from_zero(
         bases === nothing || return bases
     end
     return _build_pair_from_horizon_seed(
-        coefficients,
-        solution1,
-        solution2,
-        normalized1,
-        normalized2,
-        seed_x,
-        match_x;
-        controls=controls,
+        coefficients, solution1, solution2, normalized1, normalized2, seed_x, match_x; controls=controls,
         scratch=scratch,
     )
 end
@@ -3399,14 +2736,8 @@ end
 # large_frequency_expansion is on and it reaches). certified_steps and step_budget are passed to
 # `_build_basis_series`.
 function iterate_from_infinity(
-    coefficients::CoefficientSet,
-    branch::Symbol;
-    controls,
-    match_x::Float64=getproperty(controls, :match_x),
-    selection=nothing,
-    scratch=nothing,
-    certified_steps=false,
-    step_budget=nothing,
+    coefficients::CoefficientSet, branch::Symbol; controls, match_x::Float64=getproperty(controls, :match_x),
+    selection=nothing, scratch=nothing, certified_steps=false, step_budget=nothing,
 )
     normalized = _normalized_infinity_branch(branch)
     selected = selection === nothing ?
@@ -3424,22 +2755,10 @@ function iterate_from_infinity(
     variable_scale = selected.variable_scale
     endpoint_sigma = sigma / variable_scale
     return _build_basis_series(
-        coefficients,
-        _kind(:infinity, normalized),
-        endpoint_coeffs,
-        rho,
-        endpoint_sigma,
-        match_x,
-        selected.endpoint_y,
-        getproperty(controls, :ordinary_order);
-        controls=controls,
-        scratch=scratch,
-        endpoint_variable_scale=variable_scale,
-        endpoint_requested_order=selected.requested_order,
-        endpoint_effective_order=endpoint_order,
-        endpoint_reason=endpoint_reason,
-        certified_steps,
-        step_budget,
+        coefficients, _kind(:infinity, normalized), endpoint_coeffs, rho, endpoint_sigma, match_x, selected.endpoint_y,
+        getproperty(controls, :ordinary_order); controls=controls, scratch=scratch,
+        endpoint_variable_scale=variable_scale, endpoint_requested_order=selected.requested_order,
+        endpoint_effective_order=endpoint_order, endpoint_reason=endpoint_reason, certified_steps, step_budget,
     )
 end
 
@@ -3447,13 +2766,8 @@ end
 # `_hybrid_pair` (or the large-frequency patch pair when enabled); returns
 # (basis1, basis2).
 function iterate_pair_from_infinity(
-    coefficients::CoefficientSet,
-    branch1::Symbol,
-    branch2::Symbol;
-    controls,
-    match_x::Float64=getproperty(controls, :match_x),
-    selection=nothing,
-    scratch=nothing,
+    coefficients::CoefficientSet, branch1::Symbol, branch2::Symbol; controls,
+    match_x::Float64=getproperty(controls, :match_x), selection=nothing, scratch=nothing,
 )
     normalized1 = _normalized_infinity_branch(branch1)
     normalized2 = _normalized_infinity_branch(branch2)
@@ -3491,17 +2805,8 @@ function iterate_pair_from_infinity(
     data1 = endpoint_data(normalized1)
     data2 = endpoint_data(normalized2)
     basis1, basis2 = _hybrid_pair(
-        coefficients,
-        data1.kind,
-        data2.kind,
-        seed_x,
-        data1.value,
-        data1.derivative,
-        data2.value,
-        data2.derivative,
-        match_x;
-        controls,
-        scratch,
+        coefficients, data1.kind, data2.kind, seed_x, data1.value, data1.derivative, data2.value, data2.derivative,
+        match_x; controls, scratch,
     )
 
     function wrap(data, basis)
@@ -3511,23 +2816,9 @@ function iterate_pair_from_infinity(
             data.endpoint_reason)
         append!(truncations, basis.truncations)
         return Basis(
-            data.kind,
-            data.scale,
-            ComplexF64(data.rho),
-            ComplexF64(data.endpoint_sigma),
-            seed_x,
-            seed_coord,
-            data.value,
-            data.derivative,
-            data.endpoint_coeffs,
-            basis.patches,
-            basis.match_X,
-            basis.match_dXdx,
-            basis.step_count,
-            basis.max_step,
-            basis.min_step,
-            ComplexF64(variable_scale),
-            truncations,
+            data.kind, data.scale, ComplexF64(data.rho), ComplexF64(data.endpoint_sigma), seed_x, seed_coord,
+            data.value, data.derivative, data.endpoint_coeffs, basis.patches, basis.match_X, basis.match_dXdx,
+            basis.step_count, basis.max_step, basis.min_step, ComplexF64(variable_scale), truncations,
         )
     end
     return wrap(data1, basis1), wrap(data2, basis2)
@@ -3629,12 +2920,7 @@ function basis_value(basis::Basis, x)
     elseif basis.endpoint_valid
         x >= basis.seed_x && return basis.scale *
             _endpoint_value(
-                basis.kind,
-                basis.endpoint_coeffs,
-                basis.exponent1,
-                basis.exponent2,
-                x,
-                basis.endpoint_variable_scale,
+                basis.kind, basis.endpoint_coeffs, basis.exponent1, basis.exponent2, x, basis.endpoint_variable_scale,
             )
     end
     patch_index = _patch_index(basis.patches, x)

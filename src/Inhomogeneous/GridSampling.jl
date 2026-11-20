@@ -540,11 +540,9 @@ function integrand_eccentric_factored_segment_cheby_m2(KG_samp::Dict, geometry::
     prefactor = 4im * pi * ω * exp(1im * Xi) / (KG_samp["Γ"] * Binc)
 
     return (
-        smooth_p = ComplexF64.(Jp_smooth),
-        smooth_m = ComplexF64.(Jm_smooth),
+        smooth_p = ComplexF64.(Jp_smooth), smooth_m = ComplexF64.(Jm_smooth),
         phase_p = ComplexF64.(external_phase_values .+ internal_phase_values),
-        phase_m = ComplexF64.(.-external_phase_values .+ internal_phase_values),
-        prefactor = ComplexF64(prefactor),
+        phase_m = ComplexF64.(.-external_phase_values .+ internal_phase_values), prefactor = ComplexF64(prefactor),
     )
 end
 

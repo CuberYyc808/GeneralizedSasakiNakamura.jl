@@ -215,10 +215,7 @@ _logscaled_match_state(basis::Basis) = logscaled_state(
     basis.match_X, basis.match_dXdx)
 _logscaled_match_state(state::LogScaledState) = state
 _logscaled_match_state(state) = logscaled_state(state.X, state.dXdx)
-_scaled_state(state, scale) = (
-    X=ComplexF64(scale * state.X),
-    dXdx=ComplexF64(scale * state.dXdx),
-)
+_scaled_state(state, scale) = (X=ComplexF64(scale * state.X), dXdx=ComplexF64(scale * state.dXdx),)
 
 function _required_basis(basis, name)
     basis === nothing && error("missing ISEM GSN basis $name")
@@ -237,18 +234,9 @@ function _with_low_frequency_defaults(ctrl::GSNControls, params, route_branch::S
         route_branch == :IN || return ctrl
         getproperty(ctrl, :source) == :default || return ctrl
         return GSNControls(
-            ctrl.horizon_order,
-            ctrl.ordinary_order,
-            ctrl.infinity_order,
-            LOW_FREQUENCY_MATCH_X,
-            ctrl.tolerance,
-            ctrl.basis,
-            ctrl.endpoint_basis,
-            ctrl.ordinary_basis,
-            ctrl.small_frequency_expansion,
-            ctrl.large_frequency_expansion,
-            ctrl.frequency_selection,
-            :small_frequency_expansion_transition_match,
+            ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, LOW_FREQUENCY_MATCH_X, ctrl.tolerance,
+            ctrl.basis, ctrl.endpoint_basis, ctrl.ordinary_basis, ctrl.small_frequency_expansion,
+            ctrl.large_frequency_expansion, ctrl.frequency_selection, :small_frequency_expansion_transition_match,
         )
     end
     match_x = if getproperty(ctrl, :source) == :default
@@ -262,46 +250,25 @@ function _with_low_frequency_defaults(ctrl::GSNControls, params, route_branch::S
     horizon_order = horizon_tail(params) ?
         LOW_FREQUENCY_TAIL_HORIZON_ORDER : LOW_FREQUENCY_MIN_ORDER
     return GSNControls(
-        max(ctrl.horizon_order, horizon_order),
-        max(ctrl.ordinary_order, LOW_FREQUENCY_MIN_ORDER),
-        ctrl.infinity_order,
-        match_x,
-        ctrl.tolerance,
-        :low_frequency_scaled_y,
-        ctrl.endpoint_basis,
-        ctrl.ordinary_basis,
-        ctrl.small_frequency_expansion,
-        ctrl.large_frequency_expansion,
-        ctrl.frequency_selection,
+        max(ctrl.horizon_order, horizon_order), max(ctrl.ordinary_order, LOW_FREQUENCY_MIN_ORDER), ctrl.infinity_order,
+        match_x, ctrl.tolerance, :low_frequency_scaled_y, ctrl.endpoint_basis, ctrl.ordinary_basis,
+        ctrl.small_frequency_expansion, ctrl.large_frequency_expansion, ctrl.frequency_selection,
         :low_frequency_default,
     )
 end
 
 # Default controls at an ordinary real frequency: match at ORDINARY_IN_MATCH_X
 # for IN and ORDINARY_UP_MATCH_X for UP.
-function _with_ordinary_defaults(
-    ctrl::GSNControls,
-    params,
-    route_branch::Symbol,
-)
+function _with_ordinary_defaults(ctrl::GSNControls, params, route_branch::Symbol)
     getproperty(ctrl, :source) == :default || return ctrl
     ctrl.frequency_selection.regime == :ordinary || return ctrl
     isreal(getproperty(params, :omega)) || return ctrl
     match_x = route_branch == :IN ?
         ORDINARY_IN_MATCH_X : ORDINARY_UP_MATCH_X
     return GSNControls(
-        ctrl.horizon_order,
-        ctrl.ordinary_order,
-        ctrl.infinity_order,
-        match_x,
-        ctrl.tolerance,
-        ctrl.basis,
-        ctrl.endpoint_basis,
-        ctrl.ordinary_basis,
-        ctrl.small_frequency_expansion,
-        ctrl.large_frequency_expansion,
-        ctrl.frequency_selection,
-        :ordinary_branch_match,
+        ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, match_x, ctrl.tolerance, ctrl.basis,
+        ctrl.endpoint_basis, ctrl.ordinary_basis, ctrl.small_frequency_expansion, ctrl.large_frequency_expansion,
+        ctrl.frequency_selection, :ordinary_branch_match,
     )
 end
 
@@ -326,13 +293,9 @@ end
 
 # Log of the cancellation in c1 b1 + c2 b2 = target, for value and derivative.
 function _eval_condition(target, coefficient1, basis1, coefficient2, basis2)
-    value_terms = _logadd(
-        _logabs(coefficient1) + _logabs(basis1.X),
-        _logabs(coefficient2) + _logabs(basis2.X),
-    )
+    value_terms = _logadd(_logabs(coefficient1) + _logabs(basis1.X), _logabs(coefficient2) + _logabs(basis2.X))
     derivative_terms = _logadd(
-        _logabs(coefficient1) + _logabs(basis1.dXdx),
-        _logabs(coefficient2) + _logabs(basis2.dXdx),
+        _logabs(coefficient1) + _logabs(basis1.dXdx), _logabs(coefficient2) + _logabs(basis2.dXdx),
     )
     value_scale = _logabs(target.X)
     derivative_scale = _logabs(target.dXdx)
@@ -359,17 +322,7 @@ end
 # cancellation, propagate the matched state itself from match_x to target_x
 # and use it there instead of the combination; nothing otherwise.
 function _build_bridge(
-    coefficients,
-    ctrl,
-    scratch,
-    branch,
-    match_x,
-    target_x,
-    target,
-    coefficient1,
-    basis1,
-    coefficient2,
-    basis2;
+    coefficients, ctrl, scratch, branch, match_x, target_x, target, coefficient1, basis1, coefficient2, basis2;
     combination_bases=nothing,
 )
     needed = _needs_bridge(target, coefficient1, basis1, coefficient2, basis2;
@@ -383,16 +336,8 @@ function _build_bridge(
     kind = branch == :IN ? :horizon_in : :infinity_out
     bridge = try
         iterate_from_state(
-            coefficients,
-            kind,
-            match_x,
-            target.X,
-            target.dXdx,
-            target_x;
-            controls=ctrl,
-            scratch=scratch,
-            allow_eikonal=true,
-            allow_partial=true,
+            coefficients, kind, match_x, target.X, target.dXdx, target_x; controls=ctrl, scratch=scratch,
+            allow_eikonal=true, allow_partial=true,
         )
     catch err
         absorbable(err) || rethrow()
@@ -442,22 +387,11 @@ function _endpoint_branch_state(coefficients, selection, branch, x; radius=nothi
 end
 
 function _physical_endpoint_state(
-    coefficients,
-    route_branch,
-    selection,
-    x,
-    incidence,
-    reflection,
-    solution_scale,
-    scale=1.0 + 0.0im;
-    radius=nothing,
+    coefficients, route_branch, selection, x, incidence, reflection, solution_scale, scale=1.0 + 0.0im; radius=nothing,
 )
     outgoing = _endpoint_branch_state(coefficients, selection, :out, x; radius)
     if route_branch == :UP
-        return (
-            X=scale * solution_scale * outgoing.X,
-            dXdx=scale * solution_scale * outgoing.dXdx,
-        )
+        return (X=scale * solution_scale * outgoing.X, dXdx=scale * solution_scale * outgoing.dXdx,)
     end
     incoming = _endpoint_branch_state(coefficients, selection, :in, x; radius)
     return (
@@ -509,15 +443,7 @@ end
 # stop once it agrees, up to a fitted scale, with the infinity endpoint series.
 # Returns (bridge or nothing, endpoint plan or nothing).
 function _build_small_frequency_expansion_endpoint_bridge(
-    coefficients,
-    ctrl,
-    kind,
-    route_branch,
-    match_x,
-    target,
-    incidence,
-    reflection,
-    solution_scale,
+    coefficients, ctrl, kind, route_branch, match_x, target, incidence, reflection, solution_scale,
 )
     ctrl.small_frequency_expansion || return nothing, nothing
     match_x < PUBLIC_EVALUATION_ENDPOINT_X || return nothing, nothing
@@ -533,25 +459,12 @@ function _build_small_frequency_expansion_endpoint_bridge(
             return false
         bridge_state = (X=X, dXdx=dXdx)
         endpoint = _physical_endpoint_state(
-            coefficients,
-            route_branch,
-            selection,
-            x,
-            incidence,
-            reflection,
-            solution_scale,
+            coefficients, route_branch, selection, x, incidence, reflection, solution_scale,
         )
         endpoint_scale = _fit_state_scale(bridge_state, endpoint)
         endpoint_scale === nothing && return false
         aligned = _physical_endpoint_state(
-            coefficients,
-            route_branch,
-            selection,
-            x,
-            incidence,
-            reflection,
-            solution_scale,
-            endpoint_scale,
+            coefficients, route_branch, selection, x, incidence, reflection, solution_scale, endpoint_scale,
         )
         _state_error(bridge_state, aligned) <=
             SMALL_FREQUENCY_EXPANSION_ENDPOINT_HANDOFF_TOLERANCE || return false
@@ -560,15 +473,7 @@ function _build_small_frequency_expansion_endpoint_bridge(
     end
 
     bridge = try
-        iterate_scaled_y(
-            coefficients,
-            kind,
-            match_x,
-            target.X,
-            target.dXdx;
-            target_y,
-            stop_check,
-        )
+        iterate_scaled_y(coefficients, kind, match_x, target.X, target.dXdx; target_y, stop_check)
     catch err
         err isa ScaledMarchStepLimit || rethrow()
         nothing
@@ -597,13 +502,7 @@ function _small_frequency_expansion_up_basis(coefficients, ctrl, scratch, match_
         return nothing, plan
     basis = try
         iterate_from_infinity(
-            coefficients,
-            :out;
-            controls=ctrl,
-            match_x,
-            selection,
-            scratch,
-            certified_steps=extended,
+            coefficients, :out; controls=ctrl, match_x, selection, scratch, certified_steps=extended,
             step_budget=SMALL_FREQUENCY_EXPANSION_UP_TRIAL_STEPS,
         )
     catch err
@@ -709,12 +608,7 @@ function _connection_coefficients(target, basis1, basis2, det)
     return c1, c2, solution_scale
 end
 
-function _connection_coefficients_logscaled(
-    target::LogScaledState,
-    basis1::LogScaledState,
-    basis2::LogScaledState,
-    det,
-)
+function _connection_coefficients_logscaled(target::LogScaledState, basis1::LogScaledState, basis2::LogScaledState, det)
     _finite_complex(det) && !iszero(det) ||
         error("singular ISEM GSN Abel matching denominator")
     numerator1 = target.X * basis2.dXdx - basis2.X * target.dXdx
@@ -754,13 +648,7 @@ function _denom_ok(fallback, scale)
 end
 
 function _basis_scale(basis1, basis2)
-    return max(
-        abs(basis1.X),
-        abs(basis1.dXdx),
-        abs(basis2.X),
-        abs(basis2.dXdx),
-        eps(Float64),
-    )
+    return max(abs(basis1.X), abs(basis1.dXdx), abs(basis2.X), abs(basis2.dXdx), eps(Float64))
 end
 
 @inline function _small_frequency_expansion_auto_fallback(ctrl::GSNControls, err)
@@ -772,12 +660,7 @@ end
 # horizon pair the numerical `fallback` when it is well scaled and more
 # accurate than the quadrature, or when the Abel evaluation fails.
 function _match_denominator(
-    coefficients,
-    endpoint::Symbol,
-    match_x::Float64,
-    ctrl::GSNControls,
-    fallback;
-    fallback_scale=NaN,
+    coefficients, endpoint::Symbol, match_x::Float64, ctrl::GSNControls, fallback; fallback_scale=NaN,
 )
     denom = abel_denominator(coefficients, endpoint, match_x)
     direct_ok = endpoint == :horizon && _denom_ok(fallback, Float64(fallback_scale))
@@ -797,13 +680,7 @@ end
 # Relative difference between the numerical Wronskian of the two infinity seeds
 # and the closed-form Abel denominator at the seed point (Inf if unavailable).
 function _infinity_abel_certificate(
-    coefficients,
-    endpoint_y,
-    out_coeffs,
-    out_order,
-    in_coeffs,
-    in_order,
-    variable_scale,
+    coefficients, endpoint_y, out_coeffs, out_order, in_coeffs, in_order, variable_scale,
 )
     closed = abel_denominator(
         coefficients, :infinity, 1.0 - endpoint_y)
@@ -811,13 +688,7 @@ function _infinity_abel_certificate(
     exact = closed.denominator
     iszero(exact) && return Inf
     numerical = infinity_seed_wronskian(
-        coefficients,
-        endpoint_y,
-        out_coeffs,
-        out_order,
-        in_coeffs,
-        in_order,
-        variable_scale,
+        coefficients, endpoint_y, out_coeffs, out_order, in_coeffs, in_order, variable_scale,
     )
     ratio = numerical / exact
     isfinite(real(ratio)) && isfinite(imag(ratio)) || return Inf
@@ -825,58 +696,28 @@ function _infinity_abel_certificate(
 end
 
 function _infinity_basis(
-    coefficients,
-    branch::Symbol,
-    selection,
-    match_x::Float64,
-    ctrl::GSNControls,
-    scratch,
-    mst_plan=nothing,
+    coefficients, branch::Symbol, selection, match_x::Float64, ctrl::GSNControls, scratch, mst_plan=nothing,
 )
     if ctrl.small_frequency_expansion
         return mano_suzuki_takasugi_infinity_basis(
-            coefficients,
-            branch,
-            match_x;
-            controls=ctrl,
-            scratch=scratch,
-            plan=mst_plan,
+            coefficients, branch, match_x; controls=ctrl, scratch=scratch, plan=mst_plan,
         )
     end
     return iterate_from_infinity(coefficients, branch; controls=ctrl,
         match_x=match_x, selection=selection, scratch=scratch)
 end
 
-function _logscaled_mano_suzuki_takasugi_basis(
-    coefficients,
-    branch::Symbol,
-    match_x::Float64,
-    ctrl,
-    scratch,
-    mst_plan,
-)
+function _logscaled_mano_suzuki_takasugi_basis(coefficients, branch::Symbol, match_x::Float64, ctrl, scratch, mst_plan)
     normalized = branch == :in ? :in : :out
     kind = normalized == :in ? :infinity_in : :infinity_out
     seed, _ = mano_suzuki_takasugi_logscaled_seed(
         coefficients, mst_plan, normalized)
     return iterate_logscaled_from_state(
-        coefficients,
-        kind,
-        mst_plan.seed_x,
-        seed,
-        match_x;
-        controls=ctrl,
-        scratch=scratch,
+        coefficients, kind, mst_plan.seed_x, seed, match_x; controls=ctrl, scratch=scratch,
     )
 end
 
-function _logscaled_mano_suzuki_takasugi_pair(
-    coefficients,
-    match_x::Float64,
-    ctrl,
-    scratch,
-    mst_plan,
-)
+function _logscaled_mano_suzuki_takasugi_pair(coefficients, match_x::Float64, ctrl, scratch, mst_plan)
     incoming = _logscaled_mano_suzuki_takasugi_basis(
         coefficients, :in, match_x, ctrl, scratch, mst_plan)
     outgoing = _logscaled_mano_suzuki_takasugi_basis(
@@ -885,14 +726,7 @@ function _logscaled_mano_suzuki_takasugi_pair(
 end
 
 function _physical_handoff_state(
-    coefficients,
-    route_branch,
-    bridge,
-    endpoint_plan,
-    x,
-    incidence,
-    reflection,
-    solution_scale,
+    coefficients, route_branch, bridge, endpoint_plan, x, incidence, reflection, solution_scale,
 )
     if bridge !== nothing && _bridge_covers(bridge, x)
         value, derivative = _bridge_state(bridge, x)
@@ -900,13 +734,7 @@ function _physical_handoff_state(
     end
     if endpoint_plan !== nothing && _endpoint_plan_covers(endpoint_plan, x)
         return _physical_endpoint_state(
-            coefficients,
-            route_branch,
-            endpoint_plan.selection,
-            x,
-            incidence,
-            reflection,
-            solution_scale,
+            coefficients, route_branch, endpoint_plan.selection, x, incidence, reflection, solution_scale,
             endpoint_plan.scale,
         )
     end
@@ -917,14 +745,7 @@ end
 # (UP) normalization against the physical state at a handoff point and check
 # the agreement to SMALL_FREQUENCY_EXPANSION_ENDPOINT_HANDOFF_TOLERANCE.
 function _logscaled_mano_suzuki_takasugi_eval_plan(
-    coefficients,
-    route_branch,
-    mst_plan,
-    bridge,
-    endpoint_plan,
-    incidence,
-    reflection,
-    solution_scale,
+    coefficients, route_branch, mst_plan, bridge, endpoint_plan, incidence, reflection, solution_scale,
     logscaled_basis=nothing,
 )
     use_logscaled_basis = route_branch == :UP &&
@@ -943,20 +764,10 @@ function _logscaled_mano_suzuki_takasugi_eval_plan(
         desired_x
     end
     physical = if use_logscaled_basis
-        materialize_logscaled_state(
-            logscaled_basis_state(logscaled_basis, handoff_x);
-            scale=solution_scale,
-        )
+        materialize_logscaled_state(logscaled_basis_state(logscaled_basis, handoff_x); scale=solution_scale)
     else
         _physical_handoff_state(
-            coefficients,
-            route_branch,
-            bridge,
-            endpoint_plan,
-            handoff_x,
-            incidence,
-            reflection,
-            solution_scale,
+            coefficients, route_branch, bridge, endpoint_plan, handoff_x, incidence, reflection, solution_scale,
         )
     end
     if route_branch == :IN
@@ -969,12 +780,7 @@ function _logscaled_mano_suzuki_takasugi_eval_plan(
             coefficients, mst_plan, handoff_x; scale=pin_scale)
         _state_error(physical, aligned) <= SMALL_FREQUENCY_EXPANSION_ENDPOINT_HANDOFF_TOLERANCE ||
             error("ISEM GSN physical-in MST handoff failed validation")
-        return build_mano_suzuki_takasugi_eval_plan(
-            mst_plan;
-            pin_scale=pin_scale,
-            logscaled=true,
-            handoff_x=handoff_x,
-        )
+        return build_mano_suzuki_takasugi_eval_plan(mst_plan; pin_scale=pin_scale, logscaled=true, handoff_x=handoff_x)
     end
 
     aligned = if use_logscaled_basis
@@ -985,22 +791,11 @@ function _logscaled_mano_suzuki_takasugi_eval_plan(
         (X=materialized.X, dXdx=materialized.dXdx,
             estimated_relerr=estimated_relerr)
     else
-        mano_suzuki_takasugi_scaled_state(
-            coefficients,
-            mst_plan,
-            :out,
-            handoff_x;
-            scale=solution_scale,
-        )
+        mano_suzuki_takasugi_scaled_state(coefficients, mst_plan, :out, handoff_x; scale=solution_scale)
     end
     _state_error(physical, aligned) <= SMALL_FREQUENCY_EXPANSION_ENDPOINT_HANDOFF_TOLERANCE ||
         error("ISEM GSN outgoing MST handoff failed validation")
-    return build_mano_suzuki_takasugi_eval_plan(
-        mst_plan;
-        out_scale=solution_scale,
-        logscaled=true,
-        handoff_x=handoff_x,
-    )
+    return build_mano_suzuki_takasugi_eval_plan(mst_plan; out_scale=solution_scale, logscaled=true, handoff_x=handoff_x)
 end
 
 function _public_exterior_covered(bridge, endpoint_plan)
@@ -1017,28 +812,16 @@ Build the horizon and infinity bases for `branch` (`:IN` or `:UP`), match them
 at `controls.match_x` with the Abel (Wronskian) denominator, and return the
 `Route` with its incidence and reflection coefficients.
 """
-function match_route(
-    coefficients::CoefficientSet,
-    branch;
-    controls=nothing,
-)
+function match_route(coefficients::CoefficientSet, branch; controls=nothing)
     return _match_impl(coefficients, branch, controls)
 end
 
-function _match_impl(
-    coefficients::CoefficientSet,
-    branch,
-    controls,
-)
+function _match_impl(coefficients::CoefficientSet, branch, controls)
     base_ctrl = controls === nothing ? gsn_controls(coefficients.params) : controls
     route_branch = _normalized_route_branch(branch)
     side = _route_side(route_branch)
     ctrl = _with_ordinary_defaults(
-        _with_low_frequency_defaults(
-            base_ctrl, coefficients.params, side),
-        coefficients.params,
-        side,
-    )
+        _with_low_frequency_defaults(base_ctrl, coefficients.params, side), coefficients.params, side)
     # The small-frequency (MST) machinery builds the IN and UP targets only.
     route_branch in (:OUT, :DOWN) && ctrl.small_frequency_expansion &&
         throw(DirectBoundaryUnavailable(route_branch, :small_frequency_expansion))
@@ -1054,20 +837,13 @@ end
 # re-enters _match_impl with ordinary controls when an MST certificate fails under
 # sfe=:auto.
 function _match_body(
-    coefficients::CoefficientSet,
-    route_branch,
-    base_ctrl,
-    ctrl,
-    ::Val{UseSmallFrequencyExpansion},
+    coefficients::CoefficientSet, route_branch, base_ctrl, ctrl, ::Val{UseSmallFrequencyExpansion},
 ) where {UseSmallFrequencyExpansion}
     match_x = ctrl.match_x
     side = _route_side(route_branch)
     target_wave = _route_wave(route_branch)
     selection = UseSmallFrequencyExpansion ? nothing : select_infinity_endpoint(
-        coefficients,
-        match_x;
-        controls=ctrl,
-        certificate=_infinity_abel_certificate,
+        coefficients, match_x; controls=ctrl, certificate=_infinity_abel_certificate,
     )
     scratch = IterationScratch(coefficients,
         getproperty(ctrl, :ordinary_order);
@@ -1101,13 +877,7 @@ function _match_body(
         i_in, i_out, logscaled_mst = if UseSmallFrequencyExpansion
             try
                 incoming, outgoing = mano_suzuki_takasugi_infinity_pair(
-                    coefficients,
-                    :in,
-                    :out,
-                    match_x;
-                    controls=ctrl,
-                    scratch=scratch,
-                    plan=mst_plan,
+                    coefficients, :in, :out, match_x; controls=ctrl, scratch=scratch, plan=mst_plan,
                 )
                 (incoming, outgoing, false)
             catch err
@@ -1145,46 +915,20 @@ function _match_body(
         denom = _match_denominator(coefficients, :infinity, match_x, ctrl, fallback)
         incidence, reflection, solution_scale = if logscaled_mst
             _connection_coefficients_logscaled(
-                _logscaled_match_state(h_in),
-                _logscaled_match_state(i_in),
-                _logscaled_match_state(i_out),
-                denom,
+                _logscaled_match_state(h_in), _logscaled_match_state(i_in), _logscaled_match_state(i_out), denom,
             )
         else
-            _connection_coefficients(
-                _basis_tuple(h_in),
-                _basis_tuple(i_in),
-                _basis_tuple(i_out),
-                denom,
-            )
+            _connection_coefficients(_basis_tuple(h_in), _basis_tuple(i_in), _basis_tuple(i_out), denom)
         end
         target = _scaled_state(_basis_tuple(h_in), solution_scale)
         bridge, endpoint_plan = if UseSmallFrequencyExpansion
             _build_small_frequency_expansion_endpoint_bridge(
-                coefficients,
-                ctrl,
-                :horizon_in,
-                :IN,
-                match_x,
-                target,
-                incidence,
-                reflection,
-                solution_scale,
+                coefficients, ctrl, :horizon_in, :IN, match_x, target, incidence, reflection, solution_scale,
             )
         else
             (_build_bridge(
-                coefficients,
-                ctrl,
-                scratch,
-                :IN,
-                match_x,
-                1.0 - endpoint_y,
-                target,
-                incidence,
-                _basis_tuple(i_in),
-                reflection,
-                _basis_tuple(i_out);
-                combination_bases=(i_in, i_out),
+                coefficients, ctrl, scratch, :IN, match_x, 1.0 - endpoint_y, target, incidence, _basis_tuple(i_in),
+                reflection, _basis_tuple(i_out); combination_bases=(i_in, i_out),
             ), nothing)
         end
         mst_eval_plan = if mst_plan === nothing
@@ -1192,14 +936,7 @@ function _match_body(
         else
             try
                 logscaled_mst ? _logscaled_mano_suzuki_takasugi_eval_plan(
-                    coefficients,
-                    :IN,
-                    mst_plan,
-                    bridge,
-                    endpoint_plan,
-                    incidence,
-                    reflection,
-                    solution_scale,
+                    coefficients, :IN, mst_plan, bridge, endpoint_plan, incidence, reflection, solution_scale,
                 ) : build_mano_suzuki_takasugi_eval_plan(mst_plan)
             catch err
                 absorbable(err) || rethrow()
@@ -1244,10 +981,7 @@ function _match_body(
 
     i_out, logscaled_mst = if UseSmallFrequencyExpansion
         try
-            (_infinity_basis(
-                coefficients, :out, selection, match_x, ctrl, scratch, mst_plan),
-                false,
-            )
+            (_infinity_basis(coefficients, :out, selection, match_x, ctrl, scratch, mst_plan), false)
         catch err
             absorbable(err) || rethrow()
             if err isa ManoSuzukiTakasugiCertificateError
@@ -1258,10 +992,7 @@ function _match_body(
                     coefficients, route_branch, fallback)
             end
             try
-                (_logscaled_mano_suzuki_takasugi_basis(
-                    coefficients, :out, match_x, ctrl, scratch, mst_plan),
-                    true,
-                )
+                (_logscaled_mano_suzuki_takasugi_basis(coefficients, :out, match_x, ctrl, scratch, mst_plan), true)
             catch robust_err
                 absorbable(robust_err) || rethrow()
                 _small_frequency_expansion_auto_fallback(base_ctrl, robust_err) ||
@@ -1278,54 +1009,26 @@ function _match_body(
             false,
         )
     end
-    h_in, h_out = iterate_pair_from_zero(
-        coefficients,
-        :in,
-        :out;
-        controls=ctrl,
-        match_x=match_x,
-        scratch=scratch,
-    )
+    h_in, h_out = iterate_pair_from_zero(coefficients, :in, :out; controls=ctrl, match_x=match_x, scratch=scratch)
     fallback = _basis_tuple(h_in).X * _basis_tuple(h_out).dXdx -
         _basis_tuple(h_out).X * _basis_tuple(h_in).dXdx
     denom = _match_denominator(
-        coefficients,
-        :horizon,
-        match_x,
-        ctrl,
-        fallback;
+        coefficients, :horizon, match_x, ctrl, fallback;
         fallback_scale=_basis_scale(_basis_tuple(h_in), _basis_tuple(h_out)),
     )
     reflection, incidence, solution_scale = if logscaled_mst
         _connection_coefficients_logscaled(
-            _logscaled_match_state(i_out),
-            _logscaled_match_state(h_in),
-            _logscaled_match_state(h_out),
-            denom,
+            _logscaled_match_state(i_out), _logscaled_match_state(h_in), _logscaled_match_state(h_out), denom,
         )
     else
-        _connection_coefficients(
-            _basis_tuple(i_out),
-            _basis_tuple(h_in),
-            _basis_tuple(h_out),
-            denom,
-        )
+        _connection_coefficients(_basis_tuple(i_out), _basis_tuple(h_in), _basis_tuple(h_out), denom)
     end
     target = logscaled_mst ? materialize_logscaled_state(
         _logscaled_match_state(i_out); scale=solution_scale) :
         _scaled_state(_basis_tuple(i_out), solution_scale)
     bridge = _build_bridge(
-        coefficients,
-        ctrl,
-        scratch,
-        :UP,
-        match_x,
-        min(h_in.seed_x, h_out.seed_x),
-        target,
-        reflection,
-        _basis_tuple(h_in),
-        incidence,
-        _basis_tuple(h_out),
+        coefficients, ctrl, scratch, :UP, match_x, min(h_in.seed_x, h_out.seed_x), target, reflection,
+        _basis_tuple(h_in), incidence, _basis_tuple(h_out),
     )
     endpoint_basis, boundary_plan = UseSmallFrequencyExpansion && !logscaled_mst ?
         _small_frequency_expansion_up_basis(coefficients, ctrl, scratch, match_x, target) : (nothing,nothing)
@@ -1333,15 +1036,7 @@ function _match_body(
         (nothing, nothing)
     elseif endpoint_basis === nothing && boundary_plan === nothing
         _build_small_frequency_expansion_endpoint_bridge(
-            coefficients,
-            ctrl,
-            :infinity_out,
-            :UP,
-            match_x,
-            target,
-            incidence,
-            reflection,
-            solution_scale,
+            coefficients, ctrl, :infinity_out, :UP, match_x, target, incidence, reflection, solution_scale,
         )
     else
         (endpoint_basis, boundary_plan)
@@ -1351,14 +1046,7 @@ function _match_body(
     else
         try
             logscaled_mst ? _logscaled_mano_suzuki_takasugi_eval_plan(
-                coefficients,
-                :UP,
-                mst_plan,
-                endpoint_bridge,
-                endpoint_plan,
-                incidence,
-                reflection,
-                solution_scale,
+                coefficients, :UP, mst_plan, endpoint_bridge, endpoint_plan, incidence, reflection, solution_scale,
                 i_out,
             ) : build_mano_suzuki_takasugi_eval_plan(mst_plan)
         catch err
@@ -1411,16 +1099,7 @@ passed to `gsn_controls` when `controls` is not given. A real negative
 frequency is solved at (-m, -omega) and returned as a `ConjugatedRoute`.
 """
 function radial_route(
-    s::Integer,
-    l::Integer,
-    m::Integer,
-    a,
-    omega,
-    branch=:IN;
-    lambda=nothing,
-    nu=nothing,
-    controls=nothing,
-    kwargs...,
+    s::Integer, l::Integer, m::Integer, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing, kwargs...,
 )
     params = gsn_parameters(s, l, m, a, omega; lambda=lambda, nu=nu)
     # Inputs beyond binary64 take the arbitrary-precision series route (ArbitraryPrecisionRoute.jl),
@@ -1433,35 +1112,18 @@ function radial_route(
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     if isreal(params.omega) && params.omega < 0
         positive_params = GSNParameters(
-            params.s,
-            params.l,
-            -params.m,
-            params.a,
-            -params.omega,
-            params.lambda,
-            params.nu,
-            params.kappa,
+            params.s, params.l, -params.m, params.a, -params.omega, params.lambda, params.nu, params.kappa,
         )
         # The reflected route is the positive-frequency route itself, so the
         # two signs agree by construction.
-        positive_route = radial_route(
-            positive_params,
-            branch;
-            controls=ctrl,
-        )
+        positive_route = radial_route(positive_params, branch; controls=ctrl)
         return ConjugatedRoute(positive_route, params)
     end
     coefficients = gsn_coefficients(params; controls=ctrl)
     return _matched_route(coefficients, branch, ctrl)
 end
 
-function radial_route(
-    params::GSNParameters,
-    branch=:IN;
-    controls=nothing,
-    coefficients=nothing,
-    kwargs...,
-)
+function radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, kwargs...)
     if !is_binary64_parameters(params)
         return _arbitrary_precision_route(params, branch;
             N=get(kwargs, :N, nothing), xm=get(kwargs, :xm, nothing),
@@ -1628,15 +1290,8 @@ function _endpoint_plan_state(route::Route, x; radius=nothing)
     plan = route.endpoint_plan
     plan === nothing && error("missing ISEM GSN endpoint evaluation plan")
     return _physical_endpoint_state(
-        route.coefficients,
-        route.branch,
-        plan.selection,
-        x,
-        route.incidence,
-        route.reflection,
-        route.solution_scale,
-        plan.scale;
-        radius,
+        route.coefficients, route.branch, plan.selection, x, route.incidence, route.reflection, route.solution_scale,
+        plan.scale; radius,
     )
 end
 
@@ -1648,19 +1303,13 @@ function _physical_mano_suzuki_takasugi_out_state(route::Route, x; radius=nothin
         route.mst_plan.out_scale === nothing &&
             error("missing ISEM GSN log-scaled outgoing normalization")
         return mano_suzuki_takasugi_scaled_state(
-            route.coefficients,
-            route.mst_plan,
-            :out,
-            x;
-            scale=route.mst_plan.out_scale,
-            radius,
+            route.coefficients, route.mst_plan, :out, x; scale=route.mst_plan.out_scale, radius,
         )
     end
     state = mano_suzuki_takasugi_route_state(
         route.coefficients, route.mst_plan, :out, x; radius)
     return (
-        X=route.solution_scale * state.X,
-        dXdx=route.solution_scale * state.dXdx,
+        X=route.solution_scale * state.X, dXdx=route.solution_scale * state.dXdx,
         estimated_relerr=state.estimated_relerr,
     )
 end
@@ -1796,10 +1445,7 @@ function route_state(route::Route, x; radius=nothing)
     if route.branch == :IN
         if x <= route.match_x
             value, derivative = basis_state(_required_basis(route.horizon_in, "horizon_in"), x)
-            return (
-                X=route.solution_scale * value,
-                dXdx=route.solution_scale * derivative,
-            )
+            return (X=route.solution_scale * value, dXdx=route.solution_scale * derivative,)
         end
         if route.bridge !== nothing && _bridge_covers(route.bridge, x)
             value, derivative = _bridge_state(route.bridge, x)
@@ -1820,8 +1466,7 @@ function route_state(route::Route, x; radius=nothing)
         vin, din = basis_state(_required_basis(route.infinity_in, "infinity_in"), x)
         vout, dout = basis_state(_required_basis(route.infinity_out, "infinity_out"), x)
         return (
-            X=route.incidence * vin + route.reflection * vout,
-            dXdx=route.incidence * din + route.reflection * dout,
+            X=route.incidence * vin + route.reflection * vout, dXdx=route.incidence * din + route.reflection * dout,
         )
     end
     if _mano_suzuki_takasugi_evaluation_region(route, x)
@@ -1836,8 +1481,7 @@ function route_state(route::Route, x; radius=nothing)
         vin, din = basis_state(_required_basis(route.horizon_in, "horizon_in"), x)
         vout, dout = basis_state(_required_basis(route.horizon_out, "horizon_out"), x)
         return (
-            X=route.reflection * vin + route.incidence * vout,
-            dXdx=route.reflection * din + route.incidence * dout,
+            X=route.reflection * vin + route.incidence * vout, dXdx=route.reflection * din + route.incidence * dout,
         )
     end
     if route.endpoint_plan !== nothing &&
@@ -1863,10 +1507,7 @@ function route_state(route::Route, x; radius=nothing)
             route.infinity_out, x, route.solution_scale)
     end
     value, derivative = basis_state(_required_basis(route.infinity_out, "infinity_out"), x)
-    return (
-        X=route.solution_scale * value,
-        dXdx=route.solution_scale * derivative,
-    )
+    return (X=route.solution_scale * value, dXdx=route.solution_scale * derivative,)
 end
 
 function route_state(route::ConjugatedRoute, x)
@@ -1949,24 +1590,9 @@ function route_plan_of(route::Route)
         near_extreme_selected(route.coefficients) ? :near_extremal : :taylor
     propagation = eikonal_patches > 0 ? :eikonal : :taylor
     return RoutePlan(
-        frequency.regime,
-        frequency.reason,
-        spin.regime,
-        spin.reason,
-        endpoint,
-        propagation,
-        :abel,
-        route.match_x,
-        controls.horizon_order,
-        controls.ordinary_order,
-        controls.infinity_order,
-        eikonal.candidate,
-        ordinary_patches,
-        eikonal_patches,
-        endpoint_patches,
-        horizon_patches,
-        infinity_patches,
-        spin.angular_compression,
+        frequency.regime, frequency.reason, spin.regime, spin.reason, endpoint, propagation, :abel, route.match_x,
+        controls.horizon_order, controls.ordinary_order, controls.infinity_order, eikonal.candidate, ordinary_patches,
+        eikonal_patches, endpoint_patches, horizon_patches, infinity_patches, spin.angular_compression,
         spin.phase_compression,
     )
 end

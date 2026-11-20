@@ -108,13 +108,8 @@ end
 function _attach_control_metadata(metadata, c, rescue_source)
     metadata === missing && return metadata
     return merge(metadata, (
-        control_rescue_source = rescue_source,
-        control_xm = c.xm,
-        control_rhom = c.rhom,
-        control_N = c.N,
-        control_tol = c.tol,
-        control_small_frequency_expansion = false,
-        control_large_frequency_expansion = false,
+        control_rescue_source = rescue_source, control_xm = c.xm, control_rhom = c.rhom, control_N = c.N,
+        control_tol = c.tol, control_small_frequency_expansion = false, control_large_frequency_expansion = false,
     ))
 end
 

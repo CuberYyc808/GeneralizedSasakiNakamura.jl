@@ -17,18 +17,12 @@ function leaver_radial_residual(mode::QNMMode, a, omega;
         throw(ErrorException(
             "Angular continuation failed with status $(angular.status)."))
     fraction = leaver_cf_inversion(
-        omega, a, mode.s, mode.m, angular.angular_A, inversion_index;
-        tolerance=cf_tolerance,
-        minimum_iterations=cf_minimum_iterations,
-        maximum_iterations=cf_maximum_iterations,
+        omega, a, mode.s, mode.m, angular.angular_A, inversion_index; tolerance=cf_tolerance,
+        minimum_iterations=cf_minimum_iterations, maximum_iterations=cf_maximum_iterations,
         require_convergence=require_cf_convergence,
     )
     return (
-        value=fraction.value,
-        error=fraction.error,
-        iterations=fraction.iterations,
-        cf_converged=fraction.converged,
-        inversion_index=inversion_index,
-        angular=angular,
+        value=fraction.value, error=fraction.error, iterations=fraction.iterations, cf_converged=fraction.converged,
+        inversion_index=inversion_index, angular=angular,
     )
 end

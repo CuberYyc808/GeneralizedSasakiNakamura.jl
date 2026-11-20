@@ -29,11 +29,9 @@ end
 function _gsn_amplitude_data(validation::ISEMValidationResult)
     md = validation.metadata
     return (
-        omega=validation.omega, incidence=validation.incidence,
-        reflection=validation.reflection, lambda=md.lambda,
+        omega=validation.omega, incidence=validation.incidence, reflection=validation.reflection, lambda=md.lambda,
         method=md.method, normalization=md.normalization,
-        evaluation_a=md.evaluation_a, evaluation_omega=md.evaluation_omega,
-        evaluation_policy=md.evaluation_policy,
+        evaluation_a=md.evaluation_a, evaluation_omega=md.evaluation_omega, evaluation_policy=md.evaluation_policy,
         frequency_projection_drift=md.frequency_projection_drift,
         incidence_backend=md.incidence_backend, wronskian_drift=md.wronskian_drift,
     )
@@ -136,13 +134,7 @@ function _gsn_real_derivative_attempt(
         push!(stencil, merge(minus,
             (step=step, direction=:real, sign=:minus)))
     end
-    return (
-        base_h=T(base_h),
-        steps,
-        derivatives,
-        stencil,
-        richardson=_richardson_derivative(derivatives),
-    )
+    return (base_h=T(base_h), steps, derivatives, stencil, richardson=_richardson_derivative(derivatives),)
 end
 
 function _gsn_five_point_real_derivative_attempt(
@@ -170,21 +162,10 @@ function _gsn_five_point_real_derivative_attempt(
                 plus2.incidence) / (12step))
         for (offset, row) in ((-2, minus2), (-1, minus1),
                 (1, plus1), (2, plus2))
-            push!(stencil, merge(row, (
-                step=step,
-                direction=:real,
-                sign=offset < 0 ? :minus : :plus,
-                offset=offset,
-            )))
+            push!(stencil, merge(row, (step=step, direction=:real, sign=offset < 0 ? :minus : :plus, offset=offset,)))
         end
     end
-    return (
-        base_h=T(base_h),
-        steps,
-        derivatives,
-        stencil,
-        richardson=_richardson_derivative(derivatives, 4),
-    )
+    return (base_h=T(base_h), steps, derivatives, stencil, richardson=_richardson_derivative(derivatives, 4),)
 end
 
 # True when the only failure is the scaled-incidence gate on the n = 8 unconventional near-algebraically-special
@@ -226,8 +207,7 @@ function _condition_incidence_validation(
         accepted ? :accepted : :failed,
         accepted ? :accepted : failure_reason,
         merge(validation.metadata, (
-            standard_incidence_status=validation.status,
-            standard_incidence_stop_reason=validation.stop_reason,
+            standard_incidence_status=validation.status, standard_incidence_stop_reason=validation.stop_reason,
             standard_incidence_gate_passed=false,
         ), conditioned_flag, (
             inferred_root_shift=T(shift),
@@ -269,10 +249,7 @@ function _finite_high_damping_diagnostic_candidate(
     validation.stop_reason == :scaled_incidence_gate || return false
     imag(result.omega) < oftype(imag(result.omega), -0.5) || return false
     return all(isfinite, (
-        validation.incidence,
-        validation.reflection,
-        validation.transmission,
-        validation.scaled_incidence,
+        validation.incidence, validation.reflection, validation.transmission, validation.scaled_incidence,
     ))
 end
 
@@ -370,15 +347,9 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
     if validation.status != :accepted && !any_conditioned_candidate
         nan_complex = complex(T(NaN), T(NaN))
         return (
-            omega=result.omega,
-            alpha=nan_complex,
-            reflection=nan_complex,
-            B_gsn=nan_complex,
-            step_drift=T(Inf),
-            status=:failed,
-            stop_reason=:isem_incidence_not_accepted,
-            metadata=(validation=validation, stencil=NamedTuple[],
-                derivative_direction=:real_frequency),
+            omega=result.omega, alpha=nan_complex, reflection=nan_complex, B_gsn=nan_complex, step_drift=T(Inf),
+            status=:failed, stop_reason=:isem_incidence_not_accepted,
+            metadata=(validation=validation, stencil=NamedTuple[], derivative_direction=:real_frequency),
         )
     end
 
@@ -433,16 +404,14 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
                 root_incidence=validation.incidence)
         richardson_attempt = attempt.richardson
         maximum_wronskian_drift = T(max(
-            validation_wronskian_drift,
-            maximum(row.wronskian_drift for row in attempt.stencil),
+            validation_wronskian_drift, maximum(row.wronskian_drift for row in attempt.stencil),
         ))
         finite_attempt = isfinite(richardson_attempt.value)
         accepted_attempt = finite_attempt &&
             richardson_attempt.drift <= T(step_tolerance) &&
             maximum_wronskian_drift <= T(wronskian_tolerance)
         score = finite_attempt ? max(
-            richardson_attempt.drift / T(step_tolerance),
-            maximum_wronskian_drift / T(wronskian_tolerance),
+            richardson_attempt.drift / T(step_tolerance), maximum_wronskian_drift / T(wronskian_tolerance),
         ) : T(Inf)
         summary = (;
             factor,

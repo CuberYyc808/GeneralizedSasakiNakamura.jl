@@ -11,17 +11,12 @@ function _radial_metadata(solution)
         numerical isa NamedTuple && hasproperty(numerical, name) ?
         getproperty(numerical, name) : default
     return (
-        method=solution.method,
-        normalization=solution.normalization_convention,
-        lambda=solution.mode.lambda,
-        numerical_summary=numerical_summary,
-        control_tolerance=numerical_value(:control_tolerance),
+        method=solution.method, normalization=solution.normalization_convention, lambda=solution.mode.lambda,
+        numerical_summary=numerical_summary, control_tolerance=numerical_value(:control_tolerance),
         horizon_endpoint_score=numerical_value(:horizon_endpoint_score),
         infinity_endpoint_score=numerical_value(:infinity_endpoint_score),
-        propagation_score=numerical_value(:propagation_score),
-        horizon_path_kind=numerical_value(:horizon_path_kind),
-        horizon_coordinate_steps=numerical_value(:horizon_coordinate_steps),
-        solution_type=string(typeof(solution)),
+        propagation_score=numerical_value(:propagation_score), horizon_path_kind=numerical_value(:horizon_path_kind),
+        horizon_coordinate_steps=numerical_value(:horizon_coordinate_steps), solution_type=string(typeof(solution)),
     )
 end
 
@@ -85,22 +80,14 @@ function _radial_evaluation_inputs(result::LeaverResult, omega=result.omega)
         drift = T(abs(projected - omega) /
             max(one(T), abs(projected), abs(omega)))
         return (
-            a=evaluation_a,
-            omega=evaluation_omega,
-            policy=:explicit_binary64_projection,
-            projection_drift=drift,
-            source_precision_bits=result.precision_bits,
-            evaluation_precision_bits=53,
+            a=evaluation_a, omega=evaluation_omega, policy=:explicit_binary64_projection, projection_drift=drift,
+            source_precision_bits=result.precision_bits, evaluation_precision_bits=53,
         )
     end
     T = typeof(real(omega))
     return (
-        a=result.a,
-        omega=omega,
-        policy=:native_input_precision,
-        projection_drift=zero(T),
-        source_precision_bits=result.precision_bits,
-        evaluation_precision_bits=precision(real(omega)),
+        a=result.a, omega=omega, policy=:native_input_precision, projection_drift=zero(T),
+        source_precision_bits=result.precision_bits, evaluation_precision_bits=precision(real(omega)),
     )
 end
 
@@ -179,31 +166,16 @@ function _extremal_complex_path_incidence(result::LeaverResult, inputs;
         mode.s, mode.m, inputs.a, omega, lambda; dlambda)
     method = "ExtremalComplexPath"
     solution = (
-        method=method,
-        normalization_convention=UNIT_GSN_TRANS,
-        mode=(lambda=lambda,),
-        numerical_GSN_solution=(propagation_score=path.tail,
-            horizon_path_kind=:complex_recessive_horizon_start,
-            horizon_coordinate_steps=path.patches),
-        incidence_amplitude=path.incidence,
-        reflection_amplitude=path.reflection,
-        transmission_amplitude=one(path.incidence),
+        method=method, normalization_convention=UNIT_GSN_TRANS, mode=(lambda=lambda,),
+        numerical_GSN_solution=(propagation_score=path.tail, horizon_path_kind=:complex_recessive_horizon_start,
+        horizon_coordinate_steps=path.patches), incidence_amplitude=path.incidence,
+        reflection_amplitude=path.reflection, transmission_amplitude=one(path.incidence),
     )
     return (
-        incidence=path.incidence,
-        reflection=path.reflection,
-        transmission=one(path.incidence),
-        lambda=lambda,
-        method=method,
-        normalization=UNIT_GSN_TRANS,
-        solution_in=solution,
-        solution_up=nothing,
-        incidence_values=(path.incidence,),
-        evaluation_points=(),
-        wronskian_drift=zero(real(path.incidence)),
-        inputs=inputs,
-        backend=:extremal_complex_path,
-        dincidence=derivative ? path.dincidence : missing,
+        incidence=path.incidence, reflection=path.reflection, transmission=one(path.incidence), lambda=lambda,
+        method=method, normalization=UNIT_GSN_TRANS, solution_in=solution, solution_up=nothing,
+        incidence_values=(path.incidence,), evaluation_points=(), wronskian_drift=zero(real(path.incidence)),
+        inputs=inputs, backend=:extremal_complex_path, dincidence=derivative ? path.dincidence : missing,
         propagation_tail=path.tail,
     )
 end
@@ -241,19 +213,10 @@ function _wronskian_incidence(result::LeaverResult, omega=result.omega;
     wronskian_drift = maximum(
         abs(value - incidence) / scale for value in incidence_values)
     return (
-        incidence=incidence,
-        reflection=Xin.reflection_amplitude,
-        transmission=Xin.transmission_amplitude,
-        lambda=Xin.mode.lambda,
-        method=Xin.method,
-        normalization=Xin.normalization_convention,
-        solution_in=Xin,
-        solution_up=Xup,
-        incidence_values=incidence_values,
-        evaluation_points=evaluation_points,
-        wronskian_drift=wronskian_drift,
-        inputs=inputs,
-        backend=:direct_real_axis_wronskian,
+        incidence=incidence, reflection=Xin.reflection_amplitude, transmission=Xin.transmission_amplitude,
+        lambda=Xin.mode.lambda, method=Xin.method, normalization=Xin.normalization_convention, solution_in=Xin,
+        solution_up=Xup, incidence_values=incidence_values, evaluation_points=evaluation_points,
+        wronskian_drift=wronskian_drift, inputs=inputs, backend=:direct_real_axis_wronskian,
     )
 end
 
@@ -285,8 +248,7 @@ function _replace_extremal_damped_root_frequency(
         result.cf_iterations, result.root_residual, T(angular.residual),
         result.precision_bits, result.status, result.stop_reason,
         merge(provenance, polish_metadata, (
-            angular_route=angular.metadata.route,
-            angular_sheet=angular.sheet_id,
+            angular_route=angular.metadata.route, angular_sheet=angular.sheet_id,
             angular_order=angular.truncation_order,
         )),
     )
@@ -324,10 +286,8 @@ function _polish_extremal_damped_root_with_gsn(result::LeaverResult;
             initial.wronskian_drift <= wronskian_gate
         return _replace_extremal_damped_root_frequency(
             result, result.omega, (
-                exact_gsn_root_polish=:not_needed,
-                exact_gsn_initial_scaled_incidence=initial_scaled,
-                exact_gsn_selected_scaled_incidence=initial_scaled,
-                exact_gsn_root_shift=zero(T),
+                exact_gsn_root_polish=:not_needed, exact_gsn_initial_scaled_incidence=initial_scaled,
+                exact_gsn_selected_scaled_incidence=initial_scaled, exact_gsn_root_shift=zero(T),
                 exact_gsn_polish_rows=NamedTuple[],
             ))
     end
@@ -361,14 +321,8 @@ function _polish_extremal_damped_root_with_gsn(result::LeaverResult;
             candidate.wronskian_drift <= wronskian_gate &&
             isfinite(candidate_scaled)
         push!(rows, (
-            factor,
-            step,
-            derivative,
-            candidate_omega,
-            root_shift=T(root_shift),
-            scaled_incidence=candidate_scaled,
-            wronskian_drift=T(candidate.wronskian_drift),
-            healthy=candidate_healthy,
+            factor, step, derivative, candidate_omega, root_shift=T(root_shift), scaled_incidence=candidate_scaled,
+            wronskian_drift=T(candidate.wronskian_drift), healthy=candidate_healthy,
         ))
         if candidate_healthy && candidate_scaled < best_scaled
             best_omega = candidate_omega

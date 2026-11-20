@@ -357,10 +357,7 @@ function _infinity_pair(s, m, a, omega, lambda, r, rs, order, branch)
     sign = branch === :outgoing ? one(omega) : -one(omega)
     phase = exp(im * sign * omega * rs)
     q = _extremal_q(r)
-    return SVector(
-        phase * value,
-        phase * (q * derivative + im * sign * omega * value),
-    )
+    return SVector(phase * value, phase * (q * derivative + im * sign * omega * value))
 end
 
 # Decomposes a GSN state at large r into the ingoing and outgoing infinity solutions.

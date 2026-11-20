@@ -507,34 +507,18 @@ function _build_route(p::GSNParameters, branch::Symbol, order::Int, tolerance, x
     loss = (isreal(p.omega) || !series) ? 0.0 :
         Float64(2 * abs(imag(p.omega)) * max(r0 - Float64(r_m), 0) / log(10))
     diagnostics = (
-        working_bits = working_bits,
-        input_bits = _input_bits(p),
-        tolerance = Float64(tolerance),
-        order = order,
-        horizon_order = 2order,
-        infinity_order = series ? 3order : 0,
-        match_x = Float64(match_x),
-        r_m = Float64(r_m),
-        horizon_seed_x = Float64(horizon_in.x_seed),
-        infinity_seed_y = series ? Float64(infinity_up.y_seed) : 0.0,
-        infinity_seed_r = r0,
-        infinity_terms = series ? length(infinity_up.coeffs) : (mst.nmax - mst.nmin + 1),
+        working_bits = working_bits, input_bits = _input_bits(p), tolerance = Float64(tolerance), order = order,
+        horizon_order = 2order, infinity_order = series ? 3order : 0, match_x = Float64(match_x), r_m = Float64(r_m),
+        horizon_seed_x = Float64(horizon_in.x_seed), infinity_seed_y = series ? Float64(infinity_up.y_seed) : 0.0,
+        infinity_seed_r = r0, infinity_terms = series ? length(infinity_up.coeffs) : (mst.nmax - mst.nmin + 1),
         horizon_patches = length(horizon_in_patches) + length(horizon_out_patches),
         infinity_patches = length(infinity_up_patches) + length(infinity_down_patches),
         infinity_chain_end_x = isempty(infinity_up_patches) ? Float64(match_x) : Float64(maximum(max(patch.x0, patch.xend) for patch in infinity_up_patches)),
-        matching_determinant = det,
-        matching_condition = maximum(conditions),
-        determinant_condition = conditions[1],
-        incidence_condition = conditions[2],
-        reflection_condition = conditions[3],
-        mst_condition = mst_condition,
-        series_condition = series_condition,
-        rebuilds = rebuilds,
-        complex_loss_digits = loss,
-        frequency_regime = :arbitrary_precision_series,
-        infinity_representation = series ? :asymptotic_series : :mst,
-        horizon_seconds = t_horizon,
-        infinity_seconds = t_infinity,
+        matching_determinant = det, matching_condition = maximum(conditions), determinant_condition = conditions[1],
+        incidence_condition = conditions[2], reflection_condition = conditions[3], mst_condition = mst_condition,
+        series_condition = series_condition, rebuilds = rebuilds, complex_loss_digits = loss,
+        frequency_regime = :arbitrary_precision_series, infinity_representation = series ? :asymptotic_series : :mst,
+        horizon_seconds = t_horizon, infinity_seconds = t_infinity,
         mst_nu = mst === nothing ? missing : ComplexF64(mst.nu),
         mst_nu_residual = mst === nothing ? missing : Float64(mst.nu_residual),
         mst_depth = mst === nothing ? missing : mst.nu_depth,
@@ -1036,11 +1020,8 @@ function gsn_radial_function(route::ArbitraryPrecisionRadialRoute)
     C = _complex_type(p)
     rsmp = rstar_from_r(p.a, r_from_x(p, route.match_x))
     metadata = merge(route.diagnostics, (
-        xm = Float64(route.match_x),
-        tol = Float64(route.tolerance),
-        ordinary_order = route.order,
-        unit_normalization_available = true,
-        normalization = :unit_gsn_transmission,
+        xm = Float64(route.match_x), tol = Float64(route.tolerance), ordinary_order = route.order,
+        unit_normalization_available = true, normalization = :unit_gsn_transmission,
     ))
     return getfield(root, :GSNRadialFunction)(
         _route_mode(route),
@@ -1133,15 +1114,8 @@ function teukolsky_radial_function(route::ArbitraryPrecisionRadialRoute; normali
     solution = TeukolskySolution(
         TeukolskyTupleEvaluator(p, pair, d2R), pair, TeukolskyRadialEvaluator(pair))
     return getfield(root, :TeukolskyRadialFunction)(
-        _route_mode(route),
-        _route_boundary_condition(route),
-        trans,
-        incidence,
-        reflection,
-        missing,
-        gsn_radial_function(route),
-        solution,
-        convention,
+        _route_mode(route), _route_boundary_condition(route), trans, incidence, reflection, missing,
+        gsn_radial_function(route), solution, convention,
     )
 end
 
@@ -1153,8 +1127,7 @@ function y_radial_function(route::ArbitraryPrecisionRadialRoute)
     isem = _isem_module()
     factors = _teukolsky_amplitude_factors(route)
     amplitudes = (
-        trans = factors.trans,
-        incidence = factors.incidence * route.incidence,
+        trans = factors.trans, incidence = factors.incidence * route.incidence,
         reflection = factors.reflection * route.reflection,
     )
     gsn_solution = GSNStateEvaluator(route)
@@ -1167,17 +1140,8 @@ function y_radial_function(route::ArbitraryPrecisionRadialRoute)
     xsoln = r -> _at_working_precision(() -> gsn_solution(rstar_from_r(p.a, r))[1], route)
     yscalar = r -> ysoln(r)[1]
     return getfield(isem, :YRadialFunction)(
-        _route_mode(route),
-        _route_boundary_condition(route),
-        amplitudes.trans,
-        amplitudes.incidence,
-        amplitudes.reflection,
-        missing,
-        missing,
-        xsoln,
-        yscalar,
-        ysoln,
-        getfield(root, :UNIT_TEUKOLSKY_TRANS),
+        _route_mode(route), _route_boundary_condition(route), amplitudes.trans, amplitudes.incidence,
+        amplitudes.reflection, missing, missing, xsoln, yscalar, ysoln, getfield(root, :UNIT_TEUKOLSKY_TRANS),
     )
 end
 

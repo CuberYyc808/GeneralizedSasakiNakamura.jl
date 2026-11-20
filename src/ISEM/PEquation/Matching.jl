@@ -161,25 +161,11 @@ function _Pin_contour(s, l, m, a, omega, rhom = _rhom, xm = nothing, N = _Trunca
     _P, xsplit, split_mismatch = _adaptive_piecewise_solution(xm_match, lower_eval, upper_eval, Btrans, xm_min, xm_max)
     if components
         return _P, (Binc / Btrans, Bref / Btrans), (
-            P_zero_in = P_zero_in,
-            P_inf_in = P_inf_in,
-            P_inf_out = P_inf_out,
-            P_zero_in_rho = P_zero_in_rho,
-            P_inf_in_rho = P_inf_in_rho,
-            P_inf_out_rho = P_inf_out_rho,
-            CInfIn = CInfIn,
-            CInfOut = CInfOut,
-            Btrans = Btrans,
-            xm = xm,
-            xmin = xm_min,
-            xmax = xm_max,
-            xm_match = xm_match,
-            xsplit = xsplit,
-            split_mismatch = split_mismatch,
-            rhom = rhom_effective,
-            horizon_in_patch_count = length(x_list_zero_in),
-            infinity_in_patch_count = length(x_list_inf_in),
-            infinity_out_patch_count = length(x_list_inf_out),
+            P_zero_in = P_zero_in, P_inf_in = P_inf_in, P_inf_out = P_inf_out, P_zero_in_rho = P_zero_in_rho,
+            P_inf_in_rho = P_inf_in_rho, P_inf_out_rho = P_inf_out_rho, CInfIn = CInfIn, CInfOut = CInfOut,
+            Btrans = Btrans, xm = xm, xmin = xm_min, xmax = xm_max, xm_match = xm_match, xsplit = xsplit,
+            split_mismatch = split_mismatch, rhom = rhom_effective, horizon_in_patch_count = length(x_list_zero_in),
+            infinity_in_patch_count = length(x_list_inf_in), infinity_out_patch_count = length(x_list_inf_out),
         )
     end
 
@@ -252,25 +238,11 @@ function _Pup_contour(s, l, m, a, omega, rhom = _rhom, xm = nothing, N = _Trunca
     _P, xsplit, split_mismatch = _adaptive_piecewise_solution(xm_match, lower_eval, upper_eval, Ctrans, xm_min, xm_max)
     if components
         return _P, (Cinc / Ctrans, Cref / Ctrans), (
-            P_zero_in = P_zero_in,
-            P_zero_out = P_zero_out,
-            P_inf_out = P_inf_out,
-            P_zero_in_rho = P_zero_in_rho,
-            P_zero_out_rho = P_zero_out_rho,
-            P_inf_out_rho = P_inf_out_rho,
-            CZeroIn = CZeroIn,
-            CZeroOut = CZeroOut,
-            Ctrans = Ctrans,
-            xm = xm,
-            xm_min = xm_min,
-            xm_max = xm_max,
-            xm_match = xm_match,
-            xsplit = xsplit,
-            split_mismatch = split_mismatch,
-            rhom = rhom_effective,
-            horizon_in_patch_count = length(x_list_zero_in),
-            horizon_out_patch_count = length(x_list_zero_out),
-            infinity_out_patch_count = length(x_list_inf_out),
+            P_zero_in = P_zero_in, P_zero_out = P_zero_out, P_inf_out = P_inf_out, P_zero_in_rho = P_zero_in_rho,
+            P_zero_out_rho = P_zero_out_rho, P_inf_out_rho = P_inf_out_rho, CZeroIn = CZeroIn, CZeroOut = CZeroOut,
+            Ctrans = Ctrans, xm = xm, xm_min = xm_min, xm_max = xm_max, xm_match = xm_match, xsplit = xsplit,
+            split_mismatch = split_mismatch, rhom = rhom_effective, horizon_in_patch_count = length(x_list_zero_in),
+            horizon_out_patch_count = length(x_list_zero_out), infinity_out_patch_count = length(x_list_inf_out),
         )
     end
 

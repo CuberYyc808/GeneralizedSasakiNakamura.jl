@@ -484,24 +484,12 @@ GenericFluxCache(owner::GenericGeometryOwner) = GenericM2FluxCache(owner)
 clear_generic_mode_cache!(cache::GenericM2FluxCache) = _clear_private_mode_cache!(cache)
 
 GenericM2FluxCache() = GenericM2FluxCache(
-    Dict{Tuple{Int, Int}, Dict}(),
-    Dict{Tuple{Int, Int, Int}, Any}(),
-    Dict{Tuple{Int, Int}, Dict}(),
-    Dict{Tuple, Any}(),
-    Dict{Tuple{Int, Int, Int, Int}, Any}(),
-    Dict{Tuple, Dict}(),
-    Dict{Tuple, Any}(),
-    Dict{Tuple, Vector{Float64}}(),
+    Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Any}(),
+    Dict{Tuple{Int, Int, Int, Int}, Any}(), Dict{Tuple, Dict}(), Dict{Tuple, Any}(), Dict{Tuple, Vector{Float64}}(),
 )
 GenericM2FluxCache(samples::Dict{Tuple{Int, Int}, Dict}, mcaches::Dict{Tuple{Int, Int, Int}, Any}) = GenericM2FluxCache(
-    samples,
-    mcaches,
-    Dict{Tuple{Int, Int}, Dict}(),
-    Dict{Tuple, Any}(),
-    Dict{Tuple{Int, Int, Int, Int}, Any}(),
-    Dict{Tuple, Dict}(),
-    Dict{Tuple, Any}(),
-    Dict{Tuple, Vector{Float64}}(),
+    samples, mcaches, Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Any}(), Dict{Tuple{Int, Int, Int, Int}, Any}(),
+    Dict{Tuple, Dict}(), Dict{Tuple, Any}(), Dict{Tuple, Vector{Float64}}(),
 )
 GenericFluxCache() = GenericM2FluxCache()
 
@@ -636,12 +624,7 @@ end
 @inline function _generic_adaptive_segment_bounds(key::GenericAdaptiveLevin2DKey)
     sr = 2.0^key.level_r
     st = 2.0^key.level_theta
-    return (
-        π * key.ib / sr,
-        π * (key.ib + 1) / sr,
-        π * key.jb / st,
-        π * (key.jb + 1) / st,
-    )
+    return (π * key.ib / sr, π * (key.ib + 1) / sr, π * key.jb / st, π * (key.jb + 1) / st,)
 end
 
 function _generic_adaptive_cheby_nodes(n::Int, lo::Float64, hi::Float64)
@@ -1687,23 +1670,10 @@ function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k,
     _check_mode_geometry(cache, KG_master)
     levin_cache = cache isa GenericM2FluxCache ? cache : GenericFluxCache()
     return generic_mode_flux_from_master_cached_adaptive_levin!(
-        levin_cache,
-        KG_master,
-        s,
-        l,
-        m,
-        n,
-        k;
-        sample_tol = sample_tol,
-        tol = tol,
-        max_flux = max_flux,
-        mode_abs_floor = mode_abs_floor,
-        threaded_sampling = threaded_sampling,
-        local_r_intervals = adaptive_local_r_intervals,
-        local_theta_intervals = adaptive_local_theta_intervals,
-        min_depth = adaptive_min_depth,
-        max_depth = adaptive_max_depth,
-        depth_tol_max = adaptive_tol_max,
+        levin_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = max_flux,
+        mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling,
+        local_r_intervals = adaptive_local_r_intervals, local_theta_intervals = adaptive_local_theta_intervals,
+        min_depth = adaptive_min_depth, max_depth = adaptive_max_depth, depth_tol_max = adaptive_tol_max,
     )
 end
 
@@ -2470,11 +2440,9 @@ function _adaptive_eccentric_factored_segment(bundle::Dict, Ysamp::Dict, SH, s::
         phase = _eccentric_radial_phase(KG_samp, nothing, m, n, ω)
         internal = _internal_radial_phase(KG_samp, s, a, ω, m)
         return (
-            smooth_p = ComplexF64.(Jp ./ internal.phase_factor),
-            smooth_m = ComplexF64.(Jm ./ internal.phase_factor),
+            smooth_p = ComplexF64.(Jp ./ internal.phase_factor), smooth_m = ComplexF64.(Jm ./ internal.phase_factor),
             phase_p = ComplexF64.(phase.rphase .+ internal.phase_values),
-            phase_m = ComplexF64.(.-phase.rphase .+ internal.phase_values),
-            prefactor = ComplexF64(prefactor),
+            phase_m = ComplexF64.(.-phase.rphase .+ internal.phase_values), prefactor = ComplexF64(prefactor),
         )
     else
         error("Spin weight s must be either 2 or -2.")
@@ -3546,14 +3514,9 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         return convolution_integral_eccentric_adaptive_levin_isem(
-            route.master === nothing ? KG : route.master, s, l, m, n;
-            tol = tol,
-            tol0 = sample_tol,
-            local_n = adaptive_local_n,
-            min_depth = adaptive_min_depth,
-            max_depth = adaptive_max_depth,
-            depth_tol_max = adaptive_tol_max,
-            mode_abs_floor = mode_abs_floor,
+            route.master === nothing ? KG : route.master, s, l, m, n; tol = tol, tol0 = sample_tol,
+            local_n = adaptive_local_n, min_depth = adaptive_min_depth, max_depth = adaptive_max_depth,
+            depth_tol_max = adaptive_tol_max, mode_abs_floor = mode_abs_floor,
             threaded_sampling = threaded_sampling, cache=route.cache,
         )
     else

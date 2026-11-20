@@ -216,13 +216,7 @@ end
 end
 
 # Matrix element whose eigenvalue is lambda directly (diagonal shifted by c^2 - 2 m c).
-@inline function _swsh_lambda_matrix_coefficient(
-    c::Float64,
-    s::Int,
-    m::Int,
-    l::Int,
-    lprime::Int,
-)
+@inline function _swsh_lambda_matrix_coefficient(c::Float64, s::Int, m::Int, l::Int, lprime::Int)
     lprime == l || return _swsh_matrix_coefficient(c, s, m, l, lprime)
     f = _swsh_f(s, l, m)
     g = _swsh_g(s, l, m)
@@ -274,13 +268,7 @@ function _selected_banded_eigenvalue!(band::Matrix{Float64}, index::Int)
 end
 
 # Eigenvalue for (s, l, m, c) from a spectral matrix truncated to `size` l-modes.
-function _swsh_eigenvalue_at_size(
-    s::Int,
-    l::Int,
-    m::Int,
-    c::Float64,
-    size::Int,
-)
+function _swsh_eigenvalue_at_size(s::Int, l::Int, m::Int, c::Float64, size::Int)
     lmin = max(abs(m), abs(s))
     index = l - lmin + 1
     size >= index || throw(ArgumentError("SWSH matrix does not contain l=$l."))
@@ -300,13 +288,7 @@ end
 # Spin-weighted spheroidal eigenvalue lambda for real c = a omega. Exact at c = 0,
 # series for tiny |c|, otherwise the banded spectral matrix is enlarged until the
 # eigenvalue converges. `diagnostics=true` returns the size and convergence data too.
-function swsh_eigenvalue(
-    s::Int,
-    l::Int,
-    m::Int,
-    c::Real;
-    diagnostics::Bool=false,
-)
+function swsh_eigenvalue(s::Int, l::Int, m::Int, c::Real; diagnostics::Bool=false)
     c_float = Float64(c)
     if iszero(c)
         value = Float64(l * (l + 1) - s * (s + 1))
@@ -517,10 +499,7 @@ const SMALL_FREQUENCY_EXPANSION_ORDINARY_MIN_OMEGA = 1e-3
     select_spin_regime(params).regime == :regular || return false
     c = params.a * params.omega
     angular_scale = max(
-        1.0,
-        abs(Float64(params.l * (params.l + 1))),
-        abs(Float64(params.s * (params.s + 1))),
-        2 * abs(params.m * c),
+        1.0, abs(Float64(params.l * (params.l + 1))), abs(Float64(params.s * (params.s + 1))), 2 * abs(params.m * c),
         abs2(c),
     )
     return abs(params.lambda) <=
@@ -549,12 +528,9 @@ end
     horizon_frequency = params.a / (2 * (1 + params.kappa))
     horizon_wavenumber = params.omega - params.m * horizon_frequency
     return (
-        omega_abs=abs(params.omega),
-        kappa_omega_abs=abs(params.kappa * params.omega),
-        tau_abs=abs((epsilon - params.m * params.a) / params.kappa),
-        horizon_wavenumber_abs=abs(horizon_wavenumber),
-        m_ratio=abs(params.m) / params.l,
-        a_abs=abs(params.a),
+        omega_abs=abs(params.omega), kappa_omega_abs=abs(params.kappa * params.omega),
+        tau_abs=abs((epsilon - params.m * params.a) / params.kappa), horizon_wavenumber_abs=abs(horizon_wavenumber),
+        m_ratio=abs(params.m) / params.l, a_abs=abs(params.a),
     )
 end
 
@@ -566,9 +542,7 @@ end
     kappa_scale = max(params.kappa, eps(Float64))
     angular_compression = angular_scale / kappa_scale
     phase_scale = max(
-        features.omega_abs,
-        features.horizon_wavenumber_abs,
-        abs(params.m * params.a) / (2 * (1 + params.kappa)),
+        features.omega_abs, features.horizon_wavenumber_abs, abs(params.m * params.a) / (2 * (1 + params.kappa)),
     )
     phase_compression = phase_scale / kappa_scale
 
@@ -587,23 +561,15 @@ end
     end
 
     return SpinSelection(
-        regime,
-        reason,
-        params.kappa,
-        angular_compression,
-        phase_compression,
-        features.tau_abs,
-        features.horizon_wavenumber_abs,
-        features.m_ratio,
+        regime, reason, params.kappa, angular_compression, phase_compression, features.tau_abs,
+        features.horizon_wavenumber_abs, features.m_ratio,
     )
 end
 
 # Choose the frequency regime (:small_frequency_expansion, :large_frequency_expansion or :ordinary) from the small_frequency_expansion/large_frequency_expansion requests
 # and the mode parameters, recording the reason.
 @inline function select_frequency_regime(
-    params::GSNParameters;
-    small_frequency_expansion=false,
-    large_frequency_expansion=false,
+    params::GSNParameters; small_frequency_expansion=false, large_frequency_expansion=false,
 )
     small_frequency_expansion_request = _frequency_request("small_frequency_expansion", small_frequency_expansion)
     large_frequency_expansion_request = _frequency_request("large_frequency_expansion", large_frequency_expansion)
@@ -642,16 +608,8 @@ end
 
     features = _frequency_features(params)
     return FrequencySelection(
-        small_frequency_expansion_request,
-        large_frequency_expansion_request,
-        regime,
-        reason,
-        features.omega_abs,
-        features.kappa_omega_abs,
-        features.tau_abs,
-        features.horizon_wavenumber_abs,
-        features.m_ratio,
-        features.a_abs,
+        small_frequency_expansion_request, large_frequency_expansion_request, regime, reason, features.omega_abs,
+        features.kappa_omega_abs, features.tau_abs, features.horizon_wavenumber_abs, features.m_ratio, features.a_abs,
         regime == :small_frequency_expansion,
     )
 end
@@ -661,31 +619,13 @@ end
 function _ordinary_fallback(ctrl::GSNControls, reason::Symbol)
     selection = ctrl.frequency_selection
     fallback = FrequencySelection(
-        selection.small_frequency_expansion_request,
-        selection.large_frequency_expansion_request,
-        :ordinary,
-        reason,
-        selection.omega_abs,
-        selection.kappa_omega_abs,
-        selection.tau_abs,
-        selection.horizon_wavenumber_abs,
-        selection.m_ratio,
-        selection.a_abs,
-        true,
+        selection.small_frequency_expansion_request, selection.large_frequency_expansion_request, :ordinary, reason,
+        selection.omega_abs, selection.kappa_omega_abs, selection.tau_abs, selection.horizon_wavenumber_abs,
+        selection.m_ratio, selection.a_abs, true,
     )
     return GSNControls(
-        ctrl.horizon_order,
-        ctrl.ordinary_order,
-        ctrl.infinity_order,
-        ctrl.match_x,
-        ctrl.tolerance,
-        ctrl.basis,
-        ctrl.endpoint_basis,
-        ctrl.ordinary_basis,
-        false,
-        false,
-        fallback,
-        ctrl.source,
+        ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, ctrl.match_x, ctrl.tolerance, ctrl.basis,
+        ctrl.endpoint_basis, ctrl.ordinary_basis, false, false, fallback, ctrl.source,
     )
 end
 
@@ -693,17 +633,8 @@ end
 # and the selected frequency regime. The ordinary order is raised to
 # DEFAULT_REGULAR_ORDINARY_ORDER in the ordinary regime unless N or ordinary_order is given.
 function gsn_controls(
-    params::GSNParameters;
-    N=nothing,
-    horizon_order=nothing,
-    ordinary_order=nothing,
-    infinity_order=nothing,
-    xm=nothing,
-    tol=nothing,
-    basis=nothing,
-    endpoint_basis=nothing,
-    ordinary_basis=nothing,
-    small_frequency_expansion=false,
+    params::GSNParameters; N=nothing, horizon_order=nothing, ordinary_order=nothing, infinity_order=nothing, xm=nothing,
+    tol=nothing, basis=nothing, endpoint_basis=nothing, ordinary_basis=nothing, small_frequency_expansion=false,
     large_frequency_expansion=false,
 )
     h_order = Int(horizon_order === nothing ? (N === nothing ? DEFAULT_HORIZON_ORDER : N) : horizon_order)
@@ -732,18 +663,10 @@ function gsn_controls(
         endpoint_basis === nothing && ordinary_basis === nothing ? :default : :user
 
     return GSNControls(
-        h_order,
-        o_order,
-        Int(infinity_order === nothing ? (N === nothing ? DEFAULT_INFINITY_ORDER : N) : infinity_order),
-        match_x,
-        tolerance,
-        selected_basis,
-        endpoint,
-        ordinary,
-        use_small_frequency_expansion,
-        use_large_frequency_expansion,
-        frequency_selection,
-        control_source,
+        h_order, o_order,
+        Int(infinity_order === nothing ? (N === nothing ? DEFAULT_INFINITY_ORDER : N) : infinity_order), match_x,
+        tolerance, selected_basis, endpoint, ordinary, use_small_frequency_expansion, use_large_frequency_expansion,
+        frequency_selection, control_source,
     )
 end
 

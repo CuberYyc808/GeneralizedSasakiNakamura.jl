@@ -773,20 +773,12 @@ function _circular_mode_summation_scoped(scope, a, p; x=1.0, tol = 1e-8, lmax = 
     total_modes = 2 * sum(lmin:max(something(l_reached_inf, lmin - 1), something(l_reached_hor, lmin - 1)))
 
     return (
-        infinity_energy_flux = total_infinity_energy,
-        infinity_angular_momentum_flux = total_infinity_angular,
-        infinity_carter_constant_flux = total_infinity_carter,
-        horizon_energy_flux = total_horizon_energy,
-        horizon_angular_momentum_flux = total_horizon_angular,
-        horizon_carter_constant_flux = total_horizon_carter,
-        total_modes = total_modes,
-        tolerance = tol,
-        lmin = lmin,
-        lmax = lmax,
-        min_consecutive = min_consecutive,
+        infinity_energy_flux = total_infinity_energy, infinity_angular_momentum_flux = total_infinity_angular,
+        infinity_carter_constant_flux = total_infinity_carter, horizon_energy_flux = total_horizon_energy,
+        horizon_angular_momentum_flux = total_horizon_angular, horizon_carter_constant_flux = total_horizon_carter,
+        total_modes = total_modes, tolerance = tol, lmin = lmin, lmax = lmax, min_consecutive = min_consecutive,
         l_reached = max(something(l_reached_inf, lmin - 1), something(l_reached_hor, lmin - 1)),
-        l_reached_inf = l_reached_inf,
-        l_reached_hor = l_reached_hor,
+        l_reached_inf = l_reached_inf, l_reached_hor = l_reached_hor,
         l_tail_infinity = (energy = l_tail_inf[1], angular_momentum = l_tail_inf[2], carter_constant = l_tail_inf[3], ratio = l_tail_ratio_inf),
         l_tail_horizon = (energy = l_tail_hor[1], angular_momentum = l_tail_hor[2], carter_constant = l_tail_hor[3], ratio = l_tail_ratio_hor),
         _resume = (kind = :circular, infinity = inf, horizon = hor, total_modes = total_modes),
@@ -3003,12 +2995,8 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
     total_carter += n_tail[3]
 
     result = (
-        energy_flux = total_energy,
-        angular_momentum_flux = total_angular,
-        carter_constant_flux = total_carter,
-        total_modes = total_modes,
-        n_reached = n_reached,
-        shell_list = shell_list,
+        energy_flux = total_energy, angular_momentum_flux = total_angular, carter_constant_flux = total_carter,
+        total_modes = total_modes, n_reached = n_reached, shell_list = shell_list,
         shells = (n = n_list, energy = shell_list, angular_momentum = angular_list, carter_constant = carter_list),
         truncation_floor = floor_ref[],
         n_tail = (energy = n_tail[1], angular_momentum = n_tail[2], carter_constant = n_tail[3], ratio = tail_ratio),

@@ -461,17 +461,9 @@ end
     lower = log(nextfloat(0.0))
     upper_x = prevfloat(1.0)
     upper = log(upper_x) - log1p(-upper_x)
-    horizon_t = clamp(
-        (target - rplus - logkappa2) / rplus_over_kappa,
-        lower,
-        upper,
-    )
+    horizon_t = clamp((target - rplus - logkappa2) / rplus_over_kappa, lower, upper)
     far_scale = target - rplus - logkappa2
-    infinity_t = clamp(
-        far_scale > 0.0 ? log(far_scale / (2kappa)) : 0.0,
-        lower,
-        upper,
-    )
+    infinity_t = clamp(far_scale > 0.0 ? log(far_scale / (2kappa)) : 0.0, lower, upper)
     horizon_value, _ = _rstar_parts(kappa, rplus, logkappa2,
         rplus_over_kappa, horizon_t)
     infinity_value, _ = _rstar_parts(kappa, rplus, logkappa2,
@@ -521,12 +513,7 @@ end
 function _route_mode(route::Route)
     mode_type = getfield(_root_module(), :Mode)
     return mode_type(
-        route.params.s,
-        route.params.l,
-        route.params.m,
-        route.params.a,
-        route.params.omega,
-        route.params.lambda,
+        route.params.s, route.params.l, route.params.m, route.params.a, route.params.omega, route.params.lambda,
     )
 end
 
@@ -644,10 +631,7 @@ function gsn_radial_function(route::Route)
     controls = route.controls
     root = _root_module()
     plan = route_plan_of(route)
-    threshold_log = any(
-        truncation -> truncation.reason == :threshold_log_companion,
-        route_truncations(route),
-    )
+    threshold_log = any(truncation -> truncation.reason == :threshold_log_companion, route_truncations(route))
     unit_pair = _try_unit_pair(route)
     unit_pair_available = unit_pair !== nothing
     unit_state_available = unit_pair_available && _unit_state_safe(route)
@@ -727,11 +711,7 @@ function gsn_radial_function(route::ConjugatedRoute)
     positive = gsn_radial_function(route.route)
     isem = _isem_module()
     conjugate_function = getfield(isem, :_conjugate_gsn_radial_function)
-    return conjugate_function(
-        positive,
-        route.params.m,
-        route.params.omega,
-    )
+    return conjugate_function(positive, route.params.m, route.params.omega)
 end
 
 function _teukolsky_amplitude_factors(route::Route)
@@ -813,12 +793,7 @@ end
 function (c::TeukolskyGenericConverter)(r, X, dXdx)
     p = c.params
     vals = Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(
-        p.s,
-        p.m,
-        p.a,
-        p.omega,
-        p.lambda,
-        r,
+        p.s, p.m, p.a, p.omega, p.lambda, r,
     )
     x = x_from_r(p, r)
     dXdrstar = dXdx * dx_drstar(p, x)
@@ -884,48 +859,15 @@ function TeukolskySMinus2Converter(m, a, omega, lambda)
     kappa = sqrt(one(aT) - a2)
     rminus = one(kappa) - kappa
     return TeukolskySMinus2Converter{typeof(aT)}(
-        Int(m),
-        aT,
-        omegaT,
-        lambdaT,
-        a2,
-        a3,
-        a4,
-        a5,
-        a6,
-        a7,
-        a8,
-        Int(m) * Int(m),
-        lambda2,
-        omega2,
-        omega3,
-        kappa,
+        Int(m), aT, omegaT, lambdaT, a2, a3, a4, a5, a6, a7, a8, Int(m) * Int(m), lambda2, omega2, omega3, kappa,
         rminus,
     )
 end
 
 function (c::TeukolskySMinus2Converter)(r, X, dXdx)
     return _teukolsky_pair_sminus2(
-        c.m,
-        c.a,
-        c.omega,
-        c.lambda,
-        r,
-        X,
-        dXdx,
-        c.a2,
-        c.a3,
-        c.a4,
-        c.a5,
-        c.a6,
-        c.a7,
-        c.a8,
-        c.m2,
-        c.lambda2,
-        c.omega2,
-        c.omega3,
-        c.kappa,
-        c.rminus,
+        c.m, c.a, c.omega, c.lambda, r, X, dXdx, c.a2, c.a3, c.a4, c.a5, c.a6, c.a7, c.a8, c.m2, c.lambda2, c.omega2,
+        c.omega3, c.kappa, c.rminus,
     )
 end
 
@@ -964,73 +906,21 @@ function TeukolskySPlus2Converter(m, a, omega, lambda)
     kappa = sqrt(one(aT) - a2)
     rminus = one(kappa) - kappa
     return TeukolskySPlus2Converter{typeof(aT)}(
-        Int(m),
-        aT,
-        omegaT,
-        lambdaT,
-        a2,
-        a3,
-        a4,
-        a5,
-        a6,
-        a7,
-        a8,
-        Int(m) * Int(m),
-        lambda2,
-        omega2,
-        omega3,
-        kappa,
+        Int(m), aT, omegaT, lambdaT, a2, a3, a4, a5, a6, a7, a8, Int(m) * Int(m), lambda2, omega2, omega3, kappa,
         rminus,
     )
 end
 
 function (c::TeukolskySPlus2Converter)(r, X, dXdx)
     return _teukolsky_pair_splus2(
-        c.m,
-        c.a,
-        c.omega,
-        c.lambda,
-        r,
-        X,
-        dXdx,
-        c.a2,
-        c.a3,
-        c.a4,
-        c.a5,
-        c.a6,
-        c.a7,
-        c.a8,
-        c.m2,
-        c.lambda2,
-        c.omega2,
-        c.omega3,
-        c.kappa,
-        c.rminus,
+        c.m, c.a, c.omega, c.lambda, r, X, dXdx, c.a2, c.a3, c.a4, c.a5, c.a6, c.a7, c.a8, c.m2, c.lambda2, c.omega2,
+        c.omega3, c.kappa, c.rminus,
     )
 end
 
 # Explicit s = -2 GSN-to-Teukolsky conversion applied to (X, dX/dx).
 function _teukolsky_pair_sminus2(
-    m,
-    a,
-    omega,
-    lambda,
-    r,
-    X,
-    dXdx,
-    a2,
-    a3,
-    a4,
-    a5,
-    a6,
-    a7,
-    a8,
-    m2,
-    lambda2,
-    omega2,
-    omega3,
-    kappa,
-    rminus,
+    m, a, omega, lambda, r, X, dXdx, a2, a3, a4, a5, a6, a7, a8, m2, lambda2, omega2, omega3, kappa, rminus,
 )
     delta = a2 + (-2 + r) * r
     r2 = r * r
@@ -1111,26 +1001,7 @@ end
 
 # Explicit s = +2 GSN-to-Teukolsky conversion applied to (X, dX/dx).
 function _teukolsky_pair_splus2(
-    m,
-    a,
-    omega,
-    lambda,
-    r,
-    X,
-    dXdx,
-    a2,
-    a3,
-    a4,
-    a5,
-    a6,
-    a7,
-    a8,
-    m2,
-    lambda2,
-    omega2,
-    omega3,
-    kappa,
-    rminus,
+    m, a, omega, lambda, r, X, dXdx, a2, a3, a4, a5, a6, a7, a8, m2, lambda2, omega2, omega3, kappa, rminus,
 )
     delta = a2 + (-2 + r) * r
     r2 = r * r
@@ -1218,34 +1089,18 @@ function teukolsky_radial_function(route::Route; normalize=:teukolsky)
     scale, convention = _normalization_scale_from_factors(route, normalize, factors)
     solution = route_teukolsky_solution(route; normalize=normalize, scale=scale)
     return getfield(root, :TeukolskyRadialFunction)(
-        _route_mode(route),
-        _route_boundary_condition(route),
-        route.solution_scale * factors.trans / scale,
-        route.incidence * factors.incidence / scale,
-        route.reflection * factors.reflection / scale,
-        missing,
-        gsn_radial_function(route),
-        solution,
-        convention,
+        _route_mode(route), _route_boundary_condition(route), route.solution_scale * factors.trans / scale,
+        route.incidence * factors.incidence / scale, route.reflection * factors.reflection / scale, missing,
+        gsn_radial_function(route), solution, convention,
     )
 end
 
-function teukolsky_radial_function(
-    route::ConjugatedRoute;
-    normalize=:teukolsky,
-)
-    positive = teukolsky_radial_function(
-        route.route;
-        normalize=normalize,
-    )
+function teukolsky_radial_function(route::ConjugatedRoute; normalize=:teukolsky)
+    positive = teukolsky_radial_function(route.route; normalize=normalize)
     isem = _isem_module()
     conjugate_function =
         getfield(isem, :_conjugate_teukolsky_radial_function)
-    return conjugate_function(
-        positive,
-        route.params.m,
-        route.params.omega,
-    )
+    return conjugate_function(positive, route.params.m, route.params.omega)
 end
 
 y_branch_supported(route::Route) =
@@ -1676,17 +1531,8 @@ function _y_radial_function(route::Route, amps, ysoln)
     xsoln = r -> gsn_solution_rstar(route)(rstar_from_r(route.params.a, r))[1]
     yscalar = r -> ysoln(r)[1]
     return y_type(
-        _route_mode(route),
-        _route_boundary_condition(route),
-        amps.trans,
-        amps.incidence,
-        amps.reflection,
-        missing,
-        missing,
-        xsoln,
-        yscalar,
-        ysoln,
-        getfield(_root_module(), :UNIT_TEUKOLSKY_TRANS),
+        _route_mode(route), _route_boundary_condition(route), amps.trans, amps.incidence, amps.reflection, missing,
+        missing, xsoln, yscalar, ysoln, getfield(_root_module(), :UNIT_TEUKOLSKY_TRANS),
     )
 end
 
@@ -1694,11 +1540,7 @@ function y_radial_function(route::ConjugatedRoute)
     positive = y_radial_function(route.route)
     isem = _isem_module()
     conjugate_function = getfield(isem, :_conjugate_y_radial_function)
-    return conjugate_function(
-        positive,
-        route.params.m,
-        route.params.omega,
-    )
+    return conjugate_function(positive, route.params.m, route.params.omega)
 end
 
 end

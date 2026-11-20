@@ -288,14 +288,7 @@ function _combine_isem_down(Rin, Rup)
     end
 
     return TeukolskyRadialFunction(
-        Rin.mode,
-        DOWN,
-        one(Binc),
-        Binc^-1 - Bref * Cref / Binc,
-        -Bref * Cinc / Binc,
-        missing,
-        missing,
-        teuk_func,
+        Rin.mode, DOWN, one(Binc), Binc^-1 - Bref * Cref / Binc, -Bref * Cinc / Binc, missing, missing, teuk_func,
         UNIT_TEUKOLSKY_TRANS,
     )
 end
@@ -317,14 +310,7 @@ function _combine_isem_out(Rin, Rup)
     end
 
     return TeukolskyRadialFunction(
-        Rin.mode,
-        OUT,
-        one(Cinc),
-        Cinc^-1 - Bref * Cref / Cinc,
-        -Binc * Cref / Cinc,
-        missing,
-        missing,
-        teuk_func,
+        Rin.mode, OUT, one(Cinc), Cinc^-1 - Bref * Cref / Cinc, -Binc * Cref / Cinc, missing, missing, teuk_func,
         UNIT_TEUKOLSKY_TRANS,
     )
 end
@@ -337,15 +323,7 @@ end
 
 function _isem_route(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
     return ISEM.radial_route(
-        s,
-        l,
-        m,
-        a,
-        omega,
-        _isem_branch(boundary_condition);
-        N=N,
-        xm=xm,
-        tol=tol,
+        s, l, m, a, omega, _isem_branch(boundary_condition); N=N, xm=xm, tol=tol,
         small_frequency_expansion=sfe === nothing ? :auto : sfe,
         large_frequency_expansion=lfe === nothing ? :auto : lfe,
     )
@@ -364,9 +342,7 @@ function _combine_gsn_down(Xin, Xup)
         xup = Xup.GSN_solution(rs)
         scale = inv(Binc)
         return (
-            scale * (xin[1] - Bref / Ctrans * xup[1]),
-            scale * (xin[2] - Bref / Ctrans * xup[2]),
-            max(xin[3], xup[3]),
+            scale * (xin[1] - Bref / Ctrans * xup[1]), scale * (xin[2] - Bref / Ctrans * xup[2]), max(xin[3], xup[3]),
         )
     end
 
@@ -402,9 +378,7 @@ function _combine_gsn_out(Xin, Xup)
         xup = Xup.GSN_solution(rs)
         scale = inv(Cinc)
         return (
-            scale * (xup[1] - Cref / Btrans * xin[1]),
-            scale * (xup[2] - Cref / Btrans * xin[2]),
-            max(xin[3], xup[3]),
+            scale * (xup[1] - Cref / Btrans * xin[1]), scale * (xup[2] - Cref / Btrans * xin[2]), max(xin[3], xup[3]),
         )
     end
 
@@ -469,20 +443,9 @@ function _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition; xm, N, tol
     maximum(ISEM.Matching.amplitude_errors(route)) <= ISEM.Matching.COMPLEX_PATH_LOSS_TARGET || return nothing
     side = ISEM.gsn_radial_function(route)
     return GSNRadialFunction(
-        side.mode,
-        boundary_condition,
-        side.rsin,
-        side.rsout,
-        side.rsmp,
-        side.horizon_expansion_order,
-        side.infinity_expansion_order,
-        side.transmission_amplitude,
-        side.reflection_amplitude,
-        side.incidence_amplitude,
-        side.numerical_GSN_solution,
-        side.numerical_Riccati_solution,
-        side.GSN_solution,
-        side.normalization_convention,
+        side.mode, boundary_condition, side.rsin, side.rsout, side.rsmp, side.horizon_expansion_order,
+        side.infinity_expansion_order, side.transmission_amplitude, side.reflection_amplitude, side.incidence_amplitude,
+        side.numerical_GSN_solution, side.numerical_Riccati_solution, side.GSN_solution, side.normalization_convention,
         side.method,
     )
 end
@@ -504,11 +467,7 @@ function _gsn_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=not
             a, omega, boundary_condition; xm, N, tol, sfe, lfe)
         positive_omega = -conj(omega)
         route = ISEM.radial_route(
-            s, l, -m, a, positive_omega,
-            _isem_branch(boundary_condition);
-            backend=:p_equation,
-            N=40,
-            tol=1.0e-14,
+            s, l, -m, a, positive_omega, _isem_branch(boundary_condition); backend=:p_equation, N=40, tol=1.0e-14,
         )
         positive = ISEM.gsn_radial_function(route)
         return ISEM._conjugate_gsn_radial_function(
@@ -1695,17 +1654,9 @@ function _flux_tolerance_print_value(flux::TeukolskyPointParticleFlux)
 
     parts = String[]
     rel_inf = _flux_hit_nmax_relative_energy(
-        flux,
-        :n_reached_inf,
-        :infinity_energy_flux_list,
-        flux.infinity_energy_flux,
+        flux, :n_reached_inf, :infinity_energy_flux_list, flux.infinity_energy_flux,
     )
-    rel_hor = _flux_hit_nmax_relative_energy(
-        flux,
-        :n_reached_hor,
-        :horizon_energy_flux_list,
-        flux.horizon_energy_flux,
-    )
+    rel_hor = _flux_hit_nmax_relative_energy(flux, :n_reached_hor, :horizon_energy_flux_list, flux.horizon_energy_flux)
 
     rel_inf !== nothing && push!(parts, "infinity: $rel_inf")
     rel_hor !== nothing && push!(parts, "horizon: $rel_hor")
@@ -1910,8 +1861,7 @@ function _teukolsky_flux_convolution_integral_strategy(result, orbit_type::Symbo
     end
     if _flux_tail_levin_same(result)
         return _flux_tail_levin_strategy(
-            _flux_get(result, :tail_levin_infinity_enabled),
-            _flux_get(result, :tail_levin_start_inf),
+            _flux_get(result, :tail_levin_infinity_enabled), _flux_get(result, :tail_levin_start_inf),
         )
     end
     inf = _flux_tail_levin_branch_strategy(
@@ -1934,8 +1884,7 @@ function _teukolsky_flux_convolution_integral_info(result, orbit_type::Symbol)
     end
     if _flux_tail_levin_same(result)
         return (
-            strategy = strategy,
-            tail_levin_nmin = _flux_get(result, :tail_levin_nmin),
+            strategy = strategy, tail_levin_nmin = _flux_get(result, :tail_levin_nmin),
             tail_levin_local_n = _flux_get(result, :tail_levin_local_n),
             tail_levin_max_depth = _flux_get(result, :tail_levin_max_depth),
         )
@@ -1957,15 +1906,10 @@ function _teukolsky_flux_convolution_integral_info(result, orbit_type::Symbol)
 end
 
 _teukolsky_flux_caps(result) = (
-    lmax = _flux_get(result, :lmax_used),
-    kmax = _flux_get(result, :kmax_used),
-    nmax = _flux_get(result, :nmax_used),
-    lmax_auto = _flux_get(result, :lmax_auto, false),
-    kmax_auto = _flux_get(result, :kmax_auto, false),
-    nmax_auto = _flux_get(result, :nmax_auto, false),
-    estimate = _flux_get(result, :cap_estimate),
-    n_estimate = _flux_get(result, :nmax_estimate),
-    raises = _flux_get(result, :cap_raises, 0),
+    lmax = _flux_get(result, :lmax_used), kmax = _flux_get(result, :kmax_used), nmax = _flux_get(result, :nmax_used),
+    lmax_auto = _flux_get(result, :lmax_auto, false), kmax_auto = _flux_get(result, :kmax_auto, false),
+    nmax_auto = _flux_get(result, :nmax_auto, false), estimate = _flux_get(result, :cap_estimate),
+    n_estimate = _flux_get(result, :nmax_estimate), raises = _flux_get(result, :cap_raises, 0),
 )
 
 function _teukolsky_flux_reached(result, orbit_type::Symbol)
@@ -1977,17 +1921,14 @@ end
 function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
     if orbit_type == :circular
         return (
-            l_reached = _flux_get(result, :l_reached),
-            l_reached_inf = _flux_get(result, :l_reached_inf),
+            l_reached = _flux_get(result, :l_reached), l_reached_inf = _flux_get(result, :l_reached_inf),
             l_reached_hor = _flux_get(result, :l_reached_hor),
             convolution_integral = _teukolsky_flux_convolution_integral_info(result, orbit_type),
         )
     elseif orbit_type == :inclined
         return (
-            l_reached_inf = _flux_get(result, :l_reached_inf),
-            l_reached_hor = _flux_get(result, :l_reached_hor),
-            k_reached_inf = _flux_get(result, :k_reached_inf),
-            k_reached_hor = _flux_get(result, :k_reached_hor),
+            l_reached_inf = _flux_get(result, :l_reached_inf), l_reached_hor = _flux_get(result, :l_reached_hor),
+            k_reached_inf = _flux_get(result, :k_reached_inf), k_reached_hor = _flux_get(result, :k_reached_hor),
             lmax_hit = _flux_get(result, :lmax_hit_inf, false) || _flux_get(result, :lmax_hit_hor, false),
             kmax_hit = _flux_get(result, :kmax_hit_inf, false) || _flux_get(result, :kmax_hit_hor, false),
             near_static_zero = (infinity = _flux_get(result, :near_static_zero_inf, 0), horizon = _flux_get(result, :near_static_zero_hor, 0)),
@@ -1995,8 +1936,7 @@ function _teukolsky_flux_reached_walks(result, orbit_type::Symbol)
         )
     else
         return (
-            n_reached_inf = _flux_get(result, :n_reached_inf),
-            n_reached_hor = _flux_get(result, :n_reached_hor),
+            n_reached_inf = _flux_get(result, :n_reached_inf), n_reached_hor = _flux_get(result, :n_reached_hor),
             lmax_hit = _flux_get(result, :lmax_hit_inf, false) || _flux_get(result, :lmax_hit_hor, false),
             kmax_hit = _flux_get(result, :kmax_hit_inf, false) || _flux_get(result, :kmax_hit_hor, false),
             nmax_hit = _flux_get(result, :nmax_hit_inf, false) || _flux_get(result, :nmax_hit_hor, false),

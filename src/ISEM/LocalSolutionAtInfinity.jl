@@ -31,13 +31,7 @@ end
 # exp(sigma / y) y^rho. With `guarded`, stops at the first ill-conditioned
 # denominator or suspicious coefficient and returns (effective order, reason).
 function _infinity_coefficients!(
-    coeffs::AbstractVector{<:Complex},
-    a_power,
-    b_power,
-    rho,
-    sigma,
-    order::Integer,
-    guarded::Bool,
+    coeffs::AbstractVector{<:Complex}, a_power, b_power, rho, sigma, order::Integer, guarded::Bool,
 )
     order >= 0 || throw(ArgumentError("series order must be non-negative."))
     length(coeffs) >= order + 1 || throw(ArgumentError("coefficient buffer is too short."))
@@ -81,36 +75,18 @@ function _infinity_coefficients!(
 end
 
 function infinity_guarded(
-    a_coeffs::AbstractVector{<:Complex},
-    b_coeffs::AbstractVector{<:Complex},
-    rho,
-    sigma,
-    order::Integer;
-    a_first_power::Integer=-1,
-    b_first_power::Integer=-4,
+    a_coeffs::AbstractVector{<:Complex}, b_coeffs::AbstractVector{<:Complex}, rho, sigma, order::Integer;
+    a_first_power::Integer=-1, b_first_power::Integer=-4,
 )
     a_power = endpoint_power_lookup(a_coeffs, a_first_power)
     b_power = endpoint_power_lookup(b_coeffs, b_first_power)
     coeffs = Vector{promote_type(eltype(a_coeffs), typeof(complex(rho)), typeof(complex(sigma)))}(undef, order + 1)
-    effective_order, reason = _infinity_coefficients!(
-        coeffs,
-        a_power,
-        b_power,
-        rho,
-        sigma,
-        order,
-        true,
-    )
+    effective_order, reason = _infinity_coefficients!(coeffs, a_power, b_power, rho, sigma, order, true)
     minimum_order = min(2, Int(order))
     effective_order >= minimum_order || error(
         "ISEM GSN infinity recurrence lost floating-point credibility before order $minimum_order: $reason")
     effective_order < order && resize!(coeffs, effective_order + 1)
-    return (
-        coefficients=coeffs,
-        requested_order=Int(order),
-        effective_order=effective_order,
-        truncation_reason=reason,
-    )
+    return (coefficients=coeffs, requested_order=Int(order), effective_order=effective_order, truncation_reason=reason,)
 end
 
 # Laurent coefficients of A and B rewritten for the scaled variable y / variable_scale.
@@ -133,13 +109,7 @@ end
 
 # Guarded asymptotic series at infinity for the :out/:up or :in/:down branch,
 # optionally in a scaled variable.
-function infinity_local_solution(
-    coefficients::CoefficientSet,
-    branch::Symbol,
-    order::Integer,
-    ;
-    variable_scale=nothing,
-)
+function infinity_local_solution(coefficients::CoefficientSet, branch::Symbol, order::Integer, ; variable_scale=nothing)
     a_coeffs, b_coeffs = endpoint_ab_series(coefficients, :I, order)
     rho, sigma = infinity_exponents(coefficients.params, branch)
     C = eltype(a_coeffs)
@@ -155,17 +125,9 @@ function infinity_local_solution(
     guarded = infinity_guarded(
         recurrence_a, recurrence_b, rho, recurrence_sigma, order)
     return (
-        branch=branch,
-        rho=rho,
-        sigma=sigma,
-        recurrence_sigma=recurrence_sigma,
-        coefficients=guarded.coefficients,
-        A=recurrence_a,
-        B=recurrence_b,
-        variable=isone(scale) ? :y : :scaled_y,
-        variable_scale=scale,
-        requested_order=guarded.requested_order,
-        effective_order=guarded.effective_order,
+        branch=branch, rho=rho, sigma=sigma, recurrence_sigma=recurrence_sigma, coefficients=guarded.coefficients,
+        A=recurrence_a, B=recurrence_b, variable=isone(scale) ? :y : :scaled_y, variable_scale=scale,
+        requested_order=guarded.requested_order, effective_order=guarded.effective_order,
         truncation_reason=guarded.truncation_reason,
     )
 end

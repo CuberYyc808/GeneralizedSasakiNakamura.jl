@@ -44,10 +44,7 @@ function leaver_D_coefficients(omega, a, s::Int, m::Int, angular_A)
         (one(T) + s - (gamma + delta) / 2) *
         (s + (gamma + delta) / 2)
     return (
-        delta,
-        4 * p - 2 * alpha + gamma - delta - 2,
-        2 * alpha - gamma + 2,
-        alpha * (4 * p - delta) - sigma,
+        delta, 4 * p - 2 * alpha + gamma - delta - 2, 2 * alpha - gamma + 2, alpha * (4 * p - delta) - sigma,
         alpha * (alpha - gamma + one(T)),
     )
 end

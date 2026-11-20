@@ -247,16 +247,10 @@ function _classify_continuation_failure(mode::QNMMode, reason::Symbol,
     # is not an end of the sequence.
     after_birth && return (reason=:negative_imaginary_axis_tangent_accumulation,
         provenance=(
-        endpoint_kind=:negative_imaginary_axis_tangent_accumulation,
-        stall_spin=endpoint.spin,
-        stall_frequency=endpoint.frequency,
-        stall_spin_bracket=(isempty(spins) ? missing : spins[end],
-            failed_spin),
-        root_path=root_path,
-        angular_path=angular_path,
-        continuation_stop_reason=reason,
-        sequence_segment=sequence_segment,
-        next_segment_hint=nothing,
+            endpoint_kind=:negative_imaginary_axis_tangent_accumulation, stall_spin=endpoint.spin,
+            stall_frequency=endpoint.frequency, stall_spin_bracket=(isempty(spins) ? missing : spins[end], failed_spin),
+            root_path=root_path, angular_path=angular_path, continuation_stop_reason=reason,
+            sequence_segment=sequence_segment, next_segment_hint=nothing,
     ))
     return (reason=:negative_imaginary_axis_endpoint, provenance=(
         endpoint_kind=:negative_imaginary_axis,
@@ -283,10 +277,8 @@ function _segment_failure(mode::QNMMode, a::T, omega, reason::Symbol,
         segment=segment === :auto ? 0 : segment)
     return _failed_result(mode, a, _complex_of_type(T, omega), reason,
         merge((
-            label_convention=contract.label_convention,
-            branch_label=contract.branch_label,
-            endpoint_kind=contract.endpoint_kind,
-            sequence_segment=segment,
+            label_convention=contract.label_convention, branch_label=contract.branch_label,
+            endpoint_kind=contract.endpoint_kind, sequence_segment=segment,
         ), provenance);
         convention,
         overtone_index=convention == :leaver ? missing : mode.n,
@@ -339,8 +331,7 @@ function _qnm_frequency_segmented(mode::QNMMode, a, segment;
     if _segment_succeeded(first_segment)
         segment === :auto && return first_segment
         return failure(first_segment.omega, :no_further_segment, (
-            segment0_status=first_segment.status,
-            segment0_stop_reason=first_segment.stop_reason,
+            segment0_status=first_segment.status, segment0_stop_reason=first_segment.stop_reason,
             segment0_omega=first_segment.omega,
         ))
     end
@@ -354,20 +345,15 @@ function _qnm_frequency_segmented(mode::QNMMode, a, segment;
             attribute=false, kwargs...)
         return failure(first_segment.omega,
             :segment_attribution_unavailable, (
-                segment0_endpoint=endpoint,
-                reemergence_events=search.events,
-                searched_spin_range=search.searched_spin_range,
-                edge_scan_rows=search.edge_scan_rows,
+                segment0_endpoint=endpoint, reemergence_events=search.events,
+                searched_spin_range=search.searched_spin_range, edge_scan_rows=search.edge_scan_rows,
             ))
     end
 
     search = _negative_imaginary_axis_reemergence_seed(mode, first_segment, aT; kwargs...)
     search_provenance = (
-        segment0_endpoint=endpoint,
-        reemergence_events=search.events,
-        searched_spin_range=search.searched_spin_range,
-        edge_scan_rows=search.edge_scan_rows,
-        attribution_window=search.attribution_window,
+        segment0_endpoint=endpoint, reemergence_events=search.events, searched_spin_range=search.searched_spin_range,
+        edge_scan_rows=search.edge_scan_rows, attribution_window=search.attribution_window,
     )
     if search.event === nothing
         segment === :auto && return _with_provenance(first_segment,
@@ -380,9 +366,8 @@ function _qnm_frequency_segmented(mode::QNMMode, a, segment;
         kwargs..., segment=1, segment_seed=search.seed)
     event = search.event
     segment_provenance = merge(search_provenance, (
-        reemergence=(spin=event.spin, frequency=event.frequency),
-        segment_endpoints=(segment0_end=endpoint,
-            segment1_start=(spin=event.spin, frequency=event.frequency)),
+        reemergence=(spin=event.spin, frequency=event.frequency), segment_endpoints=(segment0_end=endpoint,
+        segment1_start=(spin=event.spin, frequency=event.frequency)),
     ))
     return _with_provenance(second_segment, segment_provenance)
 end
@@ -555,11 +540,8 @@ function _negative_imaginary_axis_reemergence_seed(mode::QNMMode, first_segment,
             isempty(attributed) && continue
             event = attributed[argmin([e.spin for e in attributed])]
             seed = (
-                seed=event.seed.omega,
-                seed_spin=rung,
-                source=:nia_reemergence_edge_scan,
-                seed_inversion_index=first_segment.inversion_index,
-                seed_predictor=:edge_scan_polished_root,
+                seed=event.seed.omega, seed_spin=rung, source=:nia_reemergence_edge_scan,
+                seed_inversion_index=first_segment.inversion_index, seed_predictor=:edge_scan_polished_root,
                 seed_duplicate_distance=T(Inf),
             )
             return (event=event, seed=seed, events=events,
@@ -592,13 +574,9 @@ function _near_axis_precision_check(mode::QNMMode, a::Float64,
     return setprecision(BigFloat, precision_bits) do
         B = BigFloat
         options = merge(polish_options, (
-            sheet_id=Symbol(polish_options.sheet_id, :_near_axis_check),
-            cf_tolerance=B(polish_options.cf_tolerance),
-            cf_minimum_iterations=max(polish_options.cf_minimum_iterations,
-                600),
-            cf_maximum_iterations=max(polish_options.cf_maximum_iterations,
-                24000),
-            root_tolerance=B(root_tolerance),
+            sheet_id=Symbol(polish_options.sheet_id, :_near_axis_check), cf_tolerance=B(polish_options.cf_tolerance),
+            cf_minimum_iterations=max(polish_options.cf_minimum_iterations, 600),
+            cf_maximum_iterations=max(polish_options.cf_maximum_iterations, 24000), root_tolerance=B(root_tolerance),
             trust_radius=B(polish_options.trust_radius),
         ))
         polished = try
@@ -614,12 +592,8 @@ function _near_axis_precision_check(mode::QNMMode, a::Float64,
         drift = Float64(abs(polished.omega - omega) /
             max(one(B), abs(polished.omega)))
         return (
-            verified=polished.converged && drift <= stability_tolerance,
-            precision_bits,
-            converged=polished.converged,
-            stop_reason=polished.stop_reason,
-            bigfloat_omega=ComplexF64(polished.omega),
-            drift,
+            verified=polished.converged && drift <= stability_tolerance, precision_bits, converged=polished.converged,
+            stop_reason=polished.stop_reason, bigfloat_omega=ComplexF64(polished.omega), drift,
         )
     end
 end
