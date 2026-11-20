@@ -1405,7 +1405,8 @@ function _near_extremal_expansion_data(mode::QNMMode)
     node = findlast(u -> one(u) - u^2 <= _NEAR_EXTREMAL_EXPANSION_MINIMUM_SPIN, _SPIN_TABLE_U)
     node === nothing && return nothing
     (isfinite(roots[node]) && inversions[node] >= 0) || return nothing
-    coefficients = _cached_near_extremal_coefficients(mode, extremal[2])
+    coefficients = near_extremal_expansion_coefficients(mode, extremal[2])
+    coefficients === nothing || (coefficients = Tuple(coefficients))
     coefficients === nothing && return nothing
     xmax = (2pi * max(real(2 * coefficients[1] - mode.m), 0.0) / 36.8)^2
     unode = _SPIN_TABLE_U[node]

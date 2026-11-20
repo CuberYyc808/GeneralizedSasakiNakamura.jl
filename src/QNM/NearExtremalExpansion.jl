@@ -300,18 +300,3 @@ function near_extremal_expansion_coefficients(mode::QNMMode, omega0; maximum_N::
     end
 end
 
-# Per-mode coefficient cache (coefficients or `nothing`), shared across threads.
-const _NE_CACHE = Dict{NTuple{4,Int},Any}()
-const _NE_CACHE_LOCK = ReentrantLock()
-
-function _cached_near_extremal_coefficients(mode::QNMMode, omega0)
-    key = (mode.s, mode.l, mode.m, mode.n)
-    lock(_NE_CACHE_LOCK) do
-        haskey(_NE_CACHE, key) && return _NE_CACHE[key]
-    end
-    c = near_extremal_expansion_coefficients(mode, omega0)
-    lock(_NE_CACHE_LOCK) do
-        _NE_CACHE[key] = c === nothing ? nothing : Tuple(c)
-    end
-    return c === nothing ? nothing : Tuple(c)
-end
