@@ -8,7 +8,7 @@ module GSNEndpoint_h_hc_s0
 
 Base.Experimental.@compiler_options optimize=0
 
-export construct_gsn_endpoint_basis, endpoint_value_count, endpoint_slot_metadata
+export construct_gsn_endpoint_basis
 
 const LEN_GSN_ENDPOINT_h_hc_s0 = 46
 
@@ -117,104 +117,6 @@ function construct_gsn_endpoint_basis_h_hc_s0(lambda, m, nu, omega)
     _construct_gsn_endpoint_basis_h_hc_s0_block_5!(coeffs, m, omega, m2, o2, sn, cp2, cp3, cp4, cp5, cp6, cp7, cp8, up3, up4)
     _construct_gsn_endpoint_basis_h_hc_s0_block_6!(coeffs, cp4, cp5, cp6, cp7, u, up2)
     return coeffs
-end
-
-endpoint_value_count() = 46
-
-function endpoint_slot_metadata()
-    return [
-        (1, "A_H", "P", 0)
-,
-        (2, "A_H", "P", 1)
-,
-        (3, "A_H", "P", 2)
-,
-        (4, "A_H", "P", 3)
-,
-        (5, "A_H", "P", 4)
-,
-        (6, "A_H", "P", 5)
-,
-        (7, "A_H", "P", 6)
-,
-        (8, "A_H", "P", 7)
-,
-        (9, "A_H", "P", 8)
-,
-        (10, "A_H", "P", 9)
-,
-        (11, "A_H", "P", 10)
-,
-        (12, "A_H", "Q", 0)
-,
-        (13, "A_H", "Q", 1)
-,
-        (14, "A_H", "Q", 2)
-,
-        (15, "A_H", "Q", 3)
-,
-        (16, "A_H", "Q", 4)
-,
-        (17, "A_H", "Q", 5)
-,
-        (18, "A_H", "Q", 6)
-,
-        (19, "A_H", "Q", 7)
-,
-        (20, "A_H", "Q", 8)
-,
-        (21, "A_H", "Q", 9)
-,
-        (22, "A_H", "Q", 10)
-,
-        (23, "B_H", "P", 0)
-,
-        (24, "B_H", "P", 1)
-,
-        (25, "B_H", "P", 2)
-,
-        (26, "B_H", "P", 3)
-,
-        (27, "B_H", "P", 4)
-,
-        (28, "B_H", "P", 5)
-,
-        (29, "B_H", "P", 6)
-,
-        (30, "B_H", "P", 7)
-,
-        (31, "B_H", "P", 8)
-,
-        (32, "B_H", "P", 9)
-,
-        (33, "B_H", "P", 10)
-,
-        (34, "B_H", "Q", 0)
-,
-        (35, "B_H", "Q", 1)
-,
-        (36, "B_H", "Q", 2)
-,
-        (37, "B_H", "Q", 3)
-,
-        (38, "B_H", "Q", 4)
-,
-        (39, "B_H", "Q", 5)
-,
-        (40, "B_H", "Q", 6)
-,
-        (41, "B_H", "Q", 7)
-,
-        (42, "B_H", "Q", 8)
-,
-        (43, "B_H", "Q", 9)
-,
-        (44, "B_H", "Q", 10)
-,
-        (45, "B_H", "Q", 11)
-,
-        (46, "B_H", "Q", 12)
-    ]
 end
 
 function construct_gsn_endpoint_basis(lambda, m, nu, omega)
