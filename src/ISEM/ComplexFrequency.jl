@@ -151,9 +151,11 @@ struct ComplexRoute{P,C,F,E,M,Q,T}
     teukolsky_reflection::T
 end
 
-# `route` with the given fields replaced (the other fields shared).
+# `route` (or a plan) with the given fields replaced (the other fields shared).
 _with(route::ComplexRoute; kwargs...) =
     ComplexRoute((haskey(kwargs, f) ? kwargs[f] : getfield(route, f) for f in fieldnames(ComplexRoute))...)
+_with(plan::ComplexRoutePlan; kwargs...) =
+    ComplexRoutePlan((haskey(kwargs, f) ? kwargs[f] : getfield(plan, f) for f in fieldnames(ComplexRoutePlan))...)
 
 _finite_complex(value) = isfinite(real(value)) && isfinite(imag(value))
 _optional_float(value) = value === nothing ? nothing : Float64(value)
@@ -2383,9 +2385,7 @@ function _negative_imaginary_axis_p_overlay(
             reflection,
         )),
     ))
-    plan = ComplexRoutePlan(
-        route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
-    )
+    plan = _with(route.plan; amplitudes)
     return _with(route; metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
@@ -2562,9 +2562,7 @@ function _negative_imaginary_axis_side_overlay(route::ComplexRoute, mapped, conf
             reflection,
         )),
     ))
-    plan = ComplexRoutePlan(
-        route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
-    )
+    plan = _with(route.plan; amplitudes)
     return _with(route; metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
@@ -2728,9 +2726,7 @@ function _pole_reciprocal_route(original::ComplexRoute, up_route::ComplexRoute, 
         raw_gsn_transmission=transmission,
         gsn=(; transmission, incidence, reflection),
     )
-    plan = ComplexRoutePlan(
-        up_route.plan.contour, matching, up_route.plan.controls, amplitudes, up_route.plan.patch_count,
-    )
+    plan = _with(up_route.plan; amplitudes, matching)
     return ComplexRoute(
         :IN, original.params, original.controls, nothing, evaluator, metadata, plan, transmission, incidence,
         reflection, teukolsky_transmission, teukolsky_incidence, teukolsky_reflection,
@@ -2833,9 +2829,7 @@ function _apply_exact_pole_normalization(route::ComplexRoute)
             incidence,
         )),
     ))
-    plan = ComplexRoutePlan(
-        route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
-    )
+    plan = _with(route.plan; amplitudes)
     return _with(route; metadata, plan, incidence, teukolsky_incidence)
 end
 

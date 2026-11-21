@@ -338,9 +338,7 @@ function _overlay(
             reflection,
         )),
     ))
-    plan = ComplexRoutePlan(
-        route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
-    )
+    plan = _with(route.plan; amplitudes)
     return _with(route; state_evaluator, metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
