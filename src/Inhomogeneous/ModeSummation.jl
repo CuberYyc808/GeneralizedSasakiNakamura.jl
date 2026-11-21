@@ -2058,6 +2058,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             near_static_zero_hor = near_static_zero_hor,
             failed_modes_inf = failed_modes_inf,
             failed_modes_hor = failed_modes_hor,
+            infinity_truncation_floor = branch_mode_floor_inf[],
+            horizon_truncation_floor = branch_mode_floor_hor[],
             mode_parallelism = mode_parallelism,
             modes_computed = pf_inf === nothing ? nothing : pf_inf.modes + pf_hor.modes,
             modes_computed_unused = pf_inf === nothing ? nothing : (pf_inf.modes - pf_inf.modes_used) + (pf_hor.modes - pf_hor.modes_used),
