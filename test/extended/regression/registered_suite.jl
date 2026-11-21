@@ -129,7 +129,7 @@
             (2 * ordinary_mode.omega * ordinary_mode.incidence_derivative)
 
         display_text = sprint(show, MIME("text/plain"), ordinary_mode)
-        @test length(split(display_text, '\n')) == 9
+        @test length(split(display_text, '\n')) == 10   # header, parameters, six values, status, formalism
         @test startswith(display_text, "QuasiNormalMode(\n")
         @test endswith(display_text, "    formalism = GSN)")
 
