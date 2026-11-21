@@ -3088,10 +3088,8 @@ function _complex_route_impl(
         ":p_equation."))
 end
 
-# Steps of `complex_route` around `_complex_route_impl`, with methods in NegativeImaginaryAxisAmplitudes (included
-# after this module): a special-case builder tried first (returns `nothing` to decline) and a step that
-# post-processes the built route. The calls keep their inference barriers.
-function _special_route end
+# The step of `complex_route` after `_complex_route_impl` that post-processes the built route, with its method in
+# NegativeImaginaryAxisAmplitudes (included after this module). The call keeps its inference barrier.
 function _post_route end
 
 """
@@ -3111,11 +3109,6 @@ function complex_route(
     controls::Union{Nothing,ComplexControls}=nothing, lambda=nothing, nu=nothing, xm=nothing, rhom=nothing, N=nothing,
     tol=nothing, small_frequency_expansion=nothing, large_frequency_expansion=nothing, pole_normalization::Bool=false,
 )
-    special = Base.inferencebarrier(_special_route)(
-        s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-        large_frequency_expansion, pole_normalization,
-    )
-    special === nothing || return special
     route = Base.inferencebarrier(_complex_route_impl)(
         s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
         large_frequency_expansion, pole_normalization,

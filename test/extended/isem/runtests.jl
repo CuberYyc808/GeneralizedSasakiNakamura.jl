@@ -566,9 +566,6 @@ end
     real_lambda = lambda(-2, 3, 3, 0.9, 1.0)
     @test MST.mano_suzuki_takasugi_nu_complex(-2, 3, 3, 0.9, 1.0, real_lambda) === -0.499999999999985 - 1.2619741165115073im
     @test MST._monodromy_trace_data(-2, 3, 0.9, 1.0 + 0.0im, real_lambda).value === -1388.6261776840256 - 1.3120419640876786e-10im
-    # The fast NIA route takes the principal amplitudes only (no double-double refinement).
-    fast_route_code = join(string.(Base.uncompressed_ast.(methods(D.NegativeImaginaryAxisAmplitudes._fast_route))))
-    @test !occursin("_refined_amplitudes", fast_route_code) && !occursin("_dd_pin_state", fast_route_code)
 end
 
 # ---------------------------------------------------------------------------------------------------
@@ -876,10 +873,10 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
-# High-spin lower-half-plane IN fallback (main module _use_lhp_highspin_p_fallback): Re omega <= -10,
-# |Im omega| <= 1e-3 |Re omega|, |a| >= 0.99 uses the conjugated p-equation route of the positive partner.
+# High-spin lower half plane, Re omega <= -10, |Im omega| <= 1e-3 |Re omega|, |a| >= 0.99: the IN route is the
+# conjugated route of the positive partner (s, l, -m, -conj(omega)).
 # ---------------------------------------------------------------------------------------------------
-@testset "high-spin LHP IN fallback" begin
+@testset "high-spin LHP IN" begin
     for (a, w) in ((0.99, -12.0 - 0.001im), (0.995, -15.0 - 0.01im))
         X = GSN_radial(-2, 2, 2, a, w, IN)
         @test X.method == "ISEM"

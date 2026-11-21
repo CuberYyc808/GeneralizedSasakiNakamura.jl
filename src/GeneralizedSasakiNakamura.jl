@@ -397,20 +397,6 @@ function _combine_gsn_out(Xin, Xup)
     )
 end
 
-# IN solutions at |a| >= 0.99 with Re(omega) <= -10 and |Im(omega)| <= 1e-3 |Re(omega)|
-# (and no explicit matching controls) are built from the conjugated P-equation route of
-# the positive-frequency partner (s, l, -m, -conj(omega)); see `_gsn_from_isem`.
-function _use_lhp_highspin_p_fallback(a, omega, boundary_condition; xm, N, tol, sfe, lfe)
-    boundary_condition == IN || return false
-    xm === nothing && N === nothing && tol === nothing &&
-        sfe === nothing && lfe === nothing || return false
-    omega isa Complex || return false
-    real_part = real(omega)
-    real_part <= -10 || return false
-    abs(imag(omega)) <= 1.0e-3 * abs(real_part) || return false
-    return abs(real(a)) >= 0.99
-end
-
 # Direct DOWN and OUT at real frequency: the target is marched from its own end (OUT from the horizon like IN, DOWN
 # from infinity like UP) and expressed in the pair of the other end: one solve instead of IN and UP, and no
 # cancellation between them. The route belongs to the IN (OUT) or UP (DOWN) side, so its incidence and reflection are
@@ -481,16 +467,6 @@ function _gsn_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=not
         return boundary_condition == DOWN ?
             _combine_gsn_down(Xin, Xup) :
             _combine_gsn_out(Xin, Xup)
-    end
-    if _use_lhp_highspin_p_fallback(
-            a, omega, boundary_condition; xm, N, tol, sfe, lfe)
-        positive_omega = -conj(omega)
-        route = ISEM.radial_route(
-            s, l, -m, a, positive_omega, _isem_branch(boundary_condition); backend=:p_equation, N=40, tol=1.0e-14,
-        )
-        positive = ISEM.gsn_radial_function(route)
-        return ISEM._conjugate_gsn_radial_function(
-            positive, m, omega)
     end
     route = _isem_route(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
     return ISEM.gsn_radial_function(route)

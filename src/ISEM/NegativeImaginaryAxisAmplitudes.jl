@@ -4,8 +4,7 @@ using ...Errors: absorbable
 # Special routes for complex frequencies near the negative imaginary axis: replace or
 # check the amplitudes of a ComplexRoute with the analytic MST amplitudes and anchor
 # its state evaluator to the MST solution at x = _STATE_ANCHOR_X. Registered with
-# ComplexFrequency as a special route builder (`build`) and a post-route hook
-# (`_post_overlay`).
+# ComplexFrequency as its post-route hook (`_post_overlay`).
 
 import ..ManoSuzukiTakasugiInfinity
 using ..ManoSuzukiTakasugiInfinity:
@@ -13,7 +12,6 @@ using ..ManoSuzukiTakasugiInfinity:
     mano_suzuki_takasugi_negative_imaginary_axis_amplitudes,
     mano_suzuki_takasugi_nu_complex,
     mano_suzuki_takasugi_principal_amplitudes
-using ..CoefficientTables: gsn_coefficients
 using ..Parameters:
     gsn_controls,
     gsn_parameters
@@ -23,7 +21,6 @@ import ..ComplexFrequency
 import ..ComplexRational
 using ..ComplexFrequency:
     ComplexRoute,
-    ComplexRoutePlan,
     _with,
     ComplexSmallFrequencyExpansionEvaluator,
     ComplexStateEvaluator
@@ -31,13 +28,6 @@ using ..ComplexRational:
     ComplexRationalEvaluator,
     ComplexRationalState
 
-const _REAL_RATIO_MAX = 1.0e-8
-const _NONROTATING_MAX_ABS_A = 64eps(Float64)
-# |Im omega| window of the nonrotating |s| = 2 pretrigger (_pretrigger);
-# _MAX_ABS_IMAG_OMEGA is also the default |omega| ceiling of the P-route retry
-# with _fast_route (_fast_p_pretrigger).
-const _MIN_ABS_IMAG_OMEGA = 1.8
-const _MAX_ABS_IMAG_OMEGA = 2.2
 const _NEGATIVE_IMAGINARY_AXIS_LATERAL_REAL_RATIO_MAX = 1.0e-6
 const _STATE_ANCHOR_X = 0.5
 const _STATE_ANCHOR_MAX_ERROR = 1.0e-10
@@ -50,12 +40,8 @@ const _STATE_ANCHOR_RELAXED_TOLERANCE = 1.0e-9
 const _STATE_ANCHOR_RELAXED_REAL_RATIO_MAX = 1.0e-3
 const _AMPLITUDE_AGREEMENT_MAX = 1.0e-10
 const _MANO_SUZUKI_TAKASUGI_STATE_NU_DELTA_MIN = 1.0e-10
-const _FAST_ANCHOR_MIN_OMEGA = 0.025
-const _FAST_ANCHOR_MAX_OMEGA = 2.0
 const _FAST_ANCHOR_RATIO_LOW = 0.2
 const _FAST_ANCHOR_RATIO_HIGH = 5.0
-const _FAST_ANCHOR_ORDER = 40
-const _FAST_ANCHOR_TOLERANCE = 1.0e-14
 
 # State evaluator that multiplies X and dX/dr* of another evaluator by a
 # constant complex scale.
@@ -255,31 +241,6 @@ function _in_real_axis_anchor(route, evaluator)
         real_axis_state_anchor_departure=departure, real_axis_state_anchor_steps=basis.step_count,
         ),
     )
-end
-
-# Whether `build` overlays analytic MST amplitudes: default controls, |s| = 2,
-# a != 0, and omega within _REAL_RATIO_MAX of the negative imaginary axis with
-# _MIN_ABS_IMAG_OMEGA <= |Im(omega)| <= _MAX_ABS_IMAG_OMEGA.
-@inline function _pretrigger(
-    s, a, omega; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
-    pole_normalization,
-)
-    backend == :direct_rational || return false
-    controls === nothing || return false
-    # A tolerance alone sets accuracy targets and does not fix the route.
-    all(value === nothing for value in (
-        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
-    )) || return false
-    pole_normalization && return false
-    omegac = ComplexF64(omega)
-    abs(s) == 2 || return false
-    abs(a) > _NONROTATING_MAX_ABS_A || return false
-    imag(omegac) < 0 || return false
-    !iszero(real(omegac)) || return false
-    abs(real(omegac)) <= _REAL_RATIO_MAX * abs(imag(omegac)) ||
-        return false
-    return _MIN_ABS_IMAG_OMEGA <= abs(imag(omegac)) <=
-        _MAX_ABS_IMAG_OMEGA
 end
 
 # Replace the route's incidence and reflection amplitudes (GSN and Teukolsky)
@@ -747,254 +708,6 @@ function _analytic_result(route)
     return nothing
 end
 
-# Preconditions of `_fast_route`: default controls, IN or UP, kappa above the
-# P-consensus limit, Im(omega) < 0 with Re(omega) != 0, |omega| in
-# (_FAST_ANCHOR_MIN_OMEGA, max_omega], and omega close to either axis.
-@inline function _fast_anchor_pretrigger(
-    a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-    large_frequency_expansion, pole_normalization, max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
-)
-    backend == :direct_rational || return false
-    controls === nothing || return false
-    # A tolerance alone sets accuracy targets and does not fix the route.
-    all(value === nothing for value in (
-        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
-    )) || return false
-    pole_normalization && return false
-    branch_symbol = try
-        ComplexFrequency._normalize_branch(branch)
-    catch caught
-        absorbable(caught) || rethrow()
-        return false
-    end
-    branch_symbol in (:IN, :UP) || return false
-    af = try
-        Float64(a)
-    catch caught
-        absorbable(caught) || rethrow()
-        return false
-    end
-    kappa_squared = (1.0 - af) * (1.0 + af)
-    kappa_squared > 0.0 || return false
-    sqrt(kappa_squared) >
-        ComplexFrequency._P_CONSENSUS_KAPPA_MAX || return false
-    omegac = ComplexF64(omega)
-    _finite(omegac) && imag(omegac) < 0 &&
-        !iszero(real(omegac)) || return false
-    omega_abs = abs(omegac)
-    _FAST_ANCHOR_MIN_OMEGA < omega_abs <=
-        max_omega || return false
-    ratio = abs(real(omegac)) / abs(imag(omegac))
-    return ratio <= _FAST_ANCHOR_RATIO_LOW ||
-        ratio >= _FAST_ANCHOR_RATIO_HIGH
-end
-
-# Route built directly from certified principal (or refined) MST amplitudes and
-# an MST state anchor at x = _STATE_ANCHOR_X, without a two-ray propagation.
-# Returns nothing whenever a precondition, certificate or tolerance fails.
-function _fast_route(
-    s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-    large_frequency_expansion, pole_normalization, max_omega::Float64=_FAST_ANCHOR_MAX_OMEGA,
-    rescue_source::Symbol=:prebuild,
-)
-    _fast_anchor_pretrigger(
-        a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-        large_frequency_expansion, pole_normalization, max_omega,
-    ) || return nothing
-    branch_symbol = ComplexFrequency._normalize_branch(branch)
-
-    params = try
-        gsn_parameters(s, l, m, a, omega)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    data = try
-        ManoSuzukiTakasugiInfinity._mano_suzuki_takasugi_data(params)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    result = try
-        ManoSuzukiTakasugiInfinity._principal_amplitudes(data, branch_symbol)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    result.certificate_accepted || return nothing
-    # The analytic amplitudes stand alone here, with nothing to compare them
-    # with, so they are taken only when their error bound meets the tolerance;
-    # otherwise the two-ray route is built and the overlay adjudicates.
-    maximum(result.gsn_error) <=
-        (tol === nothing ? _FAST_ANCHOR_TOLERANCE : tol) || return nothing
-    state_data = data
-    direct_controls = gsn_controls(
-        params; N=_FAST_ANCHOR_ORDER, xm=_STATE_ANCHOR_X, tol=_FAST_ANCHOR_TOLERANCE, small_frequency_expansion=false,
-        large_frequency_expansion=false,
-    )
-    coefficients = try
-        gsn_coefficients(params; controls=direct_controls)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    state = try
-        if branch_symbol == :UP
-            anchor = _mano_suzuki_takasugi_out_anchor(coefficients; nu=nothing, allow_relaxed=true)
-            (
-                X=ComplexF64(anchor.X), dXdx=ComplexF64(anchor.dXdx), estimated_relerr=Float64(anchor.estimated_relerr),
-                nu=ComplexF64(anchor.nu), condition=Float64(anchor.condition), source=anchor.source,
-                certified=Bool(anchor.certified),
-            )
-        else
-            plan = (
-                data=state_data,
-                converter=ManoSuzukiTakasugiInfinity._p_converter(params),
-                pin_norm=ManoSuzukiTakasugiInfinity._incoming_raw_factor(state_data), pin_scale=nothing)
-            pin = ManoSuzukiTakasugiInfinity.mano_suzuki_takasugi_pin_state(
-                coefficients, plan, _STATE_ANCHOR_X; scale=ManoSuzukiTakasugiInfinity._pin_unit_scale(params),
-            )
-            (
-                X=ComplexF64(pin.X),
-                dXdx=ComplexF64(pin.dXdx),
-                estimated_relerr=Float64(max(pin.estimated_relerr, pin.residual)),
-                nu=ComplexF64(NaN, NaN),
-                condition=hasproperty(pin, :condition) ?
-                    Float64(pin.condition) : NaN,
-                source=:physical_in,
-                representation=hasproperty(pin, :representation) ?
-                    pin.representation : :native_type1,
-                certified=true,
-            )
-        end
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    all(_finite, (state.X, state.dXdx)) || return nothing
-    state.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR ||
-        return nothing
-    _anchor_accepted(state, params.omega, false) || return nothing
-
-    settings = ComplexRational.ComplexRationalSettings(
-        _FAST_ANCHOR_ORDER, _FAST_ANCHOR_TOLERANCE)
-    evaluator = ComplexRationalEvaluator(
-        params, coefficients, settings, _STATE_ANCHOR_X, ComplexRationalState(state.X, state.dXdx),
-    )
-
-    complex_params = try
-        ComplexFrequency.complex_parameters(params.s, params.l, params.m, params.a, params.omega, params.lambda)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    factors =
-        ComplexFrequency._amplitude_factors(
-            complex_params, branch_symbol)
-    transmission = ComplexF64(1)
-    incidence = ComplexF64(result.gsn[1])
-    reflection = ComplexF64(result.gsn[2])
-    teukolsky_transmission = ComplexF64(factors.transmission)
-    teukolsky_incidence =
-        ComplexF64(teukolsky_transmission * result.teuk[1])
-    teukolsky_reflection =
-        ComplexF64(teukolsky_transmission * result.teuk[2])
-    all(_finite, (
-        transmission, incidence, reflection, teukolsky_transmission, teukolsky_incidence, teukolsky_reflection,
-    )) || return nothing
-
-    requested = ComplexFrequency.complex_controls()
-    resolved = (
-        xm=_STATE_ANCHOR_X, rhom=nothing, N=_FAST_ANCHOR_ORDER, tolerance=_FAST_ANCHOR_TOLERANCE,
-        small_frequency_expansion=false, large_frequency_expansion=false, rescue_source=:none,
-    )
-    contour = ComplexFrequency.complex_contour_parameters(
-        complex_params; rho_match=1.0)
-    matching = (
-        requested_x=nothing, allowed_min_x=0.0, allowed_max_x=1.0, candidate_x=_STATE_ANCHOR_X,
-        selected_x=_STATE_ANCHOR_X, split_mismatch=state.estimated_relerr, condition=1.0, policy=:mst_anchor,
-    )
-    amplitude_summary = (
-        teukolsky=(
-            transmission=teukolsky_transmission, incidence=teukolsky_incidence, reflection=teukolsky_reflection,
-        ),
-        conversion_factors=factors,
-        raw_gsn_transmission=transmission,
-        gsn=(;
-            transmission,
-            incidence,
-            reflection,
-        ),
-    )
-    plan = ComplexRoutePlan(contour, matching, resolved, amplitude_summary, 0)
-    metadata = (
-        backend=:direct_gsn_mst_anchor,
-        match_policy=:mst_anchor,
-        match_x=_STATE_ANCHOR_X,
-        xsplit=_STATE_ANCHOR_X,
-        xm_match=_STATE_ANCHOR_X,
-        matching_condition=1.0,
-        split_mismatch=state.estimated_relerr,
-        abel_error=state.estimated_relerr,
-        patch_count=0,
-        control_xm=_STATE_ANCHOR_X,
-        control_rhom=nothing,
-        control_N=_FAST_ANCHOR_ORDER,
-        control_tol=_FAST_ANCHOR_TOLERANCE,
-        control_small_frequency_expansion=false,
-        control_large_frequency_expansion=false,
-        amplitude_backend=:principal_mst_anchor,
-        amplitude_patch_count=0,
-        mst_amplitude_certificate=result.certificate_kind,
-        mst_amplitude_representation_spread=
-            result.representation_spread,
-        mst_amplitude_nearest_agreement=result.nearest_agreement,
-        mst_amplitude_truncation_agreement=
-            result.truncation_agreement,
-        mst_amplitude_max_condition=result.max_condition,
-        mst_amplitude_errors=hasproperty(result, :gsn_error) ?
-            Float64.(result.gsn_error) : (NaN, NaN),
-        mst_amplitude_component_agreement=
-            hasproperty(result, :component_agreement) ?
-            Float64.(result.component_agreement) : (NaN, NaN),
-        mst_amplitude_coefficient_residual=
-            hasproperty(result, :coefficient_residual) ?
-            Float64(result.coefficient_residual) : NaN,
-        mst_amplitude_coefficient_source_shift=
-            hasproperty(result, :coefficient_source_shift) ?
-            Int(result.coefficient_source_shift) : 0,
-        mst_amplitude_nu_residual=
-            hasproperty(result, :nu_residual) ?
-            result.nu_residual : NaN,
-        mst_state_anchor_status=:accepted,
-        mst_state_anchor_source=state.source,
-        mst_state_anchor_x=_STATE_ANCHOR_X,
-        mst_state_anchor_error=state.estimated_relerr,
-        mst_state_anchor_nu=state.nu,
-        mst_state_anchor_condition=state.condition,
-        mst_state_anchor_certified=state.certified,
-        mst_state_anchor_representation=hasproperty(
-            state, :representation) ?
-            state.representation : :unknown,
-        mst_fast_rescue_source=rescue_source,
-    )
-    return ComplexRoute(
-        branch_symbol, complex_params, requested, nothing, evaluator, metadata, plan, transmission, incidence,
-        reflection, teukolsky_transmission, teukolsky_incidence, teukolsky_reflection,
-    )
-end
-
-# Whether an IN route from the P-route fallback or consensus backend, with
-# _FAST_ANCHOR_MAX_OMEGA < |omega| <= max_omega, is retried with `_fast_route`.
-@inline function _fast_p_pretrigger(route::ComplexRoute; max_omega::Float64=_MAX_ABS_IMAG_OMEGA)
-    route.branch == :IN || return false
-    route_backend = hasproperty(route.metadata, :backend) ?
-        route.metadata.backend : :unknown
-    route_backend in (:direct_gsn_p_build_fallback, :direct_gsn_p_consensus,) || return false
-    omega_abs = abs(ComplexF64(route.params.omega))
-    return _FAST_ANCHOR_MAX_OMEGA < omega_abs <= max_omega
-end
-
 # Whether the analytic-amplitude comparison runs after a route was built:
 # default controls, Im(omega) < 0, and either omega near the negative imaginary
 # axis or a route whose amplitudes came from the complex-rational or
@@ -1212,55 +925,6 @@ function _overlay_part(anchored_route, route, result, decision, anchor)
     return _with_amplitude_errors(overlaid, errors)
 end
 
-# Special route builder registered with ComplexFrequency: returns a route
-# from the fast MST-anchor path, or for default controls with omega near the
-# negative imaginary axis the two-ray route with the analytic MST amplitudes
-# overlaid; nothing lets the caller build its usual route.
-@noinline function build(
-    s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-    large_frequency_expansion, pole_normalization,
-)
-    fast = _fast_route(
-        s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-        large_frequency_expansion, pole_normalization, max_omega=_MAX_ABS_IMAG_OMEGA,
-    )
-    fast === nothing || return fast
-    _pretrigger(
-        s, a, omega; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-        large_frequency_expansion, pole_normalization,
-    ) || return nothing
-    # Function barrier: the triggered work is compiled only when it runs.
-    return Base.inferencebarrier(_build_triggered)(s, l, m, a, omega, branch)
-end
-
-function _build_triggered(s, l, m, a, omega, branch)
-    route = try
-        ComplexFrequency._complex_p_route(
-            s, l, m, a, omega, branch)
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    result = try
-        mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
-            route.params.s, route.params.l, route.params.m, route.params.a, route.params.omega, route.params.lambda,
-            route.branch,
-        )
-    catch caught
-        absorbable(caught) || rethrow()
-        return nothing
-    end
-    result.certificate_accepted || return nothing
-    anchor = try
-        _state_anchor(route)
-    catch caught
-        absorbable(caught) || rethrow()
-        (evaluator=route.state_evaluator, metadata=(;))
-    end
-    return _overlay(route, result; state_evaluator=anchor.evaluator, state_metadata=anchor.metadata)
-end
-
-ComplexFrequency._special_route(args...; kwargs...) = build(args...; kwargs...)
 ComplexFrequency._post_route(route, args...; kwargs...) = _post_overlay(route, args...; kwargs...)
 
 end
