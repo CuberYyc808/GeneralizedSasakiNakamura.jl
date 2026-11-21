@@ -186,59 +186,18 @@ struct Basis{P}
     endpoint_log_exponent::ComplexF64
 end
 
-Basis(
-    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
-    match_dXdx, step_count, endpoint_variable_scale, truncations, endpoint_valid,
-) = Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    endpoint_variable_scale,
-    truncations,
-    endpoint_valid,
-    ComplexF64[],
-    0.0 + 0.0im,
-)
-
-Basis(
-    kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
-    match_dXdx, step_count, endpoint_variable_scale, truncations,
-) = Basis(
-    kind,
-    scale,
-    exponent1,
-    exponent2,
-    seed_x,
-    seed_coord,
-    seed_X,
-    seed_dXdx,
-    endpoint_coeffs,
-    patches,
-    match_X,
-    match_dXdx,
-    step_count,
-    endpoint_variable_scale,
-    truncations,
-    true,
-)
+# A basis without the logarithmic endpoint part (endpoint_valid = true unless given).
+Basis(kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
+        match_dXdx, step_count, endpoint_variable_scale, truncations, endpoint_valid=true) =
+    Basis(kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
+        match_dXdx, step_count, endpoint_variable_scale, truncations, endpoint_valid, ComplexF64[], 0.0 + 0.0im)
 
 # Basis of a march seeded by a state (X, dX/dx) at seed_x, without an endpoint series (unit scale, the seed value as
 # its only coefficient, endpoint_valid = false).
-_state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count,
-        truncations) = Basis(
-    kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x),
-    ComplexF64(seed_X), ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count, 1.0 + 0.0im, truncations, false,
-)
+_state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, truncations) =
+    Basis(kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x),
+        _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x), ComplexF64(seed_X), ComplexF64(seed_dXdx),
+        ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count, 1.0 + 0.0im, truncations, false)
 
 # Chosen infinity endpoint: endpoint_y (y = 1 - x), the truncated :out and :in
 # series with their orders, the selection score, the variable scale of the
