@@ -1,6 +1,7 @@
 module GridSampling
 
 using SpinWeightedSpheroidalHarmonics: value_and_theta_derivative
+using KerrGeodesics: kerr_geo_mino_averages
 using ..Coordinates
 using ..ConversionFactors
 using ..ISEM
@@ -14,7 +15,6 @@ export integrand_generic_sample_m2, integrand_generic_sample_p2, integrand_incli
 export kerr_geo_inclined_sample_cheby
 export integrand_generic_sample_cheby_m2, integrand_generic_sample_cheby_p2, integrand_eccentric_sample_cheby_p2, integrand_inclined_sample_cheby_m2, integrand_inclined_sample_cheby_p2
 export kerr_geo_eccentric_segment_sample_cheby, eccentric_segment_geometry_cache, eccentric_segment_phase_basis_cache, eccentric_segment_sample_bundle_cheby, integrand_eccentric_factored_segment_cheby_m2
-export carter_ingredients_sample
 
 # Phase-grid helpers. `_phase_values` evaluates an orbit function at Mino time λ = (q - q0)/ϒ for each phase q;
 # `_radial_phase_rates` and `_polar_phase_rates` return Σ·u(λ) with Σ = r² + a²cos²θ on the grid. Typed callable
@@ -270,7 +270,7 @@ function kerr_geo_inclined_sample_dense(KG::Dict, x::Real, K_interval::Int64)
     Δtθ_vals = map(Δtθ, qθ_full)
     Δφθ_vals = map(Δφθ, qθ_full)
     uθ_fwd = _polar_phase_rates(uθ, Returns(p), qθ_full, θ_vals, a, qθ0, ϒθ; constants = _theta_constants(KG))
-    return Dict(
+    sample = Dict(
         "a" => a,
         "p" => p,
         "x" => x,
@@ -293,6 +293,8 @@ function kerr_geo_inclined_sample_dense(KG::Dict, x::Real, K_interval::Int64)
         "DerivativesCrossFunction" => DerivativesCrossFunction,
         "InitialPhases" => KG["InitialPhases"],
     )
+    sample["CarterAverages"] = carter_averages(sample)
+    return sample
 end
 
 # Every step-th point of the dense inclined grid, giving K_interval intervals (views into the master arrays).
@@ -312,6 +314,7 @@ function subsample_inclined_sample(KG_sample::Dict, K_interval::Int64)
     for key in ("a", "p", "x", "r", "rs", "E", "Lz", "Γ", "Frequencies", "Trajectory", "FourVelocity", "CrossFunction", "DerivativesCrossFunction", "InitialPhases")
         sample[key] = KG_sample[key]
     end
+    haskey(KG_sample, "CarterAverages") && (sample["CarterAverages"] = KG_sample["CarterAverages"])
     sample["K_interval"] = K_interval
     sample["K_sample"] = target_points
     return sample
@@ -3034,16 +3037,6 @@ function integrand_inclined_sample_cheby_p2(KG_samp, Y_dic, SH_samp, k::Int64)
     return Jp, Jm, dθphase, θphaseL, θphaseR, prefactor
 end
 
-function carter_ingredients_sample(KG_samp, a, m, omega)
-    θ_vec = KG_samp["θ"]
-    E = KG_samp["E"]
-    Lz = KG_samp["Lz"]
-
-    Lmnk = (m .* (cot.(θ_vec)) .^ 2 .* Lz .- a .^ 2 .* omega .* (cos.(θ_vec)) .^ 2 .* E) ./ 1.0pi
-
-    return Lmnk
-end
-
 # Dense uniform master grid of a generic orbit: (N_interval + 1) x (K_interval + 1) points in (qr, qθ).
 function kerr_geo_generic_sample_dense(KG::Dict, N_interval::Int64, K_interval::Int64)
     ispow2(N_interval) || throw(ArgumentError("N_interval must be a power of 2"))
@@ -3109,29 +3102,19 @@ function kerr_geo_generic_sample_dense(KG::Dict, N_interval::Int64, K_interval::
         "InitialPhases" => KG["InitialPhases"],
         "initialPhases" => KG["InitialPhases"],
     )
-    # Orbit constant needed by every mode's Carter flux: computed once here, so the shared sample is never written
-    # to while modes read it.
-    sample["LzCot2Average"] = generic_lz_cot2_average(sample)
+    # Orbit constants of every mode's Carter flux: computed once here, so the shared sample is never written to
+    # while modes read it.
+    sample["CarterAverages"] = carter_averages(sample)
     return sample
 end
 
-# <L_z cot^2 theta> of a generic orbit: Upsilon_phi + a E - <Phi_r> - L_z, with <Phi_r> the 257-node trapezoid of
-# a (E (r^2 + a^2) - a L_z) / Delta over the radial cycle.
-function generic_lz_cot2_average(KG_samp::Dict)
-    a = KG_samp["a"]
-    E = KG_samp["E"]
+# <L_z cot^2 theta> and <cos^2 theta> over the polar motion (Mino-time averages) from KerrGeodesics' closed forms. An
+# orbit with L_z = 0 exactly passes over the poles, where <L_z / sin^2 theta> jumps between its one-sided limits
+# +-Upsilon_theta; the mean of the two, 0, is taken.
+function carter_averages(KG_samp::Dict)
+    averages = kerr_geo_mino_averages(KG_samp["a"], KG_samp["p"], get(KG_samp, "e", 0.0), KG_samp["x"])
     Lz = KG_samp["Lz"]
-    iszero(Lz) && return 0.0
-    F = KG_samp["Frequencies"]
-    r_of = KG_samp["Trajectory"][2]
-    qr0 = KG_samp["InitialPhases"][2]
-    qr = range(0, pi; length = 257)
-    Φr = map(qr) do q
-        r = r_of((q - qr0) / F["ϒr"])
-        a * (E * (r^2 + a^2) - a * Lz) / (r^2 - 2r + a^2)
-    end
-    Φr_mean = (sum(Φr) - (first(Φr) + last(Φr)) / 2) / (length(Φr) - 1)
-    return F["ϒϕ"] + a * E - Φr_mean - Lz
+    return (lz_cot2 = iszero(Lz) ? 0.0 : averages.lz_over_sin2_theta - Lz, cos2 = averages.z2_theta)
 end
 
 # Every stepN-th radial and stepK-th polar point of the dense generic grid (must divide the stored grid).
@@ -3163,7 +3146,7 @@ function subsample_generic_sample(KG_sample::Dict, N_interval::Int64, K_interval
     for key in ("a", "p", "e", "x", "E", "Lz", "Γ", "Frequencies", "Trajectory", "FourVelocity", "CrossFunction", "DerivativesCrossFunction", "InitialPhases", "initialPhases")
         sample[key] = KG_sample[key]
     end
-    haskey(KG_sample, "LzCot2Average") && (sample["LzCot2Average"] = KG_sample["LzCot2Average"])
+    haskey(KG_sample, "CarterAverages") && (sample["CarterAverages"] = KG_sample["CarterAverages"])
     sample["N_interval"] = N_interval
     sample["K_interval"] = K_interval
     sample["N_sample"] = target_N

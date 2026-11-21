@@ -278,19 +278,17 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     return (KG_samp = KG_samp, Ysol = Ysol, Ydic = Ydic, SH = SH, SHsamp = SHsamp, omega = ω, a = a, m = m, Trajectory = KG_sample["Trajectory"])
 end
 
-# Carter factor of a spherical orbit, m <Lz cot^2θ> - a^2 ω E <cos^2θ> over the polar Mino cycle.
 # <Lz / sin^2θ> = ϒφ + a E - Φr is exact. A trapezoid of Lz cot^2θ is not: near the pole it is a spike of width ~x,
 # and the trapezoid overshoots by about coth(K x), so nearly polar orbits never converged in K.
-function _inclined_carter_factor(KG_samp::Dict, a, p, ϒφ, m, ω)
-    E = KG_samp["E"]
-    Lz = KG_samp["Lz"]
-    Φr = a * ((p^2 + a^2) * E - a * Lz) / (p^2 - 2p + a^2)
-    lz_cot2 = ϒφ + a * E - Φr - Lz
-    return m * lz_cot2 + trapezoidal_1d_integral(carter_ingredients_sample(KG_samp, a, 0, ω))
+# m <L_z cot^2 theta> - a^2 omega E <cos^2 theta>, the mode factor of the Carter-constant flux, from the orbit's
+# closed-form Mino averages (GridSampling.carter_averages; stored in the dense masters).
+function _carter_factor(KG_samp::Dict, m, ω)
+    averages = get(() -> GridSampling.carter_averages(KG_samp), KG_samp, "CarterAverages")
+    return m * averages.lz_cot2 - KG_samp["a"]^2 * ω * KG_samp["E"] * averages.cos2
 end
 
 function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Dict, s::Int, a, ω, m, k::Int)
-    carter_factor = _inclined_carter_factor(KG_samp, a, KG_samp["p"], KG_samp["Frequencies"]["ϒϕ"], m, ω)
+    carter_factor = _carter_factor(KG_samp, m, ω)
     if s == 2
         inte = integrand_inclined_sample_p2(KG_samp, Ydic, SH_samp, k)
         integral = trapezoidal_1d_integral(inte)
@@ -421,11 +419,7 @@ end
 end
 
 function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s::Int, l::Int, m::Int, n::Int, k::Int, a::Float64, ω::Float64, ϒθ::Float64)
-    carter_factor = if length(KG_samp["θ"]) - 1 < GENERIC_CARTER_MIN_INTERVALS
-        _generic_carter_factor_min_grid(KG_samp, m, ω)
-    else
-        trapezoidal_1d_integral(carter_ingredients_sample(KG_samp, a, m, ω))
-    end
+    carter_factor = _carter_factor(KG_samp, m, ω)
     if s == 2
         integral = GridSampling._generic_integral_sample_p2_fast(
             KG_samp, Y_samp, SH_samp, n, k)
@@ -1064,76 +1058,6 @@ function _radial_phase_min_sample(KG_master::Dict, ω, m::Integer, n::Integer, m
     return min(max(min_stop, nextpow(2, max(1, ceil(Int, needed)))), max_stop)
 end
 
-# The Carter average has its own polar resolution, independent of the mode grid.
-const GENERIC_CARTER_MIN_INTERVALS = 64
-
-# <Lz cot^2 theta> over the polar Mino cycle of a generic orbit, exactly: the polar part of Upsilon_phi is
-# <Lz / sin^2 theta> - a E, so <Lz / sin^2 theta> = Upsilon_phi + a E - <Phi_r>_r with
-# Phi_r = a (E (r^2 + a^2) - a Lz) / Delta averaged over the smooth radial cycle. A trapezoid of Lz cot^2 theta
-# misses the spike of width ~x near the pole of a nearly polar orbit. Cached in the sample Dict.
-# The orbit's <L_z cot^2 theta>: stored in the dense master when it is built (GridSampling), computed here for a
-# sample that does not carry it; never written into a shared sample.
-_generic_lz_cot2_average(KG_samp::Dict) =
-    get(() -> GridSampling.generic_lz_cot2_average(KG_samp), KG_samp, "LzCot2Average")
-
-function _generic_carter_factor_min_grid(KG_samp::Dict, m::Int, omega::Float64)
-    lz_cot2 = _generic_lz_cot2_average(KG_samp)
-    if length(KG_samp["θ"]) - 1 >= GENERIC_CARTER_MIN_INTERVALS
-        return _generic_carter_factor_sample(KG_samp, m, omega; lz_cot2)
-    end
-    theta = KG_samp["Trajectory"][3]
-    theta_phase = KG_samp["InitialPhases"][3]
-    theta_frequency = KG_samp["Frequencies"]["ϒθ"]
-    qtheta = collect(range(0, pi; length = GENERIC_CARTER_MIN_INTERVALS + 1))
-    theta_values = GridSampling._polar_values(theta, qtheta, theta_phase, theta_frequency)
-    carter_sample = Dict(
-        "a" => KG_samp["a"], "E" => KG_samp["E"], "Lz" => KG_samp["Lz"],
-        "θ" => theta_values,
-    )
-    return _generic_carter_factor_sample(carter_sample, m, omega; lz_cot2)
-end
-
-function _phase_vector_recurrence!(out::Vector{ComplexF64}, base_omega::Float64, freq_vec::Vector{Float64}, mode_index::Int, step::Float64, fixed_phase::Vector{ComplexF64})
-    qphase = 1.0 + 0.0im
-    qstep = exp(im * mode_index * step)
-    @inbounds for i in eachindex(freq_vec)
-        out[i] = exp(im * base_omega * freq_vec[i]) * qphase * fixed_phase[i]
-        qphase *= qstep
-    end
-    return out
-end
-
-# m <Lz cot^2 theta> (exact, from _generic_lz_cot2_average) - a^2 omega E <cos^2 theta> (trapezoid, smooth).
-@inline function _generic_carter_factor(cache::GenericM2MCache, omega::Float64, lz_cot2::Float64)
-    total = 0.0
-    a2ωE = cache.a * cache.a * omega * cache.E
-    @inbounds for j in 1:cache.K
-        ct2 = cache.ct[j] * cache.ct[j]
-        total -= cache.wtheta[j] * a2ωE * ct2 / pi
-    end
-    return total + cache.m * lz_cot2
-end
-
-@inline function _generic_carter_factor_sample(KG_samp::Dict, m::Int, omega::Float64; lz_cot2 = _generic_lz_cot2_average(KG_samp))
-    theta = KG_samp["θ"]::Vector{Float64}
-    K = length(theta)
-    K <= 1 && return 0.0
-    a = KG_samp["a"]::Float64
-    E = KG_samp["E"]::Float64
-    Lz = KG_samp["Lz"]::Float64
-    dθ = pi / (K - 1)
-    a2ωE = a * a * omega * E
-    mLz = m * Lz
-    total = 0.0
-    @inbounds for j in 1:K
-        st = sin(theta[j])
-        ct = cos(theta[j])
-        weight = (j == 1 || j == K) ? 0.5 * dθ : dθ
-        total -= weight * a2ωE * ct * ct / pi
-    end
-    return total + m * lz_cot2
-end
-
 function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, n::Int, k::Int; new_only::Bool = false)
     N = cache.N
     K = cache.K
@@ -1456,11 +1380,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         end
     end
 
-    carter_factor = if K < GENERIC_CARTER_MIN_INTERVALS
-        _generic_carter_factor_min_grid(KG_samp, m, ω)
-    else
-        _generic_carter_factor(_cached_m2_mcache!(cache, KG_samp, m), ω, _generic_lz_cot2_average(KG_samp))
-    end
+    carter_factor = _carter_factor(KG_samp, m, ω)
     res = Dict(
         "Amplitude" => integral,
         "omega" => ω,
@@ -1607,7 +1527,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
 
     amp = sum(leaf.amp for leaf in leaves; init = 0.0 + 0.0im)
     max_leaf_depth = maximum((leaf.key.level_r for leaf in leaves); init = 0)
-    carter_factor = _generic_carter_factor_sample(KG_master, m, ω)
+    carter_factor = _carter_factor(KG_master, m, ω)
     res = _generic_adaptive_levin_result(amp, KG_master, Ysol, SH, s, a, m, ω, ϒθ, k, carter_factor)
     res["N_sample_requested"] = nr
     res["K_sample_requested"] = nt
@@ -3344,7 +3264,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
     rsout = max(200.0, 10pi / abs(omega))
     KG_samp = _inclined_levin_owner_sample(cache, KG, K_sample, true)
     KG_trap = _inclined_levin_owner_sample(cache, KG, K_sample, false)
-    carter_factor = _inclined_carter_factor(KG_trap, a, p, KG["Frequencies"]["ϒϕ"], m, omega)
+    carter_factor = _carter_factor(KG_trap, m, ω)
 
     result = if s == 2
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")

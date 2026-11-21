@@ -19,8 +19,8 @@
                 for (m, n, k) in ((2, 10, 0), (2, 1, -2), (11, 80, 0))
                     f = master["Frequencies"]
                     omega = (m*f["ϒϕ"] + n*f["ϒr"] + k*f["ϒθ"]) / f["ϒt"]
-                    @test ci._generic_carter_factor_min_grid(low, m, omega) ≈
-                          ci._generic_carter_factor_min_grid(high, m, omega) rtol=1e-12
+                    # The Carter factor comes from the orbit's closed-form Mino averages: independent of the grid.
+                    @test ci._carter_factor(low, m, omega) ≈ ci._carter_factor(high, m, omega) rtol=1e-12
                 end
             end
         end
