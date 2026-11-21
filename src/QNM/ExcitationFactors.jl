@@ -26,48 +26,6 @@ function _gsn_amplitude_data(result::LeaverResult, omega;
     )
 end
 
-function _gsn_amplitude_data(validation::ISEMValidationResult)
-    md = validation.metadata
-    return (
-        omega=validation.omega, incidence=validation.incidence, reflection=validation.reflection, lambda=md.lambda,
-        method=md.method, normalization=md.normalization,
-        evaluation_a=md.evaluation_a, evaluation_omega=md.evaluation_omega, evaluation_policy=md.evaluation_policy,
-        frequency_projection_drift=md.frequency_projection_drift,
-        incidence_backend=md.incidence_backend, wronskian_drift=md.wronskian_drift,
-    )
-end
-
-function _amplitude_pair(result::LeaverResult, omega;
-        gsn_solver=GSN_radial, teukolsky_solver=Teukolsky_radial,
-        gsn_data=nothing)
-    mode = result.mode
-    gsn = gsn_data === nothing ?
-        _gsn_amplitude_data(result, omega; radial_solver=gsn_solver) : gsn_data
-    a, w, lambda = gsn.evaluation_a, gsn.evaluation_omega, gsn.lambda
-    if gsn.incidence_backend in (:direct_real_axis_wronskian, :extremal_complex_path)
-        transmission = ConversionFactors.Btrans(mode.s, mode.m, a, w, lambda)
-        incidence = ConversionFactors.Binc(mode.s, mode.m, a, w, lambda) /
-            transmission * gsn.incidence
-        reflection = ConversionFactors.Bref(mode.s, mode.m, a, w, lambda) /
-            transmission * gsn.reflection
-        teuk_lambda, normalization = lambda, :analytic_conversion_from_gsn
-    else
-        teukolsky = teukolsky_solver(mode.s, mode.l, mode.m, a, w, IN)
-        incidence, reflection = teukolsky.incidence_amplitude, teukolsky.reflection_amplitude
-        teuk_lambda, normalization = teukolsky.mode.lambda, teukolsky.normalization_convention
-    end
-    return (;
-        omega, evaluation_a=a, evaluation_omega=w,
-        evaluation_policy=gsn.evaluation_policy,
-        frequency_projection_drift=gsn.frequency_projection_drift,
-        gsn_incidence=gsn.incidence, gsn_reflection=gsn.reflection,
-        teukolsky_incidence=incidence, teukolsky_reflection=reflection,
-        gsn_method=gsn.method, gsn_lambda=lambda, teukolsky_lambda=teuk_lambda,
-        gsn_normalization=gsn.normalization, teukolsky_normalization=normalization,
-        incidence_backend=gsn.incidence_backend, wronskian_drift=gsn.wronskian_drift,
-    )
-end
-
 # Two-level Richardson extrapolation of derivatives at steps h, h/2, h/4 with
 # leading error O(h^order); `drift` compares the two first-level values.
 function _richardson_derivative(values, order::Int=2)
@@ -102,37 +60,39 @@ function _cached_gsn_amplitude_sample!(cache, request_count,
     end
 end
 
-function _gsn_real_derivative_attempt(
+# Three-point central differences of Ain at steps h, h/2, h/4 along real (direction = 1) or imaginary (direction = im)
+# frequency, Richardson-extrapolated.
+function _gsn_derivative_attempt(
         result::LeaverResult, base_h, radial_solver, cache, request_count;
-        normalization_pole=nothing, root_incidence=zero(result.omega))
+        normalization_pole=nothing, root_incidence=zero(result.omega), direction=1)
     C = typeof(result.omega)
     T = typeof(real(result.omega))
     steps = T[base_h, base_h / 2, base_h / 4]
     derivatives = C[]
     stencil = NamedTuple[]
     for step in steps
+        dstep = direction * step
         plus = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega + step,
+            cache, request_count, result, result.omega + dstep,
             radial_solver)
         minus = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega - step,
+            cache, request_count, result, result.omega - dstep,
             radial_solver)
         derivative = if normalization_pole === nothing
-            (plus.incidence - minus.incidence) / (2 * step)
+            (plus.incidence - minus.incidence) / (2 * dstep)
         else
             # Differentiate f(z)=(z-zH)*Ain(z), then undo the product rule.
             # This removes the nearby Frobenius normalization pole, not a QNM.
             distance = result.omega - normalization_pole
-            ((distance + step)*plus.incidence -
-                (distance - step)*minus.incidence) / (2step) - root_incidence
+            ((distance + dstep)*plus.incidence -
+                (distance - dstep)*minus.incidence) / (2dstep) - root_incidence
         end
         normalization_pole === nothing ||
             (derivative /= result.omega - normalization_pole)
         push!(derivatives, derivative)
-        push!(stencil, merge(plus,
-            (step=step, direction=:real, sign=:plus)))
-        push!(stencil, merge(minus,
-            (step=step, direction=:real, sign=:minus)))
+        label = direction == 1 ? :real : :imaginary
+        push!(stencil, merge(plus, (step=step, direction=label, sign=:plus)))
+        push!(stencil, merge(minus, (step=step, direction=label, sign=:minus)))
     end
     return (base_h=T(base_h), steps, derivatives, stencil, richardson=_richardson_derivative(derivatives),)
 end
@@ -317,9 +277,9 @@ function _complex_path_excitation_factor(result::LeaverResult, validation, step_
 end
 
 # GSN-only excitation factor used by the compact `qnm` result: real-direction
-# Richardson derivative, no Teukolsky bridge. `direction_tolerance`,
-# `bridge_tolerance` and `teukolsky_solver` are accepted so that the same
-# `excitation_options` serve `qnm_excitation_factor`; they are not used here.
+# Richardson derivative, no Teukolsky values. `direction_tolerance` and
+# `bridge_tolerance` are accepted so that the same `excitation_options` serve
+# `qnm_excitation_factor`; they are not used here.
 function _qnm_richardson_excitation_factor(result::LeaverResult;
         h=nothing,
         incidence_tolerance=1.0e-8,
@@ -327,8 +287,7 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
         wronskian_tolerance=1.0e-8,
         radial_solver=GSN_radial,
         direction_tolerance=nothing,
-        bridge_tolerance=nothing,
-        teukolsky_solver=nothing)
+        bridge_tolerance=nothing)
     validation = validate_qnm_with_isem(result;
         incidence_tolerance, wronskian_tolerance, radial_solver)
     C = typeof(result.omega)
@@ -398,7 +357,7 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
             _gsn_five_point_real_derivative_attempt(
                 result, base_h * factor, radial_solver, sample_cache,
                 sample_requests) :
-            _gsn_real_derivative_attempt(
+            _gsn_derivative_attempt(
                 result, base_h * factor, radial_solver, sample_cache,
                 sample_requests; normalization_pole,
                 root_incidence=validation.incidence)
@@ -495,239 +454,40 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
     )
 end
 
-function _mano_suzuki_takasugi_amplitude_pair(result, omega)
-    mode = result.mode
-    inputs = _radial_evaluation_inputs(result, omega)
-    a, w = inputs.a, inputs.omega
-    lambda = spin_weighted_spheroidal_eigenvalue(mode.s, mode.l, mode.m, a*w)
-    mst = ISEM.ManoSuzukiTakasugiInfinity
-    nu = mst.mano_suzuki_takasugi_nu_complex(mode.s, mode.l, mode.m, a, w, lambda)
-    amplitudes = mst.mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
-        mode.s, mode.l, mode.m, a, w, lambda, :IN; nu)
-    # These are two normalizations of one amplitude calculation. Accuracy
-    # must be checked separately; no radial-state construction is needed.
-    return (;
-        omega, evaluation_a=a, evaluation_omega=w,
-        evaluation_policy=inputs.policy,
-        frequency_projection_drift=inputs.projection_drift,
-        gsn_incidence=amplitudes.gsn[1], gsn_reflection=amplitudes.gsn[2],
-        teukolsky_incidence=amplitudes.teuk[1],
-        teukolsky_reflection=amplitudes.teuk[2],
-        gsn_method="ISEM", gsn_lambda=lambda, teukolsky_lambda=lambda,
-        gsn_normalization=UNIT_GSN_TRANS,
-        teukolsky_normalization=UNIT_TEUKOLSKY_TRANS,
-        incidence_backend=:mst_amplitudes, wronskian_drift=zero(real(w)),
-    )
-end
-
-# Choose one amplitude backend for the whole stencil: the supplied or special
-# solvers, MST amplitudes when the default solver's centre uses them, or the
-# default two-ray ISEM route.
-function _excitation_pair_function(result, radial_solver, teukolsky_solver,
-        incidence_tolerance)
-    defaults = radial_solver in (GSN_radial, _qnm_default_radial_solver) &&
-        teukolsky_solver === Teukolsky_radial
-    if !defaults || abs(result.a) >= 1 ||
-            _qnm_conditioned_radial_tolerance(result.a) !== nothing ||
-            _use_wronskian_incidence(result, result.omega)
-        return omega -> _amplitude_pair(result, omega;
-            gsn_solver=radial_solver, teukolsky_solver), :supplied_or_special
-    end
-    mode = result.mode
-    inputs = _radial_evaluation_inputs(result)
-    centre = GSN_radial(mode.s, mode.l, mode.m,
-        inputs.a, inputs.omega, IN)
-    numerical = centre.numerical_GSN_solution
-    scale = max(one(abs(centre.incidence_amplitude)),
-        abs(centre.reflection_amplitude), abs(centre.transmission_amplitude))
-    if hasproperty(numerical, :amplitude_backend) &&
-            numerical.amplitude_backend === :complex_mst_analytic &&
-            abs(centre.incidence_amplitude) / scale <= incidence_tolerance
-        return omega -> _mano_suzuki_takasugi_amplitude_pair(result, omega), :mst_amplitudes
-    end
-    teuk(s,l,m,a,w,b) = _qnm_default_radial_solver(s,l,m,a,w,b;
-        solver=Teukolsky_radial)
-    return omega -> _amplitude_pair(result, omega;
-        gsn_solver=_qnm_default_radial_solver, teukolsky_solver=teuk), :two_ray
-end
-
 """
-    _qnm_richardson_full_excitation_factor(result::LeaverResult; h=nothing, incidence_tolerance=1e-8, direction_tolerance=1e-7, step_tolerance=1e-7, bridge_tolerance=1e-10, wronskian_tolerance=1e-8, radial_solver=GSN_radial, teukolsky_solver=Teukolsky_radial)
+    _qnm_richardson_full_excitation_factor(result::LeaverResult; direction_tolerance=1e-7, bridge_tolerance=nothing, kwargs...)
 
-Finite-difference route of `qnm_excitation_factor` and of `qnm(...)`,
-used when the direct route (the GSN equation integrated together with its
-frequency derivative at the root) is out of scope or fails its checks (except
-with `backend=:variational`), and always with `backend=:richardson`, an explicit
-`h` or `direction_tolerance`, or a custom radial or Teukolsky solver.
-Compute the incidence-amplitude derivative `alpha = dAin/domega` with central
-differences along the real and imaginary frequency directions and Richardson
-extrapolation over `h`, `h/2`, and `h/4` (default `h = 1e-4 * max(1, |omega|)`);
-`alpha` is the mean of the two directions and `direction_drift` their mismatch.
-The excitation factors are
-`B_gsn = Aout/(2 omega alpha)` and `B_teukolsky = Aout/(2i omega alpha)` in the
-respective package normalizations, returned as an `ExcitationFactorResult`
-with an explicit conversion-bridge residual.
-For the standard two-ray and MST routes, the bridge uses one amplitude
-backend throughout the stencil. The MST centre must also pass the incidence
-gate. The bridge tests normalization consistency, not agreement of
-independent ODE solvers.
+Finite-difference route of `qnm_excitation_factor` and of `qnm(...)`, used when the direct route (the GSN equation
+integrated together with its frequency derivative at the root) is out of scope or fails its checks (except with
+`backend=:variational`), and always with `backend=:richardson`, an explicit `h` or `direction_tolerance`, or a custom
+radial solver. `alpha = dAin/domega` is the real-direction Richardson derivative of the compact route
+(`_qnm_richardson_excitation_factor`, which takes the other keywords); the Teukolsky values follow from the analytic
+conversion with the frequency tangent of the conversion factors, as on the direct route. The derivative is also
+taken along imaginary frequency at the selected step, and `direction_drift` is the relative mismatch with `alpha`; it
+must not exceed `direction_tolerance` (`nothing` skips this stencil). Returns an `ExcitationFactorResult`.
 """
 function _qnm_richardson_full_excitation_factor(result::LeaverResult;
-        h=nothing,
-        incidence_tolerance=1.0e-8,
-        direction_tolerance=1.0e-7,
-        step_tolerance=1.0e-7,
-        bridge_tolerance=1.0e-10,
-        wronskian_tolerance=1.0e-8,
-        radial_solver=GSN_radial,
-        teukolsky_solver=Teukolsky_radial)
-    validation = validate_qnm_with_isem(result;
-        incidence_tolerance, wronskian_tolerance, radial_solver)
-    C = typeof(result.omega)
+        direction_tolerance=1.0e-7, bridge_tolerance=nothing, kwargs...)
+    gsn = _qnm_richardson_excitation_factor(result; kwargs...)
+    md = gsn.metadata
     T = typeof(real(result.omega))
-    conditioned_candidate = _near_as_conditioned_validation_candidate(
-        result, validation)
-    if validation.status != :accepted && !conditioned_candidate
-        nan_complex = complex(T(NaN), T(NaN))
-        return ExcitationFactorResult(
-            result.omega, nan_complex, nan_complex, nan_complex,
-            nan_complex, nan_complex, nan_complex, T(Inf), T(Inf),
-            T(Inf), :failed, :isem_incidence_not_accepted,
-            (validation=validation, stencil=NamedTuple[]))
+    if !hasproperty(md, :evaluation_omega)
+        nan = complex(T(NaN), T(NaN))
+        return ExcitationFactorResult(result.omega, nan, nan, nan, nan, nan, nan, T(Inf), T(Inf), T(Inf), :failed,
+            gsn.stop_reason, md)
     end
-    base_h = h === nothing ? T(1.0e-4) *
-        max(one(T), abs(result.omega)) : T(h)
-    base_h > zero(T) || throw(ArgumentError("h must be positive."))
-    amplitude_pair, stencil_backend =
-        _excitation_pair_function(result, radial_solver, teukolsky_solver,
-            incidence_tolerance)
-    steps = T[base_h, base_h / 2, base_h / 4]
-    stencil = NamedTuple[]
-    gsn_real = C[]
-    gsn_imag = C[]
-    teuk_real = C[]
-    teuk_imag = C[]
-
-    for step in steps
-        plus = amplitude_pair(result.omega + step)
-        minus = amplitude_pair(result.omega - step)
-        plus_i = amplitude_pair(result.omega + im * step)
-        minus_i = amplitude_pair(result.omega - im * step)
-        push!(gsn_real, (plus.gsn_incidence - minus.gsn_incidence) /
-            (2 * step))
-        push!(gsn_imag, (plus_i.gsn_incidence - minus_i.gsn_incidence) /
-            (2im * step))
-        push!(teuk_real,
-            (plus.teukolsky_incidence - minus.teukolsky_incidence) /
-            (2 * step))
-        push!(teuk_imag,
-            (plus_i.teukolsky_incidence - minus_i.teukolsky_incidence) /
-            (2im * step))
-        for (direction, sign, row) in (
-                (:real, :plus, plus), (:real, :minus, minus),
-                (:imaginary, :plus, plus_i),
-                (:imaginary, :minus, minus_i))
-            push!(stencil, merge(row, (step=step, direction=direction,
-                sign=sign)))
-        end
-    end
-
-    rg = _richardson_derivative(gsn_real)
-    ig = _richardson_derivative(gsn_imag)
-    rt = _richardson_derivative(teuk_real)
-    it = _richardson_derivative(teuk_imag)
-    alpha = (rg.value + ig.value) / 2
-    alpha_teukolsky = (rt.value + it.value) / 2
-    if conditioned_candidate
-        validation = _condition_near_as_validation(
-            result, validation, alpha)
-    end
-    direction_scale = max(one(T), abs(rg.value), abs(ig.value),
-        abs(rt.value), abs(it.value))
-    direction_drift = T(max(abs(rg.value - ig.value),
-        abs(rt.value - it.value)) / direction_scale)
-    step_drift = T(max(rg.drift, ig.drift, rt.drift, it.drift))
-
-    root_pair = stencil_backend === :supplied_or_special ?
-        _amplitude_pair(result, result.omega;
-            gsn_solver=radial_solver, teukolsky_solver,
-            gsn_data=_gsn_amplitude_data(validation)) : amplitude_pair(result.omega)
-    reflection = root_pair.gsn_reflection
-    reflection_teukolsky = root_pair.teukolsky_reflection
-    evaluation_a = root_pair.evaluation_a
-    evaluation_omega = root_pair.evaluation_omega
-    B_gsn = reflection / (2 * evaluation_omega * alpha)
-    B_teukolsky = reflection_teukolsky /
-        (2im * evaluation_omega * alpha_teukolsky)
-    lambda = root_pair.gsn_lambda
-    incidence_conversion = ConversionFactors.Binc(
-        result.mode.s, result.mode.m, evaluation_a, evaluation_omega, lambda)
-    reflection_conversion = ConversionFactors.Bref(
-        result.mode.s, result.mode.m, evaluation_a, evaluation_omega, lambda)
-    transmission_conversion = ConversionFactors.Btrans(
-        result.mode.s, result.mode.m, evaluation_a, evaluation_omega, lambda)
-    expected_alpha_teukolsky =
-        incidence_conversion / transmission_conversion * alpha
-    expected_reflection_teukolsky =
-        reflection_conversion / transmission_conversion * reflection
-    expected_B_teukolsky =
-        reflection_conversion / (im * incidence_conversion) * B_gsn
-    bridge_scale = max(one(T), abs(alpha_teukolsky),
-        abs(expected_alpha_teukolsky), abs(reflection_teukolsky),
-        abs(expected_reflection_teukolsky), abs(B_teukolsky),
-        abs(expected_B_teukolsky))
-    bridge_residual = T(max(
-        abs(alpha_teukolsky - expected_alpha_teukolsky),
-        abs(reflection_teukolsky - expected_reflection_teukolsky),
-        abs(B_teukolsky - expected_B_teukolsky)) / bridge_scale)
-    maximum_wronskian_drift = T(maximum(
-        row.wronskian_drift for row in stencil))
-    accepted = validation.status == :accepted &&
-        direction_drift <= T(direction_tolerance) &&
-        step_drift <= T(step_tolerance) &&
-        bridge_residual <= T(bridge_tolerance) &&
-        maximum_wronskian_drift <= T(wronskian_tolerance)
-    stop_reason = validation.status != :accepted ? validation.stop_reason :
-        direction_drift > T(direction_tolerance) ?
-        :derivative_direction_gate :
-        step_drift > T(step_tolerance) ? :richardson_step_gate :
-        bridge_residual > T(bridge_tolerance) ? :normalization_bridge_gate :
-        maximum_wronskian_drift > T(wronskian_tolerance) ?
-            :wronskian_constancy_gate :
-        :accepted
-    return ExcitationFactorResult(
-        result.omega, alpha, alpha_teukolsky, reflection,
-        reflection_teukolsky, B_gsn, B_teukolsky,
-        direction_drift, step_drift, bridge_residual,
-        accepted ? :accepted : :failed, stop_reason,
-        (
-            validation=validation,
-            steps=steps,
-            stencil=stencil,
-            gsn_real=rg,
-            gsn_imag=ig,
-            teukolsky_real=rt,
-            teukolsky_imag=it,
-            incidence_conversion=incidence_conversion,
-            reflection_conversion=reflection_conversion,
-            transmission_conversion=transmission_conversion,
-            expected_alpha_teukolsky=expected_alpha_teukolsky,
-            expected_reflection_teukolsky=expected_reflection_teukolsky,
-            expected_B_teukolsky=expected_B_teukolsky,
-            stencil_backend,
-            convention_gsn=:Aout_over_2omega_alpha,
-            convention_teukolsky=:Aout_over_2iomega_alpha,
-            direction_tolerance=T(direction_tolerance),
-            step_tolerance=T(step_tolerance),
-            bridge_tolerance=T(bridge_tolerance),
-            incidence_backend=root_pair.incidence_backend,
-            maximum_wronskian_drift=maximum_wronskian_drift,
-            wronskian_tolerance=T(wronskian_tolerance),
-            evaluation_policy=root_pair.evaluation_policy,
-            frequency_projection_drift=
-                root_pair.frequency_projection_drift,
-            evaluation_a=evaluation_a,
-            evaluation_omega=evaluation_omega,
-        ),
-    )
+    lambda, dlambda = _qnm_lambda_tangent(result.mode, md.evaluation_a, md.evaluation_omega)
+    factor = _qnm_variational_teukolsky(result, merge(gsn, (metadata=merge(md, (; lambda, dlambda)),));
+        bridge_tolerance)
+    (direction_tolerance === nothing || iszero(md.selected_base_step)) && return factor
+    radial_solver = get(kwargs, :radial_solver, GSN_radial)
+    across = _gsn_derivative_attempt(result, md.selected_base_step, radial_solver, Dict{typeof(result.omega),Any}(),
+        Ref(0); normalization_pole=md.normalization_pole, root_incidence=md.validation.incidence, direction=im)
+    alpha = gsn.alpha
+    drift = T(abs(across.richardson.value - alpha) / max(one(T), abs(alpha), abs(across.richardson.value)))
+    gate = factor.status === :accepted && drift > T(direction_tolerance)
+    return ISEM._with_fields(factor, (direction_drift=drift, status=gate ? :failed : factor.status,
+        stop_reason=gate ? :derivative_direction_gate : factor.stop_reason,
+        metadata=merge(factor.metadata, (direction_tolerance=T(direction_tolerance), gsn_imaginary=across.richardson,
+            imaginary_stencil=across.stencil))))
 end

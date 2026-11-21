@@ -115,8 +115,8 @@ target, or the root itself has status `:estimated`, the result has
 and `status = :failed` otherwise.
 
 `excitation_options` with `backend=:richardson`, an explicit stencil `h`, a
-`direction_tolerance`, or a custom `radial_solver` or `teukolsky_solver` always
-selects the Richardson route. `backend=:variational` forces the direct route
+`direction_tolerance`, or a custom `radial_solver` always selects the
+Richardson route. `backend=:variational` forces the direct route
 and returns its result without fallback. Outside the scope above, or with those
 options, it raises an `ArgumentError`: `qnm` returns it with `status = :failed`,
 `stage = :radial_evaluation` and the text in `error_message` (for a damped root
@@ -352,10 +352,12 @@ Teukolsky transmission amplitude ($R \to \Delta^{-s} e^{-ipr_*}$ at the
 horizon). `Y` is the `IN` solution for `s = -2` and the `UP` solution for
 `s = +2`, and is `missing` for other `s`.
 
-The full result also adds checks: the GSN and Teukolsky normalizations of the
-excitation factor must agree to `1e-10` on the Richardson route and to the
-refinement target (`1e-8`) on the direct route, and on the Richardson route the
-derivative is also taken along imaginary frequency and must agree with the real
+The full result also adds checks. On both routes the Teukolsky values are
+converted from the GSN values with the frequency tangent of the conversion
+factors, and the Teukolsky excitation factor with and without that tangent term
+must agree to the step target of the route (`1e-8` on the direct route, `1e-7`
+on the Richardson route). On the Richardson route the derivative is also taken
+along imaginary frequency at the selected step and must agree with the real
 direction to `1e-7`. Its status can therefore be stricter than that of a
 `detailed=false` call.
 

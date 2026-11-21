@@ -15,8 +15,7 @@ function _qnm_use_variational(root, options)
         throw(ArgumentError("excitation backend must be :auto, :variational or :richardson"))
     compatible = get(options, :h, nothing) === nothing &&
         get(options, :direction_tolerance, nothing) === nothing &&
-        get(options, :radial_solver, GSN_radial) in (GSN_radial, _qnm_default_radial_solver) &&
-        get(options, :teukolsky_solver, Teukolsky_radial) in (nothing, Teukolsky_radial)
+        get(options, :radial_solver, GSN_radial) in (GSN_radial, _qnm_default_radial_solver)
     if backend === :variational && (!compatible || !_qnm_variational_scope(root))
         throw(ArgumentError("variational backend supports default solvers, no explicit stencil/direction check, and integer s=-2:2,abs(s)<=l<=15,n=0:10 simple poles"))
     end
@@ -36,8 +35,7 @@ function _qnm_variational_match_radii(a)
     return abs(a) == 1 ? (3.0,) : abs(a) >= 0.99 ? (3.0, near) : (near, 3.0)
 end
 
-function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial,
-        teukolsky_solver=Teukolsky_radial, incidence_tolerance=1e-8,
+function _qnm_checked_variational(root; h=nothing, radial_solver=GSN_radial, incidence_tolerance=1e-8,
         step_tolerance=1e-7, wronskian_tolerance=1e-8,
         direction_tolerance=nothing, bridge_tolerance=nothing, match_radius=nothing,
         horizon_tortoise=:auto)
@@ -225,9 +223,11 @@ respect to `ω` at the root frequency only, at two resolutions; the Teukolsky
 values follow from the analytic conversion. This result is used when the two
 resolutions agree to `1e-8` and the incidence and Wronskian checks pass.
 Otherwise, and for all other modes, the derivative is Richardson-extrapolated
-from central differences along real and imaginary frequency.
-`backend=:richardson`, an explicit stencil `h`, a `direction_tolerance` or a
-custom `radial_solver` or `teukolsky_solver` always use the differences.
+from central differences along real frequency and checked along imaginary
+frequency (`direction_tolerance`, default `1e-7`); the Teukolsky values follow
+from the analytic conversion on both routes. `backend=:richardson`, an explicit
+stencil `h`, a `direction_tolerance` or a custom `radial_solver` always use the
+differences.
 `backend=:variational` uses the integration without falling back and raises an
 `ArgumentError` outside its scope or together with those options.
 """

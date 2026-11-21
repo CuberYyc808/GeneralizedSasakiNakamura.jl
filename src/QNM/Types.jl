@@ -330,8 +330,9 @@ of a `qnm(...)` result. Fields:
   route, or between the Richardson steps;
 - `direction_drift`: the mismatch between the derivatives along real and
   imaginary frequency (`NaN` when the derivative is not taken by differences);
-- `bridge_residual`: the relative mismatch between the Teukolsky values and
-  those converted from the GSN values;
+- `bridge_residual`: the relative mismatch between the Teukolsky excitation
+  factor with and without the frequency tangent of the GSN-to-Teukolsky
+  conversion factors;
 - `status` (`:accepted` or `:failed`), `stop_reason` and `metadata`, which
   holds the incidence check in `metadata.validation` and the tolerances.
 
