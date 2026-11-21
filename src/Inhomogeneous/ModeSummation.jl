@@ -876,7 +876,7 @@ const _PROGRESS_LOCK = ReentrantLock()
 # non-finite flux is the error of the walk. With `prior`, the walk's ledger entry from a pass with lmax_prior, only
 # a walk that ran off lmax_prior is continued (modes = its new modes).
 function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimum_consecutive::Int, tol::Float64, strip::Bool;
-        prior = nothing, lmax_prior::Int = 0)
+        prior = nothing, lmax_prior::Int = 0, arena = ConvolutionIntegrals._series_arena())
     lmin = max(2, abs(m))
     running = 0.0
     below = 0
@@ -891,9 +891,8 @@ function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimu
     speculate = l_pred !== nothing && l_pred > lmin
     factors = speculate ? ConvolutionIntegrals._SharedFactors() : Dict{Any, Any}()
     ahead = Dict{Int, Task}()
-    # the work arena of the closed-form series for the modes this walk computes itself (a task computing ahead gets
-    # its own)
-    arena = ConvolutionIntegrals._series_arena()
+    # `arena`: the work arena of the closed-form series for the modes this walk computes itself (a task computing ahead
+    # gets its own)
     if speculate
         for l in lmin:min(lmax, l_pred)
             ahead[l] = Threads.@spawn compute(s, l, m, n, q, factors, ConvolutionIntegrals._series_arena())
@@ -1399,8 +1398,8 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
 
     # n >= 1 shells of both boundaries (see _eccentric_branch_shells!), each from the state after its n = 0 shell;
     # with mode_parallelism > 1 their l walks are computed ahead and, without a record, the boundaries run on two tasks
-    walk_run = (key, q) -> _eccentric_l_walk(ecc_compute_q, key[1], key[2], key[3], q, lmax, minimum_consecutive, Float64(tol), mode_parallelism > 1;
-        prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior)
+    walk_run = (key, q; arena = ConvolutionIntegrals._series_arena()) -> _eccentric_l_walk(ecc_compute_q, key[1], key[2], key[3], q, lmax, minimum_consecutive, Float64(tol), mode_parallelism > 1;
+        prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior, arena)
     prior_counts! = (s, p) -> begin
         i = s == -2 ? 1 : 2
         failed_modes[i] += p.failed
@@ -1417,7 +1416,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
         totals = s == -2 ? (total_infinity_energy, total_infinity_angular, total_infinity_carter) :
             (total_horizon_energy, total_horizon_angular, total_horizon_carter),
         shell_n_energy_last = s == -2 ? shell_n_infinity_energy_last : shell_n_horizon_energy_last,
-        shell_parameters = shell_parameters, use_levin = use_eccentric_tail_levin, run = walk_run, accept! = ecc_accept!,
+        shell_parameters = shell_parameters, use_levin = use_eccentric_tail_levin,
+        # the serial walks of one boundary share one work arena (walks computed ahead make their own)
+        run = let arena = ConvolutionIntegrals._series_arena(); (key, q) -> walk_run(key, q; arena) end, accept! = ecc_accept!,
         record! = (boundary, n, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, n, N_sample = N),
         log_shell = log_shell, resume = rs === nothing ? nothing : s == -2 ? rs.infinity : rs.horizon,
         ledger_out = ledger_out[s == -2 ? 1 : 2], prior_counts! = prior_counts!)
@@ -1597,10 +1598,9 @@ end
 # Returns the (l, mode) in walk order and the extrapolated l tail beyond lmax; `strip` drops the large members of the
 # mode Dicts.
 function _inclined_l_walk(compute, s::Int, m::Int, k::Int, q, lmax::Int, minimum_consecutive::Int, x, strip::Bool;
-        prior = nothing, lmax_prior::Int = 0)
+        prior = nothing, lmax_prior::Int = 0, arena = ConvolutionIntegrals._series_arena())
     modes = Tuple{Int, Any}[]
     lmin = max(2, abs(m))
-    arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this walk's modes
     eval_l = l -> begin
         mode = compute(s, l, m, k, q, arena)
         strip && _strip_mode!(mode)
@@ -2014,8 +2014,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
 
         # k >= 1 shells of both boundaries (see _inclined_branch_shells!), each from the state after the k = 0 shell;
         # with mode_parallelism > 1 their l walks are computed ahead and, without a record, the boundaries run on two tasks
-        walk_run = (key, q) -> _inclined_l_walk(inc_compute_q, key[1], key[2], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1;
-            prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior)
+        walk_run = (key, q; arena = ConvolutionIntegrals._series_arena()) -> _inclined_l_walk(inc_compute_q, key[1], key[2], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1;
+            prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior, arena)
         branch_ctx = s -> (lmax = lmax, kmax = kmax, minimum_consecutive = minimum_consecutive, tol = tol, x = x, model = model,
             p0 = p0, mode_abs_floor = mode_abs_floor, k0_reach = k0_reach,
             energy_list = s == -2 ? Energy_flux_inf : Energy_flux_hor, angular_list = s == -2 ? Angular_flux_inf : Angular_flux_hor,
@@ -2025,7 +2025,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
                 (total_horizon_energy, total_horizon_angular, total_horizon_carter),
             shell_k_energy_last = s == -2 ? shell_k_infinity_energy_last : shell_k_horizon_energy_last,
             l_reached = s == -2 ? l_reached_inf : l_reached_hor, lmax_hit = s == -2 ? lmax_hit_inf : lmax_hit_hor,
-            run = walk_run, log_shell = log_shell,
+            run = let arena = ConvolutionIntegrals._series_arena(); (key, q) -> walk_run(key, q; arena) end, log_shell = log_shell,
             record! = (boundary, k, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, k, signed_k = false, K_sample = K),
             resume = rs === nothing ? nothing : s == -2 ? rs.infinity : rs.horizon, ledger_out = ledger_out[s == -2 ? 1 : 2])
         pf_inf = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_inf) : nothing
@@ -2134,9 +2134,8 @@ end
 # threshold, search_threshold and deep of the stop rules): pure. Returns the (l, mode) in walk order; `strip` drops
 # the large members of the mode Dicts. A mode's non-finite flux is the error of the walk.
 function _generic_l_walk(compute, s::Int, m::Int, n::Int, k::Int, q, lmax::Int, minimum_consecutive::Int, x, strip::Bool;
-        prior = nothing, lmax_prior::Int = 0)
+        prior = nothing, lmax_prior::Int = 0, arena = ConvolutionIntegrals._series_arena())
     factors = Dict{Any, Any}()
-    arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this walk's modes
     modes = Tuple{Int, Any}[]
     prior === nothing || _continues(prior, lmax, lmax_prior) ||
         return (modes = modes, tail = prior.tail, prior = prior, state = _entry_state(prior))
@@ -3069,8 +3068,8 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
         end
         # both boundaries (see _generic_branch_summation!); with mode_parallelism > 1 their l walks are computed ahead
         # and, without a record or progress log, the boundaries run on two tasks
-        walk_run = (key, q) -> _generic_l_walk(gen_compute_q, key[1], key[2], key[3], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1;
-            prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior)
+        walk_run = (key, q; arena = ConvolutionIntegrals._series_arena()) -> _generic_l_walk(gen_compute_q, key[1], key[2], key[3], key[4], q, lmax, minimum_consecutive, x, mode_parallelism > 1;
+            prior = _prior_walk(ledger_in[key[1] == -2 ? 1 : 2], key, lmax, lmax_prior), lmax_prior = lmax_prior, arena)
         prior_counts! = (s, p) -> begin
             i = s == -2 ? 1 : 2
             failed_modes[i] += p.failed
@@ -3082,7 +3081,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
             radial_over_azimuthal = radial_over_azimuthal, polar_over_azimuthal = polar_over_azimuthal,
             floor_ref = s == -2 ? branch_mode_floor_inf : branch_mode_floor_hor, levin_floor = branch_levin_floor,
             use_shell_levin = use_generic_tail_levin, levin_auto = gen_levin_auto, fit_estimate = fit_estimate, eval_mode = eval_mode, accept! = gen_accept!,
-            record_mode = record_mode, log_shell = log_shell, run = walk_run,
+            record_mode = record_mode, log_shell = log_shell, run = let arena = ConvolutionIntegrals._series_arena(); (key, q) -> walk_run(key, q; arena) end,
             resume = rs === nothing ? nothing : s == -2 ? rs.infinity : rs.horizon, ledger_out = ledger_out[s == -2 ? 1 : 2],
             prior_counts! = prior_counts!)
         pf_inf = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_inf) : nothing
