@@ -13,11 +13,6 @@ struct AngularBranchResult{T,C,V,M}
     metadata::M
 end
 
-# The angular spectral matrix M(c) (quadratic in c) of the near-extremal expansion. `construct_spectral_matrix` is
-# not exported by SpinWeightedSpheroidalHarmonics 1.5; its export is requested (refactor prompt S6).
-_big_angular_spectral_matrix(c, s::Int, m::Int, size::Int) =
-    SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, size)
-
 """
     angular_A_to_lambda(angular_A, c, m)
 

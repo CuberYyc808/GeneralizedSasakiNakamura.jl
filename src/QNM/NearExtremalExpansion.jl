@@ -200,11 +200,11 @@ struct _NESetup
     lidx::Int
 end
 
+# The angular spectral matrix M(c) = M0 + c M1 + c^2 M2 at truncation Na from its closed-form coefficients.
 function _NESetup(s, l, m; N, Na)
-    sm(c) = ComplexF64.(_big_angular_spectral_matrix(ComplexF64(c), s, m, Na))
-    M0 = sm(0); Mp = sm(1); Mm = sm(-1)
-    return _NESetup(s, l, m, N, Na, M0, (Mp - Mm) / 2, (Mp + Mm) / 2 - M0,
-        l - max(abs(m), abs(s)) + 1)
+    M0, M1, M2 = map(M -> ComplexF64.(M),
+        SpinWeightedSpheroidalHarmonics.angular_spectral_matrix_coefficients(s, m, Na))
+    return _NESetup(s, l, m, N, Na, M0, M1, M2, l - max(abs(m), abs(s)) + 1)
 end
 
 _ne_order0_polys(S, w, A, K) = _ne_block_polys(_NE_OPERATOR_BLOCKS[(0, 0)], w, A, S.m, S.s, 1.0, 0, K)
