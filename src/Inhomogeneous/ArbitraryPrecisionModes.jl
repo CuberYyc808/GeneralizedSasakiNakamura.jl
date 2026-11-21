@@ -11,7 +11,7 @@
 # written for a generic number type; the binary64 routes are not touched.
 module ArbitraryPrecisionModes
 
-using KerrGeodesics: kerr_geo_orbit
+using KerrGeodesics: kerr_geo_orbit, kerr_geo_mino_averages
 using SpinWeightedSpheroidalHarmonics: spin_weighted_spheroidal_harmonic, value_and_theta_derivative
 using ..Coordinates: rstar_from_r
 using ..ConversionFactors
@@ -221,11 +221,14 @@ function _amplitude(o::APModeOrbit{T}, s, m, n, k, ω, λ, Ysol, SH, incidence, 
 end
 
 # Mino-time polar average of (m cot^2θ Lz - a^2 ω cos^2θ E) / π on the q_θ grid (the Carter flux factor).
-function _carter_factor(o::APModeOrbit{T}, m, ω, Kθ) where {T}
+# m <L_z cot^2 theta> - a^2 omega E <cos^2 theta> from KerrGeodesics' closed-form Mino averages in the type T (the
+# polar trapezoid it replaces was wrong by a factor of order coth(K x) for nearly polar orbits); L_z = 0 exactly takes
+# the mean, 0, of the two one-sided limits of <L_z / sin^2 theta>, as the binary64 route does.
+function _carter_factor(o::APModeOrbit{T}, m, ω) where {T}
     o.equatorial && return zero(T)
-    qθ, wθ = _phase_grid(T, Kθ)
-    θv, _, _, _ = _polar_samples(o, qθ)
-    return sum(wθ[j] * (m * cot(θv[j])^2 * o.Lz - o.a^2 * ω * cos(θv[j])^2 * o.E) for j in eachindex(θv)) / T(pi)
+    averages = kerr_geo_mino_averages(o.a, o.p, o.e, o.x)
+    lz_cot2 = iszero(o.Lz) ? zero(T) : T(averages.lz_over_sin2_theta) - o.Lz
+    return m * lz_cot2 - o.a^2 * ω * o.E * T(averages.z2_theta)
 end
 
 _relchange(new, old) = abs(new - old) / max(abs(new), floatmin(real(typeof(new))))
@@ -274,7 +277,7 @@ function arbitrary_precision_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, 
             done_θ = change <= max(tolerance, floor_)
         end
     end
-    carter = _carter_factor(o, m, ω, o.equatorial ? 1 : max(Kθ, 2))
+    carter = _carter_factor(o, m, ω)
     if s == -2
         E = abs2(Z) / (4 * T(pi) * ω^2)
         L = m * abs2(Z) / (4 * T(pi) * ω^3)
