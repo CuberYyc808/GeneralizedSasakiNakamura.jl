@@ -30,16 +30,6 @@ const _ALL_GENERATED_TABLES = (
     ("i_ic_s0", "endpoint_basis_matrix/gsn_endpoint_i_ic_s0.jl", 0),
     ("i_ic_splus1", "endpoint_basis_matrix/gsn_endpoint_i_ic_splus1.jl", 1),
     ("i_ic_splus2", "endpoint_basis_matrix/gsn_endpoint_i_ic_splus2.jl", 2),
-    ("basis_yc_sminus2", "regime_basis_full_matrix/gsn_basis_yc_sminus2.jl", -2),
-    ("basis_yc_sminus1", "regime_basis_full_matrix/gsn_basis_yc_sminus1.jl", -1),
-    ("basis_yc_s0", "regime_basis_full_matrix/gsn_basis_yc_s0.jl", 0),
-    ("basis_yc_splus1", "regime_basis_full_matrix/gsn_basis_yc_splus1.jl", 1),
-    ("basis_yc_splus2", "regime_basis_full_matrix/gsn_basis_yc_splus2.jl", 2),
-    ("basis_ys_sminus2", "regime_basis_full_matrix/gsn_basis_ys_sminus2.jl", -2),
-    ("basis_ys_sminus1", "regime_basis_full_matrix/gsn_basis_ys_sminus1.jl", -1),
-    ("basis_ys_s0", "regime_basis_full_matrix/gsn_basis_ys_s0.jl", 0),
-    ("basis_ys_splus1", "regime_basis_full_matrix/gsn_basis_ys_splus1.jl", 1),
-    ("basis_ys_splus2", "regime_basis_full_matrix/gsn_basis_ys_splus2.jl", 2),
 )
 
 const _GENERATED_TABLES = Tuple((key, file) for (key, file, _) in _ALL_GENERATED_TABLES)
@@ -95,22 +85,14 @@ function _split_endpoint(values::AbstractVector, s::Integer, group::Symbol, basi
     return EndpointCoefficientSet(A, B, basis)
 end
 
-# Return false if the horizon, infinity and ordinary tables for (s, basis) were
-# included at load time; otherwise throw, since they cannot be added later.
-function _ensure_generated_loaded!(s::Integer, basis::Symbol)
+# Return false if the horizon and infinity tables for s were included at load time; otherwise throw, since they
+# cannot be added later.
+function _ensure_generated_loaded!(s::Integer)
     tag = _spin_tag(s)
-    required = ("h_hc_$tag", "i_ic_$tag", "basis_$(basis)_$tag")
+    required = ("h_hc_$tag", "i_ic_$tag")
     all(key -> key in _LOADED_KEYS, required) && return false
     throw(ArgumentError(
         "no generated coefficient tables for spin weight s=$s (supported: -2, -1, 0, 1, 2)"))
-end
-
-# Resolve the ordinary-point basis: :auto uses :ys for |a| = |sin(nu)| <= 1e-3
-# and :yc otherwise.
-function _ordinary_basis(nu::Real, requested::Symbol)
-    requested in (:auto, :stable_default) && return abs(sin(nu)) <= 1e-3 ? :ys : :yc
-    requested in (:yc, :ys) && return requested
-    throw(ArgumentError("available ordinary generated bases are :auto, :yc, and :ys."))
 end
 
 function _endpoint_module_symbol(s::Integer, group::Symbol)
@@ -118,12 +100,6 @@ function _endpoint_module_symbol(s::Integer, group::Symbol)
     group == :H && return Symbol("GSNEndpoint_h_hc_", tag)
     group == :I && return Symbol("GSNEndpoint_i_ic_", tag)
     throw(ArgumentError("unsupported endpoint group $group."))
-end
-
-function _ordinary_module_symbol(s::Integer, basis::Symbol)
-    tag = _spin_tag(s)
-    basis in (:yc, :ys) && return Symbol("GSNBasis_", basis, "_", tag)
-    throw(ArgumentError("unsupported ordinary basis $basis."))
 end
 
 # Each generated table is looked up by name (a dynamic call), so a solve
@@ -153,45 +129,59 @@ function _endpoint_values(s::Integer, group::Symbol, lambda, m, nu, omega)
     return construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT}
 end
 
-function _ordinary_coefficients_and_eval(s::Integer, basis::Symbol, lambda, m, nu, omega)
-    table = _ordinary_module_symbol(s, basis)
-    construct = _generated_function(:construct_gsn_basis, table)
-    value_count = _generated_function(:ordinary_value_count, table)
-    lambda_t, m_t, nu_t, omega_t, CT = _table_arguments(lambda, m, nu, omega)
-    return (
-        construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT}, value_count()::Int,
-        _generated_function(:eval_gsn_basis!, table), _generated_function(:eval_gsn_basis_variable!, table),
-    )
-end
-
-function _ordinary_evaluator(s::Integer, lambda, m, nu::Real, omega, basis::Symbol, requires_latest_world::Bool)
-    coeffs, count, eval!, eval_variable! =
-        _ordinary_coefficients_and_eval(s, basis, lambda, m, nu, omega)
-    return OrdinaryCoefficientEvaluator(
-        basis, :y, coeffs, count, eval!, eval_variable!,
-        requires_latest_world)
-end
-
 function _control_endpoint_basis(controls)
     controls === nothing && return (horizon=:hc, infinity=:ic)
     return controls.endpoint_basis
 end
 
-function _control_ordinary_basis(controls)
-    controls === nothing && return :auto
-    return controls.ordinary_basis
+function _construct_coefficients(params, s::Integer, lambda, m, nu, omega; controls=nothing)
+    _ensure_generated_loaded!(s)
+    return _construct_coefficients_loaded(params, s, lambda, m, nu, omega, controls)
 end
 
-function _construct_coefficients(params, s::Integer, lambda, m, nu, omega; controls=nothing)
-    ordinary_basis = _ordinary_basis(float(nu), _control_ordinary_basis(controls))
-    _ensure_generated_loaded!(s, ordinary_basis)
-    return _construct_coefficients_loaded(params, s, lambda, m, nu, omega, controls, ordinary_basis, false)
+# Horner ranges of the ordinary-point blocks (s = 0 has shorter B polynomials), in the order of the packed P/Q
+# values of the :O layout.
+const _ORDINARY_RANGES = (
+    1:9, 10:17, 18:24, 25:30, 31:35, 36:39, 40:42, 43:44, 45:45, 1:0, 46:55, 56:64, 65:72, 73:79, 80:85, 86:90,
+    91:94, 95:97, 98:99, 100:100, 1:0, 101:115, 116:129, 130:142, 143:154, 155:165, 166:175, 176:184, 185:192,
+    193:199, 200:205, 206:210, 211:214, 215:217, 218:219, 220:220, 221:237, 238:253, 254:268, 269:282, 283:295,
+    296:307, 308:318, 319:328, 329:337, 338:345, 346:352, 353:358, 359:363, 364:367, 368:370, 371:372, 373:373, 1:0,
+    1:0,
+)
+const _ORDINARY_RANGES_S0 = (
+    1:4, 5:7, 8:9, 10:10, 1:0, 1:0, 1:0, 1:0, 1:0, 1:0, 11:15, 16:19, 20:22, 23:24, 25:25, 1:0, 1:0, 1:0, 1:0, 1:0,
+    1:0, 26:34, 35:42, 43:49, 50:55, 56:60, 61:64, 65:67, 68:69, 70:70, 71:81, 82:91, 92:100, 101:108, 109:115,
+    116:121, 122:126, 127:130, 131:133, 134:135, 136:136, 1:0, 1:0,
+)
+
+# The ordinary-point evaluator of the infinity endpoint values `i_values` (CoefficientTables.OrdinaryCoefficientEvaluator):
+# the Taylor shift of q = (A_P, y A_Q, B_P, y^4 B_Q) (for s = 0 the A numerator and denominator negated, as in the
+# former generated ordinary tables). Against the generated ordinary tables, both compared with a 256-bit evaluation on
+# 2800 (s, l, m, a, omega, x0) points: maximum relative error 4.6e-14 against 7.3e-13.
+function _ordinary_evaluator(s::Integer, i_values::AbstractVector)
+    layout = _layout_for(s, :I)
+    ap, aq, bp, bq = _split_starts(layout)
+    T = eltype(i_values)
+    sign = s == 0 ? -one(T) : one(T)
+    polys = (sign .* _view_range(i_values, ap, layout.ap_len), vcat(zero(T), sign .* _view_range(i_values, aq, layout.aq_len)),
+        _view_range(i_values, bp, layout.bp_len), vcat(zeros(T, 4), _view_range(i_values, bq, layout.bq_len)))
+    ranges = s == 0 ? _ORDINARY_RANGES_S0 : _ORDINARY_RANGES
+    coefficients = Vector{T}(undef, last(last(filter(!isempty, collect(ranges)))))
+    slot = 0
+    for q in polys, j in 0:(length(q) - 1)
+        slot += 1
+        block = ranges[slot]
+        for i in 0:(length(block) - 1)
+            coefficients[first(block) + i] = (isodd(j) ? -1 : 1) * binomial(j + i, j) * q[j + i + 1]
+        end
+    end
+    return OrdinaryCoefficientEvaluator(:infinity_shift, :y, coefficients, length(ranges), ranges)
 end
 
 # Build the CoefficientSet from the generated endpoint (:hc, :ic) and
 # ordinary tables. For large-frequency-expansion runs `horizon_shift` is set, so ordinary-point A and B
 # are taken from a Taylor shift of the horizon rational coefficients when accurate.
-function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega, controls, ordinary_basis::Symbol, requires_latest_world::Bool)
+function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega, controls)
     endpoint_basis = _control_endpoint_basis(controls)
     endpoint_basis.horizon == :hc ||
         throw(ArgumentError("only horizon endpoint basis :hc is migrated into the ISEM GSN package backend."))
@@ -200,7 +190,7 @@ function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega
 
     h_values = _endpoint_values(s, :H, lambda, m, nu, omega)
     i_values = _endpoint_values(s, :I, lambda, m, nu, omega)
-    ordinary = _ordinary_evaluator(s, lambda, m, float(nu), omega, ordinary_basis, requires_latest_world)
+    ordinary = _ordinary_evaluator(s, i_values)
     metadata = (
         source=:generated_default,
         horizon_basis=:hc,
@@ -209,15 +199,14 @@ function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega
         horizon_shift=controls !== nothing &&
             getproperty(controls, :large_frequency_expansion),
         generated_loaded=generated_backend_loaded(),
-        requires_latest_world=requires_latest_world,
     )
     return CoefficientSet(
         params, _split_endpoint(h_values, s, :H, :hc), _split_endpoint(i_values, s, :I, :ic), ordinary, metadata,
     )
 end
 
-# Build the CoefficientSet for `params` from the generated tables: endpoint bases :hc / :ic and the ordinary basis
-# from `controls.ordinary_basis` (see `_ordinary_basis`).
+# Build the CoefficientSet for `params` from the generated endpoint tables (bases :hc / :ic); the ordinary-point values
+# are the Taylor shift of the infinity ones (_ordinary_evaluator).
 function CoefficientTables.gsn_coefficients(params::GSNParameters; controls=nothing)
     return _construct_coefficients(
         params, params.s, params.lambda, params.m, params.nu, params.omega; controls=controls,

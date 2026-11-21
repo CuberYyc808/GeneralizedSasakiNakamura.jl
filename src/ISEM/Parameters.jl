@@ -91,7 +91,6 @@ struct GSNControls
     tolerance::Float64
     basis::Symbol
     endpoint_basis::NamedTuple
-    ordinary_basis::Symbol
     small_frequency_expansion::Bool
     large_frequency_expansion::Bool
     frequency_selection::FrequencySelection
@@ -123,7 +122,6 @@ function Base.show(io::IO, ::MIME"text/plain", c::GSNControls)
     println(io, "  tolerance      = ", c.tolerance)
     println(io, "  basis          = ", c.basis)
     println(io, "  endpoint_basis = ", c.endpoint_basis)
-    println(io, "  ordinary_basis = ", c.ordinary_basis)
     println(io, "  small_frequency_expansion            = ", c.small_frequency_expansion)
     println(io, "  large_frequency_expansion            = ", c.large_frequency_expansion)
     println(io, "  regime         = ", c.frequency_selection.regime)
@@ -463,7 +461,7 @@ end
 # DEFAULT_REGULAR_ORDINARY_ORDER in the ordinary regime unless N or ordinary_order is given.
 function gsn_controls(
     params::GSNParameters; N=nothing, horizon_order=nothing, ordinary_order=nothing, infinity_order=nothing, xm=nothing,
-    tol=nothing, basis=nothing, endpoint_basis=nothing, ordinary_basis=nothing, small_frequency_expansion=false,
+    tol=nothing, basis=nothing, endpoint_basis=nothing, small_frequency_expansion=false,
     large_frequency_expansion=false,
 )
     h_order = Int(horizon_order === nothing ? (N === nothing ? DEFAULT_HORIZON_ORDER : N) : horizon_order)
@@ -478,7 +476,6 @@ function gsn_controls(
     tolerance > 0 || throw(ArgumentError("tol must be positive."))
 
     endpoint = endpoint_basis === nothing ? (horizon=:hc, infinity=:ic) : endpoint_basis
-    ordinary = ordinary_basis === nothing ? :auto : Symbol(ordinary_basis)
     selected_basis = basis === nothing ? :stable_default : Symbol(basis)
     frequency_selection = select_frequency_regime(params; small_frequency_expansion, large_frequency_expansion)
     if N === nothing && ordinary_order === nothing &&
@@ -489,12 +486,12 @@ function gsn_controls(
     use_large_frequency_expansion = frequency_selection.regime == :large_frequency_expansion
 
     control_source = xm === nothing && basis === nothing &&
-        endpoint_basis === nothing && ordinary_basis === nothing ? :default : :user
+        endpoint_basis === nothing ? :default : :user
 
     return GSNControls(
         h_order, o_order,
         Int(infinity_order === nothing ? (N === nothing ? DEFAULT_INFINITY_ORDER : N) : infinity_order), match_x,
-        tolerance, selected_basis, endpoint, ordinary, use_small_frequency_expansion, use_large_frequency_expansion,
+        tolerance, selected_basis, endpoint, use_small_frequency_expansion, use_large_frequency_expansion,
         frequency_selection, control_source,
     )
 end
