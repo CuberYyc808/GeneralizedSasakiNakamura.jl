@@ -1829,23 +1829,7 @@ function _forward_h(sequence::ManoSuzukiTakasugiUSequence, n::Int)
     previous2 = _h_state(sequence, n - 2)
     previous1 = _h_state(sequence, n - 1)
     parent_error = max(sequence.errors[_seq_index(n - 2)], sequence.errors[_seq_index(n - 1)])
-    a0 = sequence.a0
-    integer_b = sequence.integer_b
-    delta = sequence.delta
-    c = sequence.argument
-
-    b2n = ComplexF64(integer_b + 2n) + delta
-    q0 = 8 + ComplexF64(integer_b + 2n)^2 +
-        2 * (a0 + n) * c - ComplexF64(integer_b + 2n) * (6 + c)
-    q = q0 + delta * (2 * (integer_b + 2n) - 6) + delta^2
-    qprime = 2 * a0 - integer_b
-    qconstant = q - qprime * c
-    first = (ComplexF64(integer_b + n - 2) - a0 + delta / 2) * (b2n - 2)
-    second_factor = b2n - 3
-    second = second_factor * q / c
-    second_prime = -second_factor * qconstant / c^2
-    second_second = 2 * second_factor * qconstant / c^3
-    denominator = (a0 + n - 1 + delta / 2) * (b2n - 4)
+    first, second, second_prime, second_second, denominator = _h_coeffs(sequence, n)
 
     previous2_weight = max(abs(first), floatmin(Float64))
     previous1_weight = max(abs(second), abs(second_prime), abs(second_second),
