@@ -242,8 +242,7 @@ end
 
 QNM frequency of one mode, returned by [`qnm_frequency`](@ref) and
 [`qnm_sequence`](@ref) without amplitudes. `omega` is the frequency
-(`ComplexF64`, or `Complex{BigFloat}` when the root needed extended precision,
-see `precision_bits`), `angular_A` the angular eigenvalue in Leaver's
+(`ComplexF64`; wider roots come from `qnm_arbitrary_precision`), `angular_A` the angular eigenvalue in Leaver's
 convention and `lambda` the separation constant of the radial Teukolsky
 equation; `cf_value`, `cf_error`, `root_residual` and `angular_residual` are
 residuals. `status` is `:accepted`, `:estimated` or `:failed`, with the reason

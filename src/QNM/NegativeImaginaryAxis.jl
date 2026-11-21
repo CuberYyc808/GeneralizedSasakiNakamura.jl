@@ -555,52 +555,8 @@ function _negative_imaginary_axis_reemergence_seed(mode::QNMMode, first_segment,
 end
 
 
-"""
-    _near_axis_precision_check(mode, a, omega, polish_options; precision_bits,
-        root_tolerance, stability_tolerance)
-
-Re-polish a Float64 root next to the NIA in BigFloat at the same spin, starting
-from `omega`, with the same angular order and continued-fraction settings (the
-ceiling raised as for the automatic precision fallback). The root is verified
-when the BigFloat polish converges and moves it by at most the stability gate
-relative to max(1, |omega|).
-"""
-function _near_axis_precision_check(mode::QNMMode, a::Float64,
-        omega::ComplexF64, polish_options; precision_bits::Int,
-        root_tolerance, stability_tolerance, wide::Bool=true)
-    # Without wide arithmetic (a Float64 solve that did not ask for it) the re-polish stays in Float64 with the
-    # deeper continued fraction; it checks the root's stability under that change, not under precision.
-    wide || return _near_axis_float64_check(mode, a, omega, polish_options; root_tolerance, stability_tolerance)
-    return setprecision(BigFloat, precision_bits) do
-        B = BigFloat
-        options = merge(polish_options, (
-            sheet_id=Symbol(polish_options.sheet_id, :_near_axis_check), cf_tolerance=B(polish_options.cf_tolerance),
-            cf_minimum_iterations=max(polish_options.cf_minimum_iterations, 600),
-            cf_maximum_iterations=max(polish_options.cf_maximum_iterations, 24000), root_tolerance=B(root_tolerance),
-            trust_radius=B(polish_options.trust_radius),
-        ))
-        polished = try
-            _polish_frequency_root(mode, B(a), _complex_of_type(B, omega);
-                options...)
-        catch caught
-            absorbable(caught) || rethrow()
-            nothing
-        end
-        polished === nothing && return (verified=false,
-            precision_bits, converged=false, stop_reason=:evaluation_error,
-            bigfloat_omega=missing, drift=Inf)
-        drift = Float64(abs(polished.omega - omega) /
-            max(one(B), abs(polished.omega)))
-        return (
-            verified=polished.converged && drift <= stability_tolerance, precision_bits, converged=polished.converged,
-            stop_reason=polished.stop_reason, bigfloat_omega=ComplexF64(polished.omega), drift,
-        )
-    end
-end
-
-# Float64 verification next to the NIA (instead of the BigFloat re-polish): the second-layer certificate
-# (_float64_floor_certificate) at the smallest converged depth; :accepted verifies the root, :estimated keeps it
-# as an estimate.
+# Verification of a Float64 root next to the NIA: the second-layer certificate (_float64_floor_certificate) at the
+# smallest converged depth; :accepted verifies the root, :estimated keeps it as an estimate.
 function _near_axis_float64_check(mode::QNMMode, a::Float64, omega::ComplexF64, polish_options;
         root_tolerance, stability_tolerance)
     certificate = try
@@ -615,10 +571,10 @@ function _near_axis_float64_check(mode::QNMMode, a::Float64, omega::ComplexF64, 
         nothing
     end
     certificate === nothing && return (verified=false, estimated=false, precision_bits=53, converged=false,
-        stop_reason=:evaluation_error, bigfloat_omega=missing, drift=Inf)
+        stop_reason=:evaluation_error, drift=Inf)
     drift = get(certificate, :drift, Inf)
     return (verified=certificate.status == :accepted && drift <= stability_tolerance,
         estimated=certificate.status == :estimated, precision_bits=53, converged=certificate.status != :failed,
-        stop_reason=certificate.stop_reason, bigfloat_omega=missing, drift,
+        stop_reason=certificate.stop_reason, drift,
         float64_certificate=_certificate_provenance(certificate))
 end

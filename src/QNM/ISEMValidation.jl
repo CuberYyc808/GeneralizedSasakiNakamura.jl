@@ -71,19 +71,6 @@ function _qnm_default_radial_solver(s, l, m, a, omega, boundary;
 end
 
 function _radial_evaluation_inputs(result::LeaverResult, omega=result.omega)
-    if result.a isa BigFloat || real(omega) isa BigFloat
-        evaluation_a = Float64(result.a)
-        evaluation_omega = ComplexF64(omega)
-        T = typeof(real(omega))
-        projected = Complex{T}(
-            T(real(evaluation_omega)), T(imag(evaluation_omega)))
-        drift = T(abs(projected - omega) /
-            max(one(T), abs(projected), abs(omega)))
-        return (
-            a=evaluation_a, omega=evaluation_omega, policy=:explicit_binary64_projection, projection_drift=drift,
-            source_precision_bits=result.precision_bits, evaluation_precision_bits=53,
-        )
-    end
     T = typeof(real(omega))
     return (
         a=result.a, omega=omega, policy=:native_input_precision, projection_drift=zero(T),

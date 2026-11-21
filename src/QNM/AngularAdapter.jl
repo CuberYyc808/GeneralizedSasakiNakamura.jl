@@ -85,76 +85,12 @@ function _angular_branch_float64(mode::QNMMode, c;
     )
 end
 
-# BigFloat angular eigenpair: Newton refinement of the Float64 eigenpair on the
-# BigFloat spectral matrix.
-function _angular_branch_bigfloat(mode::QNMMode, c::Complex{BigFloat};
-        truncation_order::Int=32, sheet_id::Symbol=:qnm_straight_from_spherical,
-        maximum_iterations::Int=24)
-    seed = SpinWeightedSpheroidalHarmonics.continue_angular_mode(
-        mode.s, mode.l, mode.m, ComplexF64(c);
-        sheet_id, truncation_order, cache=nothing)
-    matrix = _big_angular_spectral_matrix(
-        c, mode.s, mode.m, seed.matrix_size)
-    coefficients = Complex{BigFloat}.(seed.coefficients)
-    pivot = argmax(abs.(coefficients))
-    coefficients ./= coefficients[pivot]
-    value = Complex{BigFloat}(
-        BigFloat(real(seed.angular_sep)), BigFloat(imag(seed.angular_sep)))
-    target = BigFloat(2)^(-BigFloat(precision(BigFloat) - 16))
-    iterations = 0
-
-    for iteration in 1:maximum_iterations
-        residual_vector = matrix * coefficients - value * coefficients
-        normalization_error = coefficients[pivot] - one(eltype(coefficients))
-        residual = max(norm(residual_vector), abs(normalization_error))
-        iterations = iteration
-        residual <= target && break
-        size = seed.matrix_size
-        jacobian = zeros(Complex{BigFloat}, size + 1, size + 1)
-        jacobian[1:size, 1:size] .= matrix
-        for index in 1:size
-            jacobian[index, index] -= value
-            jacobian[index, size + 1] = -coefficients[index]
-        end
-        jacobian[size + 1, pivot] = one(eltype(coefficients))
-        correction = jacobian \
-            (-vcat(residual_vector, normalization_error))
-        coefficients .+= view(correction, 1:size)
-        value += correction[size + 1]
-    end
-
-    coefficients ./= norm(coefficients)
-    residual = BigFloat(norm(matrix * coefficients - value * coefficients) /
-        max(one(BigFloat), norm(matrix) * norm(coefficients),
-            abs(value) * norm(coefficients)))
-    lambda = angular_A_to_lambda(value, c, mode.m)
-    overlap = abs(dot(Complex{BigFloat}.(seed.coefficients), coefficients)) /
-        max(eps(BigFloat), norm(seed.coefficients) * norm(coefficients))
-    status = residual <= sqrt(eps(BigFloat)) ?
-        :high_precision_refined : :high_precision_stagnated
-    return AngularBranchResult(
-        c, value, lambda, coefficients, residual, truncation_order,
-        precision(BigFloat), sheet_id, status,
-        (
-            route=:fast_eigenvalue_bigfloat_refinement, seed_c=seed.c, seed_residual=seed.residual,
-            seed_overlap=overlap, matrix_size=seed.matrix_size, refinement_iterations=iterations,
-        ),
-    )
-end
-
-# Angular separation constant, eigenvalue and coefficients at c = a*omega on
-# `sheet_id`, in the working precision of the inputs.
+# Angular separation constant, eigenvalue and coefficients at c = a*omega on `sheet_id`.
 function angular_branch(mode::QNMMode, a, omega;
         truncation_order::Int=32, sheet_id::Symbol=:qnm_straight_from_spherical)
     _require_qnm_angular_backend()
     c = a * omega
-    if c isa Complex{BigFloat}
-        return _angular_branch_bigfloat(mode, c;
-            truncation_order, sheet_id)
-    elseif real(c) isa Union{Float16,Float32,Float64}
-        return _angular_branch_float64(mode, c;
-            truncation_order, sheet_id)
-    end
-    throw(ArgumentError(
-        "QNM angular continuation supports Float16/32/64 and BigFloat inputs."))
+    real(c) isa Union{Float16,Float32,Float64} || throw(ArgumentError(
+        "QNM angular continuation supports Float16/32/64 inputs."))
+    return _angular_branch_float64(mode, c; truncation_order, sheet_id)
 end

@@ -143,7 +143,7 @@ For the ordinary branch, `qnm_frequency(QNMMode(s, l, m, n), a)` is equivalent;
 a `QNMMode` with `:negative_real` needs a `guess`.
 
 `qnm_frequency` returns a `LeaverResult` with the root only: `omega`
-(`ComplexF64`, or `Complex{BigFloat}` when the root needed extended precision),
+(`ComplexF64`; wider roots come from `qnm_arbitrary_precision`, see below),
 `lambda`, `angular_A`, `status` (`:accepted`, `:estimated` or `:failed`),
 `stop_reason`, `overtone_index`, `inversion_index` and `provenance`.
 `:estimated` marks a root that passed only relaxed checks, for example a
@@ -266,7 +266,7 @@ For `s = -2`, `l = 2`, `m = 0` this happens, for example, from `a ≈ 0.81` for
 | `:negative_imaginary_axis_gap` | `a` lies between the end of `n₀` and the start of `n₁` |
 | `:no_further_segment` | `segment=1` was requested where segment 0 exists |
 | `:negative_imaginary_axis_tangent_accumulation` | the re-emerged segment 1 stalled on the axis (touches accumulate toward `a = 1`) |
-| `:near_axis_precision_unverified`, `:near_axis_position_*` | a segment-1 root next to the axis could not be confirmed in BigFloat arithmetic |
+| `:near_axis_precision_unverified` | a segment-1 root next to the axis was not verified by the binary64 second-layer certificate |
 | `:segment_attribution_unavailable` | `m ≠ 0`: re-emergence events are listed in `provenance.reemergence_events`, but their labels are not assigned |
 | `:segment_unsupported_at_extremal` | `segment ≥ 1` at `abs(a) = 1` |
 | `:initial_guess_off_branch` | the root search started from a predicted frequency with `Re ω` zero or of the wrong sign for its branch (a `guess` like that raises an `ArgumentError`) |

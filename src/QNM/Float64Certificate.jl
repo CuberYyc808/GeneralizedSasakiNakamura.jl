@@ -1,5 +1,4 @@
-# Second layer of a Float64 Leaver root: entered only where a Float64 solve would otherwise fail (or, with
-# automatic_precision_fallback=true, go to BigFloat). The continued fraction is evaluated with the closed-form D
+# Second layer of a Float64 Leaver root: entered only where a Float64 solve would otherwise fail. The continued fraction is evaluated with the closed-form D
 # coefficients, and a Wilkinson-type bound eta_F on its binary64 rounding error is carried along both recurrences;
 # the root position is then certified as delta = (|F| + eta_F) / |F'|. The ordinary evaluation
 # (leaver_cf_truncated, _leaver_cf_asymptotic, leaver_radial_residual) is not changed.

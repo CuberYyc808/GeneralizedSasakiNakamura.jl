@@ -321,11 +321,9 @@ function _mirror_qnm_root(a, s, l, m, n, mirror_guess, root_options;
         # sequence at the same spin: its reflection is returned with the same status.
         if partner_root.status == :accepted ||
                 partner_root.stop_reason == :negative_imaginary_axis_endpoint
-            reflect() = _mirror_reflected_result(mode, partner_root;
+            root = _mirror_reflected_result(mode, partner_root;
                 angular_order=get(root_options, :angular_order, 32),
                 sheet_id=get(root_options, :sheet_id, :qnm_straight_from_spherical))
-            root = partner_root.omega isa Complex{BigFloat} ?
-                setprecision(reflect, BigFloat, partner_root.precision_bits) : reflect()
             return root, root.omega, partner_root
         end
     end
@@ -341,11 +339,8 @@ function _mirror_qnm_root(a, s, l, m, n, mirror_guess, root_options;
         end
     mirror_segment = partner_root !== nothing ? _qnm_root_segment(partner_root) :
         segment === :auto ? 0 : segment
-    solve_mirror() = _solve_qnm_root(mode, a, seed, root_options;
+    root = _solve_qnm_root(mode, a, seed, root_options;
         convention, inversion_index, segment=mirror_segment)
-    root = partner_root !== nothing && partner_root.omega isa Complex{BigFloat} ?
-        setprecision(solve_mirror, BigFloat, partner_root.precision_bits) :
-        solve_mirror()
     return root, seed, partner_root
 end
 
