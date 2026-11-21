@@ -2101,23 +2101,20 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
     end
 
     orbit_type = _teukolsky_flux_orbit_type(e, x)
-    mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
+    options = ModeSummation.flux_options(; tol, lmax, kmax, nmax, minimum_consecutive, N0, K0, Nmax, Kmax, sample_tol,
+        record, record_path, mode_abs_floor, levin_mode_abs_floor, threaded_sampling, neg_branch_scale,
+        beta = generic_beta, deep = generic_deep, tail_levin = something(tail_levin, :auto), tail_levin_infinity,
+        tail_levin_horizon, levin_nmin, levin_local_n, levin_max_depth, mode_parallelism, progress)
     mode_parallelism > 1 && orbit_type == :circular &&
         @warn "mode_parallelism > 1 does not apply to circular equatorial orbits; this one runs serially." maxlog = 1
     mode_parallelism > Threads.nthreads() &&
         @warn "mode_parallelism = $(mode_parallelism) exceeds the $(Threads.nthreads()) Julia threads; start Julia with --threads=$(mode_parallelism)." maxlog = 1
     t0 = time()
-    result = begin   # `info` is accepted for compatibility and has no effect
-        if orbit_type == :circular
-            ModeSummation.circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = something(minimum_consecutive, 5), submission=submission, stop_requested=stop_requested)
-        elseif orbit_type == :eccentric
-            ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
-        elseif orbit_type == :inclined
-            ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
-        else
-            ModeSummation.generic_mode_summation(a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=generic_beta, deep=generic_deep, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
-        end
-    end
+    # `info` is accepted for compatibility and has no effect
+    result = orbit_type == :circular ? ModeSummation.circular_mode_summation(a, p; x, submission, stop_requested, options) :
+        orbit_type == :eccentric ? ModeSummation.eccentric_mode_summation(a, p, e; x, submission, stop_requested, options) :
+        orbit_type == :inclined ? ModeSummation.inclined_mode_summation(a, p, x; submission, stop_requested, options) :
+        ModeSummation.generic_mode_summation(a, p, e, x; submission, stop_requested, options)
     cost = time() - t0
 
     return TeukolskyPointParticleFlux(
