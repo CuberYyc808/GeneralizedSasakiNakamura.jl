@@ -1824,7 +1824,9 @@ _flux_get(result, key::Symbol, default=nothing) = hasproperty(result, key) ? get
 # |x| = 1e-5 is off by 4e-8, 1e-6 by 1e-5 and 1e-8 by a factor 6, and x = 0 (where the spike was dropped) by 2e-5,
 # with kmax hits and NaN modes at large p. The fluxes are smooth in x through 0, so these orbits are interpolated
 # linearly between x = -SMALL_POLAR_X and +SMALL_POLAR_X, both resolved; the interpolation error is O(SMALL_POLAR_X^2)
-# (1.5e-9 relative at (0.9, 8)). The two runs are summed in total_modes and cost, and reached gains small_x_interpolation.
+# (1.5e-9 relative at (0.9, 8)). The two runs give one result (_small_x_merge): fluxes and tails interpolated, counts
+# and cost summed, shells reached the deeper of the two (`nothing`, not converged, if either), flags of either run;
+# reached gains small_x_interpolation.
 const SMALL_POLAR_X = 1e-4
 _small_polar_x(e, x) = abs(x) < SMALL_POLAR_X
 
@@ -1839,9 +1841,29 @@ function _small_x_flux(run, a, p, e, x)
         a, p, e, x, plus.orbit_type,
         mix(f -> f.infinity_energy_flux), mix(f -> f.infinity_angular_momentum_flux), mix(f -> f.infinity_carter_constant_flux),
         mix(f -> f.horizon_energy_flux), mix(f -> f.horizon_angular_momentum_flux), mix(f -> f.horizon_carter_constant_flux),
-        plus.total_modes + minus.total_modes, plus.tolerance, plus.truncation_floor,
-        merge(plus.reached, (small_x_interpolation = (x_minus = -δ, x_plus = δ, weight_plus = w),)),
-        plus.cost + minus.cost, (plus = plus.result, minus = minus.result))
+        plus.total_modes + minus.total_modes, plus.tolerance, _small_x_merge(w, plus.truncation_floor, minus.truncation_floor),
+        merge(_small_x_merge(w, plus.reached, minus.reached), (small_x_interpolation = (x_minus = -δ, x_plus = δ, weight_plus = w),)),
+        plus.cost + minus.cost, _small_x_merge(w, plus.result, minus.result))
+end
+
+# One value of the two small-x runs (weight w on the x = +SMALL_POLAR_X run), by the name of its field (inherited by
+# the entries of a NamedTuple): counts (a name with "modes" or "near_static") summed; a shell reached (a name ending in
+# "reached") the larger, or nothing (not converged) if either is; other integers (caps, grids) the larger; flags or-ed;
+# floating-point values (fluxes, tails, floors) interpolated; anything else from the x = +SMALL_POLAR_X run.
+function _small_x_merge(w, plus::NamedTuple, minus::NamedTuple, name::String = "")
+    keys(plus) == keys(minus) || return plus
+    inherit(k) = isempty(name) || endswith(String(k), "reached") ? String(k) : name
+    return NamedTuple{keys(plus)}(Tuple(_small_x_merge(w, plus[k], minus[k], inherit(k)) for k in keys(plus)))
+end
+function _small_x_merge(w, plus, minus, name::String = "")
+    reached = endswith(name, "reached")
+    reached && (plus === nothing || minus === nothing) && return nothing
+    plus isa Bool && minus isa Bool && return plus | minus
+    if plus isa Integer && minus isa Integer
+        return occursin("modes", name) || occursin("near_static", name) ? plus + minus : max(plus, minus)
+    end
+    plus isa AbstractFloat && minus isa AbstractFloat && return w * plus + (1 - w) * minus
+    return plus
 end
 
 # Orbit family with KerrGeodesics' own tolerance (1e-12 on e and on |x| - 1), the classification every route uses.
