@@ -33,10 +33,9 @@ Float64 coverage and tolerances are unchanged. By default the wide checks also r
 | qnm | Frequencies, overtone conventions, residues, derivatives, excitation factors |
 | pointparticle_mode | Circular, spherical and generic modes; interface consistency |
 | flux | Mode sums, Schwarzschild rotation identities, independently summed Kerr grids |
-| regression | Historical failures and a snapshot of earlier registered tests |
+| regression | Historical failures |
 | threads | Bitwise serial/concurrent radial, QNM and particle-mode calls; shared-result evaluation |
 
-The registered-suite snapshot is not a substitute for current `Pkg.test()`.
 `@test_broken` records an unresolved numerical target; it does not count as a successfully solved case.
 Reference agreement and equation identities are kept separate from frozen-output regressions.
 Quick runs cover the numerical groups on smaller parameter sets.

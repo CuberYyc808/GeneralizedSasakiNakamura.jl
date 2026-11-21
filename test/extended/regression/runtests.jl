@@ -14,9 +14,6 @@ grid_point(id) = only(g for g in GRID_POINTS if g.id == id)
 
 @testset "regression" begin
 
-# Snapshot of earlier registered tests; current Pkg.test remains separate.
-include(joinpath(@__DIR__, "registered_suite.jl"))
-
 # a = 0.7, l = m = 2, n = 10 root, UP C_up buried at the junction (1.78e-6 in C_ref units).
 @testset "buried C_up at the a=0.7 n10 root" begin
     q = point("Q_a07_m2_n10_at_f64")
@@ -231,8 +228,6 @@ end
     @test relerr(F.infinity_angular_momentum_flux, -0.5 * Lz_eq) <= 2e-6
 end
 
-end # regression
-
 # GSN_pointparticle_mode and Teukolsky_pointparticle_mode must use the same grid defaults; otherwise the two
 # public routes disagree (Carter flux 1.2e-2 for this generic mode, 3e-8 for spherical k = 1).
 @testset "GSN vs Teukolsky point-particle mode defaults" begin
@@ -243,3 +238,5 @@ end # regression
         @test isequal(G.Carter_const_flux, T.Carter_const_flux)
     end
 end
+
+end # regression
