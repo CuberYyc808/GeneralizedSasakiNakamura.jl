@@ -612,48 +612,45 @@ function _with_auto_caps(run, caps)
         cap_raises = raises))
 end
 
-function _record_adaptive_levin_metadata!(bgrp, mode)
-    for key in (
-        "AdaptiveLevin",
-        "AdaptiveLevinMaxDepth",
-        "AdaptiveLevinMaxLeafDepth",
-        "AdaptiveLevinEffectiveIntervals",
-        "AdaptiveLevinEffectiveRIntervals",
-        "AdaptiveLevinEffectiveThetaIntervals",
-        "AdaptiveLevinAcceptedSegments",
-        "AdaptiveLevinSegmentEvaluations",
-        "AdaptiveLevinSplitCount",
-        "AdaptiveLevinStopReason",
-        "AdaptiveLevinUnconverged",
-    )
-        haskey(mode, key) && (bgrp[key] = mode[key])
-    end
-    return nothing
-end
+# Mode metadata written when present: the adaptive Levin leaves and the Y interpolation.
+const _RECORDED_MODE_KEYS = ("AdaptiveLevin", "AdaptiveLevinMaxDepth", "AdaptiveLevinMaxLeafDepth",
+    "AdaptiveLevinEffectiveIntervals", "AdaptiveLevinEffectiveRIntervals", "AdaptiveLevinEffectiveThetaIntervals",
+    "AdaptiveLevinAcceptedSegments", "AdaptiveLevinSegmentEvaluations", "AdaptiveLevinSplitCount",
+    "AdaptiveLevinStopReason", "AdaptiveLevinUnconverged", "YInterpolationPoints", "YInterpolationDoublings",
+    "YInterpolationFallback", "YInterpolationSelfCheckError")
 
-function _record_current_mode!(h5, record::Bool, boundary::AbstractString, n::Int, m::Int, l::Int, mode_index::Base.RefValue{Int}, mode, N_sample::Int)
+_record_group(parent, key) = haskey(parent, key) ? parent[key] : create_group(parent, key)
+
+# One mode of a recorded sum, at [n_<n>/][k_<k>/]m_<m>/l_<l>/<boundary>: n for the eccentric and generic sums, k for
+# the generic (signed format) and inclined (unsigned format) sums. N_sample / K_sample: the grid written when the mode
+# does not carry its own. Counted only when recording: with mode_parallelism the two boundaries run as tasks and would
+# otherwise race on the shared counter.
+function _record_current_mode!(h5, record::Bool, boundary::AbstractString, mode_index::Base.RefValue{Int}, mode;
+        l::Int, m::Int, n = nothing, k = nothing, signed_k::Bool = true, N_sample = nothing, K_sample = nothing)
     record || return nothing
     mode_index[] += 1
-    nkey = @sprintf("n_%06d", n)
-    mkey = @sprintf("m_%+06d", m)
-    lkey = @sprintf("l_%04d", l)
-    ngrp = haskey(h5, nkey) ? h5[nkey] : create_group(h5, nkey)
-    mgrp = haskey(ngrp, mkey) ? ngrp[mkey] : create_group(ngrp, mkey)
-    lgrp = haskey(mgrp, lkey) ? mgrp[lkey] : create_group(mgrp, lkey)
-    bgrp = haskey(lgrp, boundary) ? lgrp[boundary] : create_group(lgrp, boundary)
+    group = h5
+    n === nothing || (group = _record_group(group, @sprintf("n_%06d", n)))
+    k === nothing || (group = _record_group(group, signed_k ? @sprintf("k_%+06d", k) : @sprintf("k_%06d", k)))
+    bgrp = _record_group(_record_group(_record_group(group, @sprintf("m_%+06d", m)), @sprintf("l_%04d", l)), boundary)
     bgrp["source"] = "julia"
     bgrp["mode_index"] = mode_index[]
     bgrp["boundary"] = boundary
+    bgrp["s"] = boundary == "I" ? -2 : 2
     bgrp["l"] = l
     bgrp["m"] = m
-    bgrp["n"] = n
-    bgrp["N_sample"] = get(mode, "N_sample", N_sample)
+    n === nothing || (bgrp["n"] = n)
+    k === nothing || (bgrp["k"] = k)
+    N_sample === nothing || (bgrp["N_sample"] = get(mode, "N_sample", N_sample))
+    K_sample === nothing || (bgrp["K_sample"] = get(mode, "K_sample", K_sample))
     bgrp["Amplitude_re"] = real(get(mode, "Amplitude", 0.0 + 0.0im))
     bgrp["Amplitude_im"] = imag(get(mode, "Amplitude", 0.0 + 0.0im))
     bgrp["EnergyFlux"] = get(mode, "EnergyFlux", NaN)
     bgrp["AngularMomentumFlux"] = get(mode, "AngularMomentumFlux", NaN)
     bgrp["CarterConstantFlux"] = get(mode, "CarterConstantFlux", NaN)
-    _record_adaptive_levin_metadata!(bgrp, mode)
+    for key in _RECORDED_MODE_KEYS
+        haskey(mode, key) && (bgrp[key] = mode[key])
+    end
     return nothing
 end
 
@@ -1287,7 +1284,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             mode = let; with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, -2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
             end; end
-            _record_current_mode!(record_h5, record, "I", 0, m, l, mode_index, mode, N)
+            _record_current_mode!(record_h5, record, "I", mode_index, mode; l, m, n = 0, N_sample = N)
             shell_m_infinity_energy += 2 * mode["EnergyFlux"]
             shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
@@ -1324,7 +1321,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             mode = let; with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
                 ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, 2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
             end; end
-            _record_current_mode!(record_h5, record, "H", 0, m, l, mode_index, mode, N)
+            _record_current_mode!(record_h5, record, "H", mode_index, mode; l, m, n = 0, N_sample = N)
             shell_m_horizon_energy += 2 * mode["EnergyFlux"]
             shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
@@ -1390,7 +1387,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             (total_horizon_energy, total_horizon_angular, total_horizon_carter),
         shell_n_energy_last = s == -2 ? shell_n_infinity_energy_last : shell_n_horizon_energy_last,
         shell_parameters = shell_parameters, use_levin = use_eccentric_tail_levin, run = walk_run, accept! = ecc_accept!,
-        record! = (boundary, n, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, n, m, l, mode_index, mode, N),
+        record! = (boundary, n, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, n, N_sample = N),
         log_shell = log_shell, resume = rs === nothing ? nothing : s == -2 ? rs.infinity : rs.horizon,
         ledger_out = ledger_out[s == -2 ? 1 : 2], prior_counts! = prior_counts!)
     pf_inf = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_inf) : nothing
@@ -1516,68 +1513,7 @@ function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, 
     end
 end
 
-function _record_current_mode_inclined!(h5, record::Bool, boundary::AbstractString, k::Int, m::Int, l::Int, mode_index::Base.RefValue{Int}, mode, K_sample::Int)
-    record || return nothing
-    mode_index[] += 1
-    kkey = @sprintf("k_%06d", k)
-    mkey = @sprintf("m_%+06d", m)
-    lkey = @sprintf("l_%04d", l)
-    kgrp = haskey(h5, kkey) ? h5[kkey] : create_group(h5, kkey)
-    mgrp = haskey(kgrp, mkey) ? kgrp[mkey] : create_group(kgrp, mkey)
-    lgrp = haskey(mgrp, lkey) ? mgrp[lkey] : create_group(mgrp, lkey)
-    bgrp = haskey(lgrp, boundary) ? lgrp[boundary] : create_group(lgrp, boundary)
-    bgrp["source"] = "julia"
-    bgrp["mode_index"] = mode_index[]
-    bgrp["boundary"] = boundary
-    bgrp["s"] = boundary == "I" ? -2 : 2
-    bgrp["l"] = l
-    bgrp["m"] = m
-    bgrp["k"] = k
-    bgrp["K_sample"] = get(mode, "K_sample", K_sample)
-    bgrp["Amplitude_re"] = real(get(mode, "Amplitude", 0.0 + 0.0im))
-    bgrp["Amplitude_im"] = imag(get(mode, "Amplitude", 0.0 + 0.0im))
-    bgrp["EnergyFlux"] = get(mode, "EnergyFlux", NaN)
-    bgrp["AngularMomentumFlux"] = get(mode, "AngularMomentumFlux", NaN)
-    bgrp["CarterConstantFlux"] = get(mode, "CarterConstantFlux", NaN)
-    _record_adaptive_levin_metadata!(bgrp, mode)
-    return nothing
-end
 
-function _record_current_mode_generic!(h5, record::Bool, boundary::AbstractString, n::Int, k::Int, m::Int, l::Int, mode_index::Base.RefValue{Int}, mode, N_sample::Int, K_sample::Int)
-    # Counted only when recording (as in the eccentric and inclined recorders): with mode_parallelism the two
-    # boundaries run as tasks and would otherwise race on the shared counter.
-    record || return nothing
-    mode_index[] += 1
-    nkey = @sprintf("n_%06d", n)
-    kkey = @sprintf("k_%+06d", k)
-    mkey = @sprintf("m_%+06d", m)
-    lkey = @sprintf("l_%04d", l)
-    ngrp = haskey(h5, nkey) ? h5[nkey] : create_group(h5, nkey)
-    kgrp = haskey(ngrp, kkey) ? ngrp[kkey] : create_group(ngrp, kkey)
-    mgrp = haskey(kgrp, mkey) ? kgrp[mkey] : create_group(kgrp, mkey)
-    lgrp = haskey(mgrp, lkey) ? mgrp[lkey] : create_group(mgrp, lkey)
-    bgrp = haskey(lgrp, boundary) ? lgrp[boundary] : create_group(lgrp, boundary)
-    bgrp["source"] = "julia"
-    bgrp["mode_index"] = mode_index[]
-    bgrp["boundary"] = boundary
-    bgrp["s"] = boundary == "I" ? -2 : 2
-    bgrp["l"] = l
-    bgrp["m"] = m
-    bgrp["n"] = n
-    bgrp["k"] = k
-    bgrp["N_sample"] = get(mode, "N_sample", N_sample)
-    bgrp["K_sample"] = get(mode, "K_sample", K_sample)
-    bgrp["Amplitude_re"] = real(get(mode, "Amplitude", 0.0 + 0.0im))
-    bgrp["Amplitude_im"] = imag(get(mode, "Amplitude", 0.0 + 0.0im))
-    bgrp["EnergyFlux"] = get(mode, "EnergyFlux", NaN)
-    bgrp["AngularMomentumFlux"] = get(mode, "AngularMomentumFlux", NaN)
-    bgrp["CarterConstantFlux"] = get(mode, "CarterConstantFlux", NaN)
-    for key in ("YInterpolationPoints", "YInterpolationDoublings",
-                "YInterpolationFallback", "YInterpolationSelfCheckError")
-        haskey(mode, key) && (bgrp[key] = mode[key])
-    end
-    return nothing
-end
 
 function _inclined_mode_flux_scoped(scope, a, p, x, l, m, k; K = 16, Kmax = 2^12, sample_tol = 1e-3)
     if x == 1.0 || x == -1.0
@@ -1956,7 +1892,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
 
                 for l in lmin:lmax
                     mode_inf = inc_mode(-2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
-                    _record_current_mode_inclined!(record_h5, record, "I", 0, m, l, mode_index, mode_inf, K)
+                    _record_current_mode!(record_h5, record, "I", mode_index, mode_inf; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
                     shell_m_infinity_energy += 2 * mode_inf["EnergyFlux"]
@@ -1989,7 +1925,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 l_trail = Float64[]
                 for l in lmin:lmax
                     mode_hor = inc_mode(2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
-                    _record_current_mode_inclined!(record_h5, record, "H", 0, m, l, mode_index, mode_hor, K)
+                    _record_current_mode!(record_h5, record, "H", mode_index, mode_hor; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
                     shell_m_horizon_energy += 2 * mode_hor["EnergyFlux"]
@@ -2058,7 +1994,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
             shell_k_energy_last = s == -2 ? shell_k_infinity_energy_last : shell_k_horizon_energy_last,
             l_reached = s == -2 ? l_reached_inf : l_reached_hor, lmax_hit = s == -2 ? lmax_hit_inf : lmax_hit_hor,
             run = walk_run, log_shell = log_shell,
-            record! = (boundary, k, m, l, mode) -> _record_current_mode_inclined!(record_h5, record, boundary, k, m, l, mode_index, mode, K),
+            record! = (boundary, k, m, l, mode) -> _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, k, signed_k = false, K_sample = K),
             resume = rs === nothing ? nothing : s == -2 ? rs.infinity : rs.horizon, ledger_out = ledger_out[s == -2 ? 1 : 2])
         pf_inf = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_inf) : nothing
         pf_hor = mode_parallelism > 1 ? _walk_prefetch_resumed(walk_run, rs === nothing ? nothing : rs.pf_hor) : nothing
@@ -3068,7 +3004,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
         gen_compute_q = (s, l, m, n, k, q, factors) -> gen_compute(s, l, m, n, k, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_flux_scale, factors)
 
         record_mode = (s, l, m, n, k, mode) -> begin
-            _record_current_mode_generic!(record_h5, record, s == -2 ? "I" : "H", n, k, m, l, mode_index, mode, N0, K0)
+            _record_current_mode!(record_h5, record, s == -2 ? "I" : "H", mode_index, mode; l, m, n, k, N_sample = N0, K_sample = K0)
             return nothing
         end
 
