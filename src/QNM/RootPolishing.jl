@@ -1987,7 +1987,6 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         segment::Int=0,
         segment_seed=nothing,
         spin_seed=nothing)
-    _require_qnm_angular_backend()
     selected_convention = _qnm_convention(convention)
     T = _working_type(a, guess)
     aT = T(a)

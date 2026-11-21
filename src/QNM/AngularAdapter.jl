@@ -13,37 +13,10 @@ struct AngularBranchResult{T,C,V,M}
     metadata::M
 end
 
-const _QNM_REQUIRED_ANGULAR_APIS = (:continue_angular_mode,)
-
-# The BigFloat angular spectral matrix is `_big_spectral_matrix` in SpinWeightedSpheroidalHarmonics 1.4.0 and
-# the precision-generic `construct_spectral_matrix` in later versions; both give the same matrix.
-_has_big_spectral_matrix() = isdefined(SpinWeightedSpheroidalHarmonics, :_big_spectral_matrix) ||
-    isdefined(SpinWeightedSpheroidalHarmonics, :construct_spectral_matrix)
-
-# The precision-generic one first: it keeps a ComplexF64 c in ComplexF64.
+# The angular spectral matrix M(c) (quadratic in c) of the near-extremal expansion. `construct_spectral_matrix` is
+# not exported by SpinWeightedSpheroidalHarmonics 1.5; its export is requested (refactor prompt S6).
 _big_angular_spectral_matrix(c, s::Int, m::Int, size::Int) =
-    isdefined(SpinWeightedSpheroidalHarmonics, :construct_spectral_matrix) ?
-        SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, size) :
-        SpinWeightedSpheroidalHarmonics._big_spectral_matrix(c, s, m, size)
-
-function _require_qnm_angular_backend()
-    missing_apis = Any[filter(
-        name -> !isdefined(SpinWeightedSpheroidalHarmonics, name),
-        _QNM_REQUIRED_ANGULAR_APIS)...]
-    _has_big_spectral_matrix() || push!(missing_apis, :construct_spectral_matrix)
-    isempty(missing_apis) && return nothing
-    backend_path = try
-        pathof(SpinWeightedSpheroidalHarmonics)
-    catch caught
-        absorbable(caught) || rethrow()
-        nothing
-    end
-    throw(ArgumentError(
-        "qnm requires SpinWeightedSpheroidalHarmonics >= 1.4. " *
-        "The loaded backend at $(repr(backend_path)) is missing " *
-        "$(join(string.(missing_apis), ", ")). Update SpinWeightedSpheroidalHarmonics " *
-        "and restart Julia before calling qnm."))
-end
+    SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, size)
 
 """
     angular_A_to_lambda(angular_A, c, m)
@@ -88,7 +61,6 @@ end
 # Angular separation constant, eigenvalue and coefficients at c = a*omega on `sheet_id`.
 function angular_branch(mode::QNMMode, a, omega;
         truncation_order::Int=32, sheet_id::Symbol=:qnm_straight_from_spherical)
-    _require_qnm_angular_backend()
     c = a * omega
     real(c) isa Union{Float16,Float32,Float64} || throw(ArgumentError(
         "QNM angular continuation supports Float16/32/64 inputs."))
