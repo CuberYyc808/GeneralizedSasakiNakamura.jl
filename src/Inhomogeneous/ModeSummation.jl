@@ -562,7 +562,7 @@ _result_lmax_hit(result, lmax) = get(result, :lmax_hit_inf, false) || get(result
 _result_kmax_hit(result) = get(result, :kmax_hit_inf, false) || get(result, :kmax_hit_hor, false)
 _result_nmax_hit(result) = get(result, :nmax_hit_inf, false) || get(result, :nmax_hit_hor, false)
 
-# Run run(lmax, kmax, nmax, warn, resume) with the start caps; when a cap came from :auto and the sum hit it, raise
+# Run run(lmax, kmax, nmax, resume) with the start caps; when a cap came from :auto and the sum hit it, raise
 # that cap by half (lmax and kmax at most AUTO_CAP_MAX, nmax at most AUTO_NMAX_MAX) and sum again, at most
 # AUTO_CAP_MAX_RAISES times. Adds the caps to the result.
 #
@@ -583,7 +583,7 @@ function _with_auto_caps(run, caps)
     raises = 0
     can_raise = (L, Kc, Nc, raises) -> auto && raises < AUTO_CAP_MAX_RAISES && ((caps.auto_l && L < AUTO_CAP_MAX) ||
         (caps.auto_k && Kc isa Integer && Kc < AUTO_CAP_MAX) || (caps.auto_n && Nc isa Integer && Nc < AUTO_NMAX_MAX))
-    result = run(L, Kc, Nc, !auto, (prev = nothing, track = can_raise(L, Kc, Nc, raises)))
+    result = run(L, Kc, Nc, (prev = nothing, track = can_raise(L, Kc, Nc, raises)))
     modes_solved = get(result, :modes_new, result.total_modes)
     while auto && raises < AUTO_CAP_MAX_RAISES
         raise_l = caps.auto_l && L < AUTO_CAP_MAX && _result_lmax_hit(result, L)
@@ -594,15 +594,15 @@ function _with_auto_caps(run, caps)
         raise_k && (Kc = min(AUTO_CAP_MAX, ceil(Int, 1.5Kc)))
         raise_n && (Nc = min(AUTO_NMAX_MAX, ceil(Int, 1.5Nc)))
         raises += 1
-        result = run(L, Kc, Nc, false, (prev = get(result, :_resume, nothing), track = can_raise(L, Kc, Nc, raises)))
+        result = run(L, Kc, Nc, (prev = get(result, :_resume, nothing), track = can_raise(L, Kc, Nc, raises)))
         modes_solved += get(result, :modes_new, result.total_modes)
     end
     result = merge(Base.structdiff(result, NamedTuple{(:_resume, :modes_new)}), (modes_solved = modes_solved,))
-    if auto
-        _result_lmax_hit(result, L) && @warn "Mode summation hit lmax = $(L) with modes still above the cutoff after $(raises) automatic raise(s): the l sum is truncated." lmax = L
-        _result_kmax_hit(result) && @warn "Mode summation ran to kmax = $(Kc) without converged k shells after $(raises) automatic raise(s): the k sum may be truncated." kmax = Kc
-        _result_nmax_hit(result) && @warn "Mode summation ran to nmax = $(Nc) without converged n shells after $(raises) automatic raise(s): the n sum may be truncated." nmax = Nc
-    end
+    # Every orbit class, fixed or automatic caps.
+    how = auto ? " after $(raises) automatic raise(s)" : "; pass a larger cap"
+    _result_lmax_hit(result, L) && @warn "Mode summation hit lmax = $(L) with modes still above the cutoff$(how): the l sum is truncated." lmax = L
+    _result_kmax_hit(result) && @warn "Mode summation ran to kmax = $(Kc) without converged k shells$(how): the k sum may be truncated." kmax = Kc
+    _result_nmax_hit(result) && @warn "Mode summation ran to nmax = $(Nc) without converged n shells$(how): the n sum may be truncated." nmax = Nc
     return merge(result, (lmax_used = L, kmax_used = Kc, nmax_used = Nc, lmax_auto = caps.auto_l, kmax_auto = caps.auto_k,
         nmax_auto = caps.auto_n, cap_estimate = caps.estimate, nmax_estimate = caps.n_estimate, cap_status = caps.status,
         cap_raises = raises))
@@ -788,7 +788,7 @@ function circular_mode_summation(a, p; submission = nothing, x=1.0, tol = 1e-8, 
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, nothing)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, _, _, _, resume
+        _with_auto_caps(caps) do L, _, _, resume
             with_submission_operation(scope) do
                 _circular_mode_summation_scoped(scope, a, p; x = x, tol = tol, lmax = L, min_consecutive = min_consecutive, resume = resume)
             end
@@ -1507,7 +1507,7 @@ function eccentric_mode_summation(a, p, e; submission = nothing, x=1.0, N = 64, 
     caps = _auto_caps_start(a, p, e, x, tol, lmax, nothing, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, Nc, warn, resume
+        _with_auto_caps(caps) do L, Kc, Nc, resume
             with_submission_operation(scope) do
                 _eccentric_mode_summation_scoped(scope, a, p, e; x = x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = L, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
@@ -1812,7 +1812,7 @@ function _inclined_branch_shells!(s::Int, ctx, prefetch)
     return (total_energy, total_angular, total_carter, k_reached, l_reached, lmax_hit, near_static_zero, failed_modes, total_modes, state)
 end
 
-function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, mode_abs_floor = 1e-16, threaded_sampling = false, warn_truncation::Bool = true, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
+function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, mode_abs_floor = 1e-16, threaded_sampling = false, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
     lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     tol > 0 || throw(ArgumentError("tol must be positive"))
@@ -2075,12 +2075,6 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
         # A k sum that ran to kmax is truncated when the geometric tail of its last three k shells matters.
         kmax_hit_inf = k_reached_inf === nothing && _tail_hit(_geometric_tail(abs.(Energy_flux_inf[max(1, end - 2):end]), kmax), tol, total_infinity_energy)
         kmax_hit_hor = k_reached_hor === nothing && _tail_hit(_geometric_tail(abs.(Energy_flux_hor[max(1, end - 2):end]), kmax), tol, total_horizon_energy)
-        if warn_truncation && (lmax_hit_inf || lmax_hit_hor)
-            @warn "Inclined mode summation hit lmax = $(lmax) with modes still above the cutoff: the l sum is truncated. Raise lmax." a p x lmax l_reached_inf l_reached_hor lmax_hit_inf lmax_hit_hor
-        end
-        if warn_truncation && (kmax_hit_inf || kmax_hit_hor)
-            @warn "Inclined mode summation ran to kmax = $(kmax) without $(minimum_consecutive + 1) consecutive negligible k shells: the k sum may be truncated. Raise kmax." a p x kmax kmax_hit_inf kmax_hit_hor
-        end
 
         if record
             record_h5["meta/infinity_energy_flux"] = total_infinity_energy
@@ -2155,9 +2149,9 @@ function inclined_mode_summation(a, p, x; submission = nothing, K = 16, K0 = K, 
     caps = _auto_caps_start(a, p, 0.0, x, tol, lmax, kmax)
     scope, owned = ensure_public_submission(submission, a, p, 0.0, x; Nmax, Kmax, stop_requested)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, Nc, warn, resume
+        _with_auto_caps(caps) do L, Kc, Nc, resume
             with_submission_operation(scope) do
-                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, warn_truncation = warn, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
+                _inclined_mode_summation_scoped(scope, a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
         end
     end
@@ -3215,7 +3209,7 @@ function generic_mode_summation(a, p, e, x; submission = nothing, N0 = 64, K0 = 
     caps = _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax)
     scope, owned = ensure_public_submission(submission, a, p, e, x; Nmax, Kmax, stop_requested)
     return _with_public_scope(scope, owned) do
-        _with_auto_caps(caps) do L, Kc, Nc, warn, resume
+        _with_auto_caps(caps) do L, Kc, Nc, resume
             with_submission_operation(scope) do
                 _generic_mode_summation_scoped(scope, a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = L, kmax = Kc, nmax = Nc, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=beta, deep=deep, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, resume = resume)
             end
