@@ -15,6 +15,7 @@
 # ManoSuzukiTakasugiGeneric.
 module ArbitraryPrecisionRoute
 using ...Errors: absorbable
+using ...GeneralizedSasakiNakamura: IN, UP, Mode, GSNRadialFunction, TeukolskyRadialFunction, UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
 
 using ...Coordinates: r_from_rstar, rstar_from_r, horizon_distance_from_rstar
 using ...ConversionFactors
@@ -56,7 +57,6 @@ const HORIZON_SEED_XMAX = 1 // 2
 const INFINITY_SEED_YMAX = 1 // 2
 const MAX_PATCHES = 2000
 
-_root_module() = parentmodule(parentmodule(@__MODULE__))
 _isem_module() = parentmodule(@__MODULE__)
 
 _real_type(::GSNParameters{R}) where {R} = R
@@ -988,12 +988,11 @@ end
 # ---------------------------------------------------------------------------------------------
 function _route_mode(route::ArbitraryPrecisionRadialRoute)
     p = route.params
-    return getfield(_root_module(), :Mode)(p.s, p.l, p.m, p.a, p.omega, p.lambda)
+    return Mode(p.s, p.l, p.m, p.a, p.omega, p.lambda)
 end
 
 function _route_boundary_condition(route::ArbitraryPrecisionRadialRoute)
-    root = _root_module()
-    return route.branch == :IN ? getfield(root, :IN) : getfield(root, :UP)
+    return route.branch == :IN ? IN : UP
 end
 
 # r* -> (X, dX/dr*, 0) in the floating type of the route.
@@ -1016,14 +1015,13 @@ end
 
 function gsn_radial_function(route::ArbitraryPrecisionRadialRoute)
     p = route.params
-    root = _root_module()
     C = _complex_type(p)
     rsmp = rstar_from_r(p.a, r_from_x(p, route.match_x))
     metadata = merge(route.diagnostics, (
         xm = Float64(route.match_x), tol = Float64(route.tolerance), ordinary_order = route.order,
         unit_normalization_available = true, normalization = :unit_gsn_transmission,
     ))
-    return getfield(root, :GSNRadialFunction)(
+    return GSNRadialFunction(
         _route_mode(route),
         _route_boundary_condition(route),
         missing,
@@ -1037,7 +1035,7 @@ function gsn_radial_function(route::ArbitraryPrecisionRadialRoute)
         metadata,
         missing,
         GSNStateEvaluator(route),
-        getfield(root, :UNIT_GSN_TRANS),
+        UNIT_GSN_TRANS,
         "ISEM",
     )
 end
@@ -1099,10 +1097,9 @@ end
 
 function teukolsky_radial_function(route::ArbitraryPrecisionRadialRoute; normalize=:teukolsky)
     p = route.params
-    root = _root_module()
     factors = _teukolsky_amplitude_factors(route)
     normalize in (:teukolsky, :gsn) || throw(ArgumentError("normalize must be :teukolsky or :gsn."))
-    convention = getfield(root, normalize == :teukolsky ? :UNIT_TEUKOLSKY_TRANS : :UNIT_GSN_TRANS)
+    convention = normalize == :teukolsky ? UNIT_TEUKOLSKY_TRANS : UNIT_GSN_TRANS
     # The converter precomputes its constants, whose combinations cancel at large frequency, so it is
     # built at the working precision like everything the evaluators use.
     pair, trans, incidence, reflection = _at_working_precision(route) do
@@ -1113,7 +1110,7 @@ function teukolsky_radial_function(route::ArbitraryPrecisionRadialRoute; normali
     end
     solution = TeukolskySolution(
         TeukolskyTupleEvaluator(p, pair, d2R), pair, TeukolskyRadialEvaluator(pair))
-    return getfield(root, :TeukolskyRadialFunction)(
+    return TeukolskyRadialFunction(
         _route_mode(route), _route_boundary_condition(route), trans, incidence, reflection, missing,
         gsn_radial_function(route), solution, convention,
     )
@@ -1123,7 +1120,6 @@ function y_radial_function(route::ArbitraryPrecisionRadialRoute)
     p = route.params
     (p.s == -2 && route.branch == :IN) || (p.s == 2 && route.branch == :UP) ||
         error("ISEM Y transformation supports only s = -2 with IN and s = +2 with UP.")
-    root = _root_module()
     isem = _isem_module()
     factors = _teukolsky_amplitude_factors(route)
     amplitudes = (
@@ -1141,7 +1137,7 @@ function y_radial_function(route::ArbitraryPrecisionRadialRoute)
     yscalar = r -> ysoln(r)[1]
     return getfield(isem, :YRadialFunction)(
         _route_mode(route), _route_boundary_condition(route), amplitudes.trans, amplitudes.incidence,
-        amplitudes.reflection, missing, missing, xsoln, yscalar, ysoln, getfield(root, :UNIT_TEUKOLSKY_TRANS),
+        amplitudes.reflection, missing, missing, xsoln, yscalar, ysoln, UNIT_TEUKOLSKY_TRANS,
     )
 end
 

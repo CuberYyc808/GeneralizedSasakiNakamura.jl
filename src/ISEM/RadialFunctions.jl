@@ -1,5 +1,6 @@
 module RadialFunctions
 using ...Errors: absorbable
+using ...GeneralizedSasakiNakamura: IN, UP, Mode, GSNRadialFunction, TeukolskyRadialFunction, UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
 
 using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
@@ -500,18 +501,13 @@ end
 end
 
 function _route_boundary_condition(route::Route)
-    root = _root_module()
-    route.branch == :IN && return getfield(root, :IN)
-    route.branch == :UP && return getfield(root, :UP)
+    route.branch == :IN && return IN
+    route.branch == :UP && return UP
     throw(ArgumentError("ISEM route branch must be :IN or :UP."))
 end
 
-function _root_module()
-    return parentmodule(parentmodule(@__MODULE__))
-end
-
 function _route_mode(route::Route)
-    mode_type = getfield(_root_module(), :Mode)
+    mode_type = Mode
     return mode_type(
         route.params.s, route.params.l, route.params.m, route.params.a, route.params.omega, route.params.lambda,
     )
@@ -629,7 +625,6 @@ end
 # representable and the route diagnostics in the metadata.
 function gsn_radial_function(route::Route)
     controls = route.controls
-    root = _root_module()
     plan = route_plan_of(route)
     threshold_log = any(truncation -> truncation.reason == :threshold_log_companion, route_truncations(route))
     unit_pair = _try_unit_pair(route)
@@ -688,7 +683,7 @@ function gsn_radial_function(route::Route)
             :unit_gsn_transmission : :scaled_gsn_transmission,
         _route_certificate(route)...,
     )
-    return getfield(root, :GSNRadialFunction)(
+    return GSNRadialFunction(
         _route_mode(route),
         _route_boundary_condition(route),
         missing,
@@ -702,7 +697,7 @@ function gsn_radial_function(route::Route)
         metadata,
         missing,
         solution,
-        getfield(root, :UNIT_GSN_TRANS),
+        UNIT_GSN_TRANS,
         "ISEM",
     )
 end
@@ -733,12 +728,11 @@ function _teukolsky_amplitude_factors(route::Route)
 end
 
 function _normalization_scale_from_factors(route::Route, normalize, factors)
-    root = _root_module()
     if normalize == :teukolsky
         return route.solution_scale * factors.trans,
-            getfield(root, :UNIT_TEUKOLSKY_TRANS)
+            UNIT_TEUKOLSKY_TRANS
     elseif normalize == :gsn
-        return route.solution_scale, getfield(root, :UNIT_GSN_TRANS)
+        return route.solution_scale, UNIT_GSN_TRANS
     end
     throw(ArgumentError("normalize must be :teukolsky or :gsn."))
 end
@@ -1084,11 +1078,10 @@ end
 # Wrap a route as the package's TeukolskyRadialFunction, normalised to unit
 # Teukolsky (:teukolsky) or unit GSN (:gsn) transmission.
 function teukolsky_radial_function(route::Route; normalize=:teukolsky)
-    root = _root_module()
     factors = _teukolsky_amplitude_factors(route)
     scale, convention = _normalization_scale_from_factors(route, normalize, factors)
     solution = route_teukolsky_solution(route; normalize=normalize, scale=scale)
-    return getfield(root, :TeukolskyRadialFunction)(
+    return TeukolskyRadialFunction(
         _route_mode(route), _route_boundary_condition(route), route.solution_scale * factors.trans / scale,
         route.incidence * factors.incidence / scale, route.reflection * factors.reflection / scale, missing,
         gsn_radial_function(route), solution, convention,
@@ -1532,7 +1525,7 @@ function _y_radial_function(route::Route, amps, ysoln)
     yscalar = r -> ysoln(r)[1]
     return y_type(
         _route_mode(route), _route_boundary_condition(route), amps.trans, amps.incidence, amps.reflection, missing,
-        missing, xsoln, yscalar, ysoln, getfield(_root_module(), :UNIT_TEUKOLSKY_TRANS),
+        missing, xsoln, yscalar, ysoln, UNIT_TEUKOLSKY_TRANS,
     )
 end
 

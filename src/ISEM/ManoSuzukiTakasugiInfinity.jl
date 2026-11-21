@@ -6,6 +6,8 @@ using SpecialFunctions: expint, gamma, loggamma, polygamma
 using StaticArrays: MVector, SVector
 
 using ...Transformation: eta_coefficient
+using ...ConversionFactors: ConversionFactors
+using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
 using ..CoefficientTables: CoefficientSet
 using ..Parameters: GSNParameters
 using ..LocalSolutionAtZero: is_horizon_threshold
@@ -79,27 +81,16 @@ function _isem_module()
     return parentmodule(@__MODULE__)
 end
 
-function _root_module()
-    return parentmodule(_isem_module())
-end
-
 function _teukolsky_transformation_module()
     return getfield(_isem_module(), :TeukolskyTransformation)
 end
 
-function _conversion_module()
-    root = _root_module()
-    isdefined(root, :ConversionFactors) ||
-        error("GeneralizedSasakiNakamura.ConversionFactors is not loaded.")
-    return getfield(root, :ConversionFactors)
-end
 
 # Closure r -> matrix converting the GSN function (X, dX/dr*) to the Teukolsky
 # radial function.
 function _teukolsky_from_gsn_matrix(params)
-    solutions = getfield(_root_module(), :Solutions)
-    matrix_function = getfield(solutions, :Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix)
-    return r -> matrix_function(params.s, params.m, params.a, params.omega, params.lambda, r)
+    return r -> Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix(
+        params.s, params.m, params.a, params.omega, params.lambda, r)
 end
 
 # r and dx/dr* for the compact coordinate x of the ISEM GSN solver.
@@ -139,7 +130,7 @@ function _pin_unit_scale(params)
         params.kappa^(2im * horizon_p + 2 * params.s) *
         exp(1im * horizon_p * r_plus),
     )
-    conversion = _conversion_module()
+    conversion = ConversionFactors
     gsn_trans = ComplexF64(getfield(conversion, :Btrans)(params.s, params.m, params.a, params.omega, params.lambda))
     scale = gsn_trans / p_trans
     _finite_complex(scale) && !iszero(scale) ||
@@ -3390,7 +3381,7 @@ _amp_ratio_errors(logs, branch::Symbol) = branch == :IN ?
 
 # Converts Teukolsky amplitude ratios to GSN ones with the ConversionFactors amplitudes.
 function _amp_gsn_pair(p::ManoSuzukiTakasugiParams, branch::Symbol, teuk)
-    cf = _conversion_module()
+    cf = ConversionFactors
     trans, inc, ref = if branch == :IN
         (
             getfield(cf, :Btrans)(p.s, p.m, p.a, p.omega, p.lambda),
@@ -4116,7 +4107,7 @@ end
 # Log factor taking the raw MST series of `branch` to unit normalization: the raw sum
 # times f3 or f4 over the conversion amplitude Binc or Bref.
 function _raw_unit_logfactor(data::ManoSuzukiTakasugiSeriesData, params, branch::Symbol, raw=nothing)
-    cf = _conversion_module()
+    cf = ConversionFactors
     f3, f4 = _legacy_factors(params)
     raw, legacy, conversion = if branch == :in
         raw = raw === nothing ? _incoming_raw_factor(data) : raw
@@ -4855,7 +4846,7 @@ end
 
 # Log factor from the Teukolsky transmission amplitude to the GSN one (Btrans or Ctrans).
 function _physical_transmission_factor(result, params, branch::Symbol)
-    conversion = _conversion_module()
+    conversion = ConversionFactors
     factor = branch == :IN ?
         getfield(conversion, :Btrans)(
             params.s, params.m, params.a, params.omega, params.lambda) :

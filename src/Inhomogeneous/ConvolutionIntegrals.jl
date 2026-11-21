@@ -1,5 +1,6 @@
 module ConvolutionIntegrals
 using ..Errors: absorbable
+using ..GeneralizedSasakiNakamura: Teukolsky_radial, IN, UP
 
 using LinearAlgebra
 using SpinWeightedSpheroidalHarmonics
@@ -385,12 +386,10 @@ function _isem_wronskian_check(s, l, m, a, omega, radii; route = nothing)
     (isreal(omega) && 0 < abs(omega) <= ISEM_WRONSKIAN_CHECK_MAX_OMEGA && l >= ISEM_WRONSKIAN_CHECK_MIN_L) || return nothing
     control = _inhomogeneous_small_frequency_expansion_control(l, a, omega)
     sfe = control === :auto ? nothing : control
-    root = parentmodule(@__MODULE__)
-    teukolsky_radial = getfield(root, :Teukolsky_radial)
-    solve(bc) = teukolsky_radial(s, l, m, a, real(omega), bc; method = "ISEM", sfe = sfe)
+    solve(bc) = Teukolsky_radial(s, l, m, a, real(omega), bc; method = "ISEM", sfe = sfe)
     own = route === nothing ? nothing : ISEM.teukolsky_radial_function(route)
-    Rin = own !== nothing && s == -2 ? own : solve(getfield(root, :IN))
-    Rup = own !== nothing && s == 2 ? own : solve(getfield(root, :UP))
+    Rin = own !== nothing && s == -2 ? own : solve(IN)
+    Rup = own !== nothing && s == 2 ? own : solve(UP)
     ws = ComplexF64[]
     for r in radii
         w = try

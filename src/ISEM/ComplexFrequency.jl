@@ -1,5 +1,6 @@
 module ComplexFrequency
 using ...Errors: absorbable
+using ...GeneralizedSasakiNakamura: IN, UP, Mode, GSNRadialFunction, TeukolskyRadialFunction, UNIT_GSN_TRANS, UNIT_TEUKOLSKY_TRANS
 
 using Logging: NullLogger, with_logger
 import Logging
@@ -270,7 +271,6 @@ function _isem_module()
     return parentmodule(@__MODULE__)
 end
 
-_root_module() = parentmodule(_isem_module())
 
 function _matching_transformation_module()
     return getfield(_isem_module(), :TeukolskyTransformation)
@@ -279,14 +279,13 @@ end
 function _normalize_branch(branch)
     branch === :IN && return :IN
     branch === :UP && return :UP
-    root = _root_module()
-    branch == getfield(root, :IN) && return :IN
-    branch == getfield(root, :UP) && return :UP
+    branch == IN && return :IN
+    branch == UP && return :UP
     throw(ArgumentError("ISEM complex route supports only IN and UP."))
 end
 
 function _boundary_condition(branch::Symbol)
-    return getfield(_root_module(), branch)
+    return branch === :IN ? IN : branch === :UP ? UP : throw(ArgumentError("branch must be :IN or :UP"))
 end
 
 _metadata_value(metadata, name::Symbol, default) =
@@ -3313,7 +3312,6 @@ end
 # numerical metadata mirrors the real-frequency fields (regimes, orders, patch counts)
 # and adds the complex backend's retry, fallback and MST diagnostics.
 function _complex_gsn_wrapper(route::ComplexRoute)
-    root = _root_module()
     p = route.params
     backend = _metadata_value(
         route.metadata, :backend, :p_equation_complex_contour)
@@ -3425,8 +3423,8 @@ function _complex_gsn_wrapper(route::ComplexRoute)
             route.metadata, :mst_anchor_tail, missing), derivative_coordinate=:rstar,
             stored_normalization=:unit_gsn_transmission, _complex_route_certificate(route)...,
     )
-    mode = getfield(root, :Mode)(p.s, p.l, p.m, p.a, p.omega, p.lambda)
-    return getfield(root, :GSNRadialFunction)(
+    mode = Mode(p.s, p.l, p.m, p.a, p.omega, p.lambda)
+    return GSNRadialFunction(
         mode,
         _boundary_condition(route.branch),
         missing,
@@ -3440,7 +3438,7 @@ function _complex_gsn_wrapper(route::ComplexRoute)
         numerical_metadata,
         missing,
         complex_gsn_solution_rstar(route),
-        getfield(root, :UNIT_GSN_TRANS),
+        UNIT_GSN_TRANS,
         "ISEM",
     )
 end
@@ -3523,14 +3521,13 @@ function complex_gsn_radial_function(route::ComplexRoute)
 end
 
 function _teukolsky_scale(route::ComplexRoute, normalize)
-    root = _root_module()
     if normalize == :teukolsky
         scale = route.teukolsky_transmission
         _finite_complex(scale) && !iszero(scale) || throw(ArgumentError(
             "unit-Teukolsky normalization requires finite nonzero transmission."))
-        return scale, getfield(root, :UNIT_TEUKOLSKY_TRANS)
+        return scale, UNIT_TEUKOLSKY_TRANS
     elseif normalize == :gsn
-        return one(route.transmission), getfield(root, :UNIT_GSN_TRANS)
+        return one(route.transmission), UNIT_GSN_TRANS
     end
     throw(ArgumentError("normalize must be :teukolsky or :gsn."))
 end
@@ -3550,14 +3547,13 @@ function route_teukolsky_solution(route::ComplexRoute; normalize=:teukolsky, sca
 end
 
 function teukolsky_radial_function(route::ComplexRoute; normalize=:teukolsky)
-    root = _root_module()
     scale, convention = _teukolsky_scale(route, normalize)
     solution = route_teukolsky_solution(
         route; normalize, scale)
     p = route.params
-    mode = getfield(root, :Mode)(
+    mode = Mode(
         p.s, p.l, p.m, p.a, p.omega, p.lambda)
-    return getfield(root, :TeukolskyRadialFunction)(
+    return TeukolskyRadialFunction(
         mode, _boundary_condition(route.branch), route.teukolsky_transmission / scale,
         route.teukolsky_incidence / scale, route.teukolsky_reflection / scale, route.p_solution,
         complex_gsn_radial_function(route), solution, convention,
@@ -3598,7 +3594,6 @@ end
 function y_radial_function(route::ComplexRoute)
     _check_y_branch(route)
     certificate = _complex_route_certificate(route)
-    root = _root_module()
     isem = _isem_module()
     y_type = getfield(isem, :YRadialFunction)
     amps = _y_amplitudes(route)
@@ -3611,12 +3606,12 @@ function y_radial_function(route::ComplexRoute)
     x_solution = r -> x_state(rstar_from_r(route.params.a, r))[1]
     y_scalar = r -> y_solution(r)[1]
     p = route.params
-    mode = getfield(root, :Mode)(
+    mode = Mode(
         p.s, p.l, p.m, p.a, p.omega, p.lambda)
     p_solution = route.p_solution isa Function ? route.p_solution : missing
     return y_type(
         mode, _boundary_condition(route.branch), amps.trans, amps.incidence, amps.reflection, p_solution, missing,
-        x_solution, y_scalar, y_solution, getfield(root, :UNIT_TEUKOLSKY_TRANS),
+        x_solution, y_scalar, y_solution, UNIT_TEUKOLSKY_TRANS,
     )
 end
 
