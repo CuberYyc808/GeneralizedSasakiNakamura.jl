@@ -75,4 +75,15 @@ else
             @test isequal(actual,expected)
         end
     end
+    @testset "mode_parallelism equals serial" begin
+        totals(F) = (F.infinity_energy_flux,F.infinity_angular_momentum_flux,
+            F.infinity_carter_constant_flux,F.horizon_energy_flux,
+            F.horizon_angular_momentum_flux,F.horizon_carter_constant_flux,F.total_modes)
+        for orbit in ((.5,10.,.2,1.),(.5,10.,0.,.7),(.5,10.,.2,.7))
+            serial = totals(Teukolsky_pointparticle_flux(orbit...;tol=1e-5))
+            parallel = totals(Teukolsky_pointparticle_flux(orbit...;tol=1e-5,
+                mode_parallelism=Threads.nthreads()))
+            @test isequal(parallel,serial)
+        end
+    end
 end
