@@ -616,7 +616,7 @@ end
             kappa = sqrt((1 - a) * (1 + a))
             omega = (2a - im * kappa) / (2 * (1 + kappa))
             p = D.gsn_parameters(s, 2, 2, a, omega)
-            A, B = OPE.endpoint_ab_series(CR._complex_horizon_closed_form(D.gsn_coefficients(p)), :H, 12)
+            A, B = OPE.endpoint_ab_series(CR._complex_horizon_closed_form(D.gsn_coefficients(p), 12), :H, 12)
             Cb = Complex{BigFloat}
             ab = BigFloat(a)
             kb = sqrt((1 - ab) * (1 + ab))
