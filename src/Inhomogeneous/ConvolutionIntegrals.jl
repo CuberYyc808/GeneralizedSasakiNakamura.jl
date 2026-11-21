@@ -1598,99 +1598,12 @@ function convolution_integral_generic_levin_isem(KG_master::Dict, s, l, m, n, k,
 end
 
 function generic_mode_flux_from_master(KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache=nothing, geometry_owner=nothing)
-    if cache !== nothing
-        cache = _submission_public_cache(cache, geometry_owner, :generic)
-        return generic_mode_flux_from_master_cached!(cache, KG_master, s, l, m, n, k;
-            N0=N0, K0=K0, Nmax=Nmax, Kmax=Kmax, sample_tol=sample_tol, tol=tol,
-            max_flux=max_flux, mode_abs_floor=mode_abs_floor,
-            threaded_sampling=threaded_sampling)
-    end
-    geometry_owner === nothing || check_submission_geometry(geometry_owner, KG_master)
-    ispow2(N0) || throw(ArgumentError("N0 must be a power of 2"))
-    ispow2(K0) || throw(ArgumentError("K0 must be a power of 2"))
-    ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
-    ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
-    N0 <= Nmax || throw(ArgumentError("N0 must not exceed Nmax"))
-    K0 <= Kmax || throw(ArgumentError("K0 must not exceed Kmax"))
-
-    Frequencies = KG_master["Frequencies"]
-    Γ = Frequencies["ϒt"]
-    ϒr = Frequencies["ϒr"]
-    ϒθ = Frequencies["ϒθ"]
-    ϒφ = Frequencies["ϒϕ"]
-    a = KG_master["a"]
-    ω = (m * ϒφ + n * ϒr + k * ϒθ) / Γ
-    if _skip_radiative_mode(s, a, m, ω)
-        res = _zero_radiative_mode(ω, KG_master; reason = s == -2 ? "infinity_static_frequency" : "horizon_static_frequency")
-        res["N_sample_requested"] = N0
-        res["K_sample_requested"] = K0
-        res["N_sample"] = N0
-        res["K_sample"] = K0
-        return res
-    end
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
-
-    N = N0
-    K = K0
-    KG_samp = _generic_submission_trap_sample(geometry_owner, KG_master, N, K)
-    Ysamp = if s == 2
-        threaded_sampling ? GridSampling.y_sample_p2_isem_threaded(Ysol, KG_samp) : GridSampling.y_sample_p2_isem(Ysol, KG_samp)
-    else
-        threaded_sampling ? GridSampling.y_sample_m2_isem_threaded(Ysol, KG_samp) : GridSampling.y_sample_m2_isem(Ysol, KG_samp)
-    end
-    SHsamp = threaded_sampling ? GridSampling.swsh_sample_threaded(SH, KG_samp) : GridSampling.swsh_sample(SH, KG_samp)
-    res = _generic_flux_from_sample(KG_samp, Ysamp, SHsamp, s, l, m, n, k, a, ω, ϒθ)
-    flux_scale = max(max_flux, eps(Float64))
-    effective_sample_tol = min(sample_tol, 3.0 * sqrt(tol))
-    min_stop_N = _radial_phase_min_sample(KG_master, ω, m, n,
-        _eccentric_fourier_min_sample(min(max(4N0, 256), Nmax), Nmax, n), Nmax)
-    min_stop_K = min(max(4K0, 64), Kmax)
-    while N < Nmax || K < Kmax
-        N2 = min(2N, Nmax)
-        K2 = min(2K, Kmax)
-        next_sample = _generic_submission_trap_sample(geometry_owner, KG_master, N2, K2)
-        next_Ysamp = threaded_sampling ? GridSampling.refine_generic_y_sample_threaded(Ysol, Ysamp, next_sample) : GridSampling.refine_generic_y_sample(Ysol, Ysamp, next_sample)
-        next_SHsamp = threaded_sampling ? GridSampling.refine_generic_swsh_sample_threaded(SH, SHsamp, next_sample) : GridSampling.refine_generic_swsh_sample(SH, SHsamp, next_sample)
-        res2 = _generic_flux_from_sample(next_sample, next_Ysamp, next_SHsamp, s, l, m, n, k, a, ω, ϒθ)
-        N = N2
-        K = K2
-        excess = abs(res2["EnergyFlux"]) / flux_scale
-        factor = excess <= 1.0 ? 1.0 : min(sqrt(excess), 50.0)
-        low_flux_cutoff = _low_flux_cutoff(max_flux, tol)
-        relE = _relative_energy_change(res2["EnergyFlux"], res["EnergyFlux"])
-        # a mode is negligible only when two consecutive refinement levels are below the floor
-        low_flux_done = mode_abs_floor > 0.0 && abs(res2["EnergyFlux"]) < mode_abs_floor && abs(res["EnergyFlux"]) < mode_abs_floor
-        significant_for_alias = abs(res2["EnergyFlux"]) > low_flux_cutoff
-        allow_stop = (N >= min_stop_N && K >= min_stop_K) || !significant_for_alias
-        has_flux_reference = max_flux > 100 * eps(Float64)
-        suspect_min_N = has_flux_reference && !low_flux_done ? _suspect_min_sample(min_stop_N, Nmax, excess, 1024, 2048, 4096) : min_stop_N
-        suspect_min_K = has_flux_reference && !low_flux_done ? _suspect_min_sample(min_stop_K, Kmax, excess, 256, 512, 512) : min_stop_K
-        suspect_needs_extra = has_flux_reference && !low_flux_done && (N < suspect_min_N || K < suspect_min_K)
-        if relE == 0.0
-            KG_samp = next_sample
-            Ysamp = next_Ysamp
-            SHsamp = next_SHsamp
-            res = res2
-            if allow_stop && !suspect_needs_extra
-                break
-            end
-            continue
-        end
-        KG_samp = next_sample
-        Ysamp = next_Ysamp
-        SHsamp = next_SHsamp
-        res = res2
-        if allow_stop && !suspect_needs_extra && (factor * relE <= effective_sample_tol || (abs(res2["EnergyFlux"]) < low_flux_cutoff && abs(res["EnergyFlux"]) < low_flux_cutoff) || low_flux_done)
-            break
-        end
-    end
-
-    res["N_sample_requested"] = N0
-    res["K_sample_requested"] = K0
-    res["N_sample"] = N
-    res["K_sample"] = K
-    return res
+    # A call without a submission gets a fresh mode cache owned by this call (released with it).
+    cache = cache === nothing ? GenericM2FluxCache() : _submission_public_cache(cache, geometry_owner, :generic)
+    return generic_mode_flux_from_master_cached!(cache, KG_master, s, l, m, n, k;
+        N0=N0, K0=K0, Nmax=Nmax, Kmax=Kmax, sample_tol=sample_tol, tol=tol,
+        max_flux=max_flux, mode_abs_floor=mode_abs_floor,
+        threaded_sampling=threaded_sampling)
 end
 
 # Trapezoidal rules on [0, pi] (1D) and [0, pi]^2 (2D) with uniform grids.

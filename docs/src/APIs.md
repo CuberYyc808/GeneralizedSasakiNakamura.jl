@@ -461,7 +461,6 @@ Keywords:
 | `info` | `false` | no effect; kept for compatibility |
 | `record` | `false` | `true` writes every evaluated mode to an HDF5 file (see [HDF5 Mode Records](@ref)) |
 | `record_path` | `nothing` | optional HDF5 output path |
-| `fast` | `true` | `false` turns `tail_levin` off and computes generic-orbit modes without reusing cached orbit samples |
 
 It accepts stable bound orbits and marginally stable (critical) bound circular orbits, as classified by `KerrGeodesics`; for other parameters it warns and returns `nothing`.
 
