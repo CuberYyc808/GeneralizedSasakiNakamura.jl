@@ -35,6 +35,25 @@ const POLE_EPS = 1e-7
 # pi and KerrGeodesics gives the midpoint; the flux is the x -> 0 limit, in which the step has zero width, so a node on
 # a pass takes the side inside [0, pi] (q -> 2k pi from above: + pi/2; q -> (2k + 1) pi from below: - pi/2; the
 # opposite for x = -0.0).
+
+# Horizon factors of the s = +2 point-particle source: kappa = omega - m Omega_H, eta (Teukolsky-Starobinsky
+# combination at r_+) and the GSN conversion factor, for the Kerr spin a, azimuthal number m, frequency omega,
+# eigenvalue lambda and outer horizon rp.
+function _plus2_source_factors(a, m, ω, λ, rp)
+    κ = ω - a * m / (2 * rp)
+    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
+    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
+    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
+    c3 = -24im * a^3 * (a * ω - m) - 24 * a^2
+    c4 = 12 * a^4
+    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
+    factor = 2 * sqrt(2) * rp^(3 / 2) * (((4 * ω) * (im - 4 * ω) - a * m * (im - 8 * ω) - a^2 * (m^2 + 2im * ω - 4 * ω^2)) *
+        rp^2 + a^2 * (im - 4 * ω) * (a * m - 2 * ω) * rp) / (2 * rp^3 * (24 + 10 * λ + λ^2 + 12im * ω) -
+        rp^2 * (8im * a * m * (11 + 2 * λ + 6im * ω) + a^2 * (24 + 24 * m^2 + 10 * λ + λ^2 - 28im * ω - 16im * λ * ω +
+        48 * ω^2)) + 8im * a^3 * rp * (m * (7 + λ - 6im * ω) - a * ω * (4 + λ)) + 12 * a^5 * ω * (a * ω - 3 * m))
+    return κ, η, factor
+end
+
 function polar_motion(KG::Dict, qs; phases = orbit_phases(KG))
     m = kerr_geo_polar_motion(phases, qs)
     theta = clamp.(m.theta, POLE_EPS, π - POLE_EPS)
@@ -1165,17 +1184,7 @@ end
         Xv[i] = X[i]
     end
 
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = -24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2 * sqrt(2) * rp^(3 / 2) * (((4 * ω) * (im - 4 * ω) - a * m * (im - 8 * ω) - a^2 * (m^2 + 2im * ω - 4 * ω^2)) * rp^2 +
-        a^2 * (im - 4 * ω) * (a * m - 2 * ω) * rp) / (2 * rp^3 * (24 + 10 * λ + λ^2 + 12im * ω) -
-        rp^2 * (8im * a * m * (11 + 2 * λ + 6im * ω) + a^2 * (24 + 24 * m^2 + 10 * λ + λ^2 - 28im * ω - 16im * λ * ω + 48 * ω^2)) +
-        8im * a^3 * rp * (m * (7 + λ - 6im * ω) - a * ω * (4 + λ)) + 12 * a^5 * ω * (a * ω - 3 * m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
     Xi = Float64(m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0)
     prefactor = -im * π * factor * η * exp(im * Xi) / (Γ * κ * Cinc)
 
@@ -1630,17 +1639,7 @@ function integrand_generic_sample_p2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int6
     # --------------------------
     Jlmnk = (Jpp_grid .+ Jpm_grid .+ Jmp_grid .+ Jmm_grid) ./ (4 .* π .^2)
 
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
 
     Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
 
@@ -2040,17 +2039,7 @@ function integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n::Int64, k
     Jmp_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mp_grid .+ Wmm_grid .* Mp_sq) ./ (4 .* π .^2)
     Jmm_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mm_grid .+ Wmm_grid .* Mm_sq) ./ (4 .* π .^2)
 
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
     Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
     prefactor = .- im .* π .* factor .* η .* exp(im * Xi) ./ (Γ .* κ .* Cinc)
 
@@ -2364,17 +2353,7 @@ function integrand_eccentric_sample_cheby_p2(KG_samp, Y_samp, SH, n::Int64)
     Jp = (Wll .* Lp_sq .+ Wlm .* Lp .* Mp .+ Wmm .* Mp_sq) ./ (2.0pi)
     Jm = (Wll .* Lm_sq .+ Wlm .* Lm .* Mm .+ Wmm .* Mm_sq) ./ (2.0pi)
 
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
     Xi = m*(Δφr_func(qr0) - qφ0) - ω*(Δtr_func(qr0) - qt0) - n*qr0 
 
     prefactor = - im * π * factor * η * exp(im * Xi) / (Γ * Cinc * κ)
@@ -2662,17 +2641,7 @@ function integrand_inclined_sample_p2(KG_samp, Y_dic, SH_samp, k::Int64)
     # 10. Final Phase Correction and Result
     # --------------------------
     Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0  # No radial terms
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
 
     return .- im .* π .* η .* Jlmk .* exp.(im .* Xi) .* factor ./ (Γ .* Cinc .* κ)
 end
@@ -2963,17 +2932,7 @@ function integrand_inclined_sample_cheby_p2(KG_samp, Y_dic, SH_samp, k::Int64)
     # --------------------------
     # 10. Final Phase Correction and Result
     # --------------------------
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
     Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0 
     prefactor = .- im .* π .* η .* exp(im * Xi) .* factor ./ (Γ .* Cinc .* κ)
 

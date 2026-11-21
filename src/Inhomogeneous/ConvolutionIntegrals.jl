@@ -2094,17 +2094,7 @@ function convolution_integral_circular_equatorial_isem(a, p, s, l, m; x=1.0, tra
         L = (E * (r2 + a^2) - a * Lz) / Δ
         M = - im * sinθ * (a*E - Lz / (sinθ^2))
         J = Wll*L^2 + Wlm*L*M + Wmm*M^2
-        κ = ω - a * m / (2 * rp)
-        c0 = 24 + 12im * ω + A * (10 + A) - 12 * a * ω * (a * ω - m)
-        c1 = -32im * a * m - 8im * a * m * A + 8im * a^2 * ω * (1 + A)
-        c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-        c3 = -24im * a^3 * (a * ω - m) - 24 * a^2
-        c4 = 12 * a^4
-        η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-        factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2 +
-            a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*A+A^2+12im*ω)-rp^2*(8im*a*m*(11 +
-            2*A+6im*ω)+a^2*(24+24*m^2+10*A+A^2-28im*ω-16im*A*ω+48*ω^2))+8im*a^3*rp*(m *
-            (7+A-6im*ω)-a*ω*(4+A))+12*a^5*ω*(a*ω-3*m))
+        κ, η, factor = GridSampling._plus2_source_factors(a, m, ω, A, rp)
         ϵ0 = sqrt(1 - a^2) / (4 * rp)
         energy_factor = ω / (κ * (2 * rp)^3 * (κ^2 + 4 * ϵ0^2) * 64pi)
         integral = - im * π * factor * J * η / (κ * GridSampling._isem_gsn_incidence_amplitude(Y_soln) * Γ)
@@ -2570,17 +2560,7 @@ function _eccentric_p2_mode(KG::Dict, Ysol, SH, a, ω, m::Int, n::Int)
     term4 = 2im * a * S1
     term5 = -1im * a * L2 * S0
     term_M = - im * (a*E - Lz)
-    κ = ω - a * m / (2 * rp)
-    c0 = 24 + 12im * ω + λ * (10 + λ) - 12 * a * ω * (a * ω - m)
-    c1 = -32im * a * m - 8im * a * m * λ + 8im * a^2 * ω * (1 + λ)
-    c2 = 12 * a^2 - 24im * a * m - 24 * a^2 * m^2 + 24im * a^2 * ω + 48 * a^3 * m * ω - 24 * a^4 * ω^2
-    c3 = - 24im * a^3 * (a * ω - m) - 24 * a^2
-    c4 = 12 * a^4
-    η = c0 + c1 / rp + c2 / rp^2 + c3 / rp^3 + c4 / rp^4
-    factor = 2*sqrt(2)*rp^(3/2)*(((4*ω)*(im-4*ω)-a*m*(im-8*ω)-a^2*(m^2+2im*ω-4*ω^2))*rp^2
-            +a^2*(im-4*ω)*(a*m-2*ω)*rp)/(2*rp^3*(24+10*λ+λ^2+12im*ω)-rp^2*(8im*a*m*(11
-            +2*λ+6im*ω)+a^2*(24+24*m^2+10*λ+λ^2-28im*ω-16im*λ*ω+48*ω^2))+8im*a^3*rp*(m
-            *(7+λ-6im*ω)-a*ω*(4+λ))+12*a^5*ω*(a*ω-3*m))
+    κ, η, factor = GridSampling._plus2_source_factors(a, m, ω, λ, rp)
     qt0, qr0, _, qφ0 = KG["InitialPhases"]
     Δtr_func, _, Δφr_func, _ = KG["CrossFunction"]
     Xi = m*(Δφr_func(qr0) - qφ0) - ω*(Δtr_func(qr0) - qt0) - n*qr0
