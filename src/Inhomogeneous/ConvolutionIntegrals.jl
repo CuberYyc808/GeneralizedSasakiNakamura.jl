@@ -1058,6 +1058,16 @@ function _radial_phase_min_sample(KG_master::Dict, ω, m::Integer, n::Integer, m
     return min(max(min_stop, nextpow(2, max(1, ceil(Int, needed)))), max_stop)
 end
 
+function _phase_vector_recurrence!(out::Vector{ComplexF64}, base_omega::Float64, freq_vec::Vector{Float64}, mode_index::Int, step::Float64, fixed_phase::Vector{ComplexF64})
+    qphase = 1.0 + 0.0im
+    qstep = exp(im * mode_index * step)
+    @inbounds for i in eachindex(freq_vec)
+        out[i] = exp(im * base_omega * freq_vec[i]) * qphase * fixed_phase[i]
+        qphase *= qstep
+    end
+    return out
+end
+
 function _generic_m2_integral_threaded(cache::GenericM2MCache, Y_samp::Dict, SH_samp::Dict, omega::Float64, n::Int, k::Int; new_only::Bool = false)
     N = cache.N
     K = cache.K
