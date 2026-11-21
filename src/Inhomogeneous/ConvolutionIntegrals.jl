@@ -64,15 +64,14 @@ _lgamma_int(n::Int) = sum(log, 1:(n - 1); init = 0.0)   # log Gamma(n) = log (n-
 # omega ~ 1e-16 the incidence amplitude grows like |omega|^-(l+1), and the flux of such a mode is far below any
 # cutoff (the l = 2 nodal mode of (a, p, x) = (0.948, 195382, 0.478) carries 3e-75). Only the ISEM nonfinite
 # solver error ("ISEM ...", "nonfinite ISEM ..." or "MST ...": at p ~ 1e7 the near-static modes of a ~ 1 also lose
-# the MST handoff, the recurrence or the MST residual check), or a non-finite flux (omega ~ 1e-24 at p ~ 2.6e7 gives NaN without an error), on a
-# near-static mode counts; every other error still propagates.
+# the MST handoff, the recurrence or the MST residual check) on a near-static mode counts (a non-finite flux without an
+# error: _zero_nonfinite_near_static); every other error still propagates.
 const NEAR_STATIC_RATIO = 1e-6
 function _near_static_overflow(err, ω, Ωφ)
     abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) || return false
     (err isa ErrorException || err isa ISEM.ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError) || return false
     msg = err isa ErrorException ? err.msg : err.message
-    return startswith(msg, "nonfinite ISEM") || startswith(msg, "ISEM ") || startswith(msg, "MST ") ||
-        startswith(msg, "Non-finite flux for mode")
+    return startswith(msg, "nonfinite ISEM") || startswith(msg, "ISEM ") || startswith(msg, "MST ")
 end
 
 # A non-finite mode flux would turn every later cutoff into NaN, so that no walk can stop; fail on the mode instead.
@@ -102,9 +101,20 @@ _is_basis_coverage_error(err) = (err isa ErrorException &&
 _negligible_overflow(err, ω, l, rmax) = rmax !== nothing && ω !== nothing && err isa ErrorException &&
     startswith(err.msg, "nonfinite ISEM GSN matching") && 2 * (l - 1) * log10(abs(ω) * rmax) < -100
 
+# A near-static mode whose flux came out non-finite without an error (omega ~ 1e-24 at p ~ 2.6e7) is recorded as zero,
+# as for its solver errors; every sum and the single-mode routes treat it alike.
+function _zero_nonfinite_near_static(res, omega, Ωφ)
+    (omega === nothing || !(res isa AbstractDict) || !haskey(res, "EnergyFlux")) && return res
+    all(isfinite, (res["EnergyFlux"], res["AngularMomentumFlux"], res["CarterConstantFlux"])) && return res
+    abs(omega) <= NEAR_STATIC_RATIO * abs(Ωφ) || return res
+    zero = _zero_radiative_mode(omega, nothing; reason = "near_static_overflow")
+    zero["NearStaticOverflow"] = true
+    return zero
+end
+
 function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing, rmax = nothing, negligible_if_failed::Bool = false)
     try
-        return f()
+        return _zero_nonfinite_near_static(f(), omega, Ωφ)
     catch err
         absorbable(err) || rethrow()
         if (omega !== nothing && _near_static_overflow(err, omega, Ωφ)) || _negligible_overflow(err, omega, l, rmax)
@@ -118,7 +128,7 @@ function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing,
         end
     end
     try
-        return Base.ScopedValues.with(f, _FORCE_ORDINARY_Y => true)
+        return _zero_nonfinite_near_static(Base.ScopedValues.with(f, _FORCE_ORDINARY_Y => true), omega, Ωφ)
     catch err
         absorbable(err) || rethrow()
         if negligible_if_failed
@@ -3134,15 +3144,6 @@ function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::
 
     res["K_sample_requested"] = K_sample
     res["K_sample"] = K_interval
-    try
-        _check_finite_mode_flux(res, s, l, m, 0, k)
-    catch err
-        _near_static_overflow(err, ω, Frequencies["ϒϕ"] / Γ) || rethrow()
-        res = _zero_radiative_mode(ω, KG_sample; reason = "near_static_overflow")
-        res["NearStaticOverflow"] = true
-        res["K_sample_requested"] = K_sample
-        res["K_sample"] = K_interval
-    end
     return res
 end
 
