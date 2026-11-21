@@ -532,12 +532,16 @@ function auto_nmax_estimate(a, p, e, x, tol, lmax)
 end
 
 # Initial caps: integers pass through; :auto takes the estimates (kmax = lmax estimate; nmax from the radial
-# harmonic scale with the lmax used). nmax = nothing for routes without an n sum.
+# harmonic scale with the lmax used). kmax, nmax = nothing for routes without a k or n sum. Validates tol and the caps
+# for every sum.
 function _auto_caps_start(a, p, e, x, tol, lmax, kmax, nmax = nothing)
     auto_l = lmax === :auto
     auto_k = kmax === :auto
     auto_n = nmax === :auto
-    (auto_l || auto_k || auto_n) && !(tol > 0) && throw(ArgumentError("tol must be positive"))
+    tol > 0 || throw(ArgumentError("tol must be positive"))
+    auto_l || lmax >= 2 || throw(ArgumentError("lmax must be at least 2"))
+    auto_k || kmax === nothing || kmax >= 0 || throw(ArgumentError("kmax must be nonnegative"))
+    auto_n || nmax === nothing || nmax >= 0 || throw(ArgumentError("nmax must be nonnegative"))
     est = (cap = nothing, status = :fixed)
     if auto_l || auto_k
         est = auto_lmax_estimate(a, p, e, x; tol)
@@ -1098,12 +1102,9 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     if e == 0.0
         return circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = minimum_consecutive, submission = scope)
     end
-    lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
-    nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     levin_local_n < 1 && throw(ArgumentError("levin_local_n must be positive"))
     levin_max_depth < 0 && throw(ArgumentError("levin_max_depth must be nonnegative"))
-    tol > 0 || throw(ArgumentError("tol must be positive"))
     ispow2(N0) || throw(ArgumentError("N0 must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
     N0 <= Nmax || throw(ArgumentError("N0 must not exceed Nmax"))
@@ -1813,9 +1814,8 @@ function _inclined_branch_shells!(s::Int, ctx, prefetch)
 end
 
 function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, mode_abs_floor = 1e-16, threaded_sampling = false, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
-    lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
+    mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
-    tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
         return circular_mode_summation(a, p; x = x, tol = tol, lmax = lmax, min_consecutive = minimum_consecutive, submission = scope)
@@ -2910,13 +2910,10 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
 end
 
 function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nmax = 2^14, Kmax = 2^12, tol = 1e-8, lmax = 30, kmax = 20, nmax = 500, minimum_consecutive = 2, sample_tol = 1e-3, record::Bool = false, record_path = nothing, mode_abs_floor = 1e-16, threaded_sampling = false, neg_branch_scale = 0.1, beta = DEFAULT_GENERIC_BETA, deep = DEFAULT_GENERIC_DEEP, tail_levin = :auto, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = 1e-16, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, resume = nothing)
-    lmax < 2 && throw(ArgumentError("lmax must be at least 2"))
-    kmax < 0 && throw(ArgumentError("kmax must be nonnegative"))
-    nmax < 0 && throw(ArgumentError("nmax must be nonnegative"))
+    mode_parallelism >= 1 || throw(ArgumentError("mode_parallelism must be a positive integer"))
     minimum_consecutive < 1 && throw(ArgumentError("minimum_consecutive must be positive"))
     levin_local_n < 1 && throw(ArgumentError("levin_local_n must be positive"))
     levin_max_depth < 0 && throw(ArgumentError("levin_max_depth must be nonnegative"))
-    tol > 0 || throw(ArgumentError("tol must be positive"))
 
     if x == 1.0 || x == -1.0
         return eccentric_mode_summation(a, p, e; x = x, N = N0, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission = scope)
