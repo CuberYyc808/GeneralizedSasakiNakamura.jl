@@ -142,7 +142,7 @@ struct Truncation
 end
 
 # Result of `iterate_logscaled_from_state`: the seed state, the log-scaled
-# patches to the match point, the state there, step statistics and truncations.
+# patches to the match point, the state there, the step count and truncations.
 struct LogScaledBasis
     kind::Symbol
     seed_x::Float64
@@ -150,8 +150,6 @@ struct LogScaledBasis
     patches::Vector{LogScaledPatch}
     match_state::LogScaledState
     step_count::Int
-    max_step::Float64
-    min_step::Float64
     truncations::Vector{Truncation}
 end
 
@@ -181,8 +179,6 @@ struct Basis{P}
     match_X::ComplexF64
     match_dXdx::ComplexF64
     step_count::Int
-    max_step::Float64
-    min_step::Float64
     endpoint_variable_scale::ComplexF64
     truncations::Vector{Truncation}
     endpoint_valid::Bool
@@ -192,7 +188,7 @@ end
 
 Basis(
     kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
-    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale, truncations, endpoint_valid,
+    match_dXdx, step_count, endpoint_variable_scale, truncations, endpoint_valid,
 ) = Basis(
     kind,
     scale,
@@ -207,8 +203,6 @@ Basis(
     match_X,
     match_dXdx,
     step_count,
-    max_step,
-    min_step,
     endpoint_variable_scale,
     truncations,
     endpoint_valid,
@@ -218,7 +212,7 @@ Basis(
 
 Basis(
     kind, scale, exponent1, exponent2, seed_x, seed_coord, seed_X, seed_dXdx, endpoint_coeffs, patches, match_X,
-    match_dXdx, step_count, max_step, min_step, endpoint_variable_scale, truncations,
+    match_dXdx, step_count, endpoint_variable_scale, truncations,
 ) = Basis(
     kind,
     scale,
@@ -233,8 +227,6 @@ Basis(
     match_X,
     match_dXdx,
     step_count,
-    max_step,
-    min_step,
     endpoint_variable_scale,
     truncations,
     true,
@@ -242,11 +234,10 @@ Basis(
 
 # Basis of a march seeded by a state (X, dX/dx) at seed_x, without an endpoint series (unit scale, the seed value as
 # its only coefficient, endpoint_valid = false).
-_state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, max_step, min_step,
+_state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count,
         truncations) = Basis(
     kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x),
-    ComplexF64(seed_X), ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count,
-    max_step, min_step, 1.0 + 0.0im, truncations, false,
+    ComplexF64(seed_X), ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count, 1.0 + 0.0im, truncations, false,
 )
 
 # Chosen infinity endpoint: endpoint_y (y = 1 - x), the truncated :out and :in
@@ -1187,11 +1178,10 @@ end
 # patches and truncation records are appended. `failure` names the march in the error of a failed recurrence. With
 # `certified_steps`, a step below second order or above `tol`, and with `step_budget`, more steps than that, return
 # nothing. `after_step(a_coeffs, b_coeffs, x, X, dXdx)` (optional) runs after each Taylor step and may return a march
-# of another kind from there (fields patches, x, value, derivative, max_step, min_step), which is appended. The counts
-# continue from `step_count`, `max_step`, `min_step`. Returns (x, X, dXdx, step_count, max_step, min_step).
+# of another kind from there (fields patches, x, value, derivative), which is appended. The count continues from
+# `step_count`. Returns (x, X, dXdx, step_count).
 function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dXdx, target_x, order, tol;
-        failure::String, certified_steps::Bool=false, step_budget=nothing, after_step=nothing, step_count::Int=0,
-        max_step::Float64=0.0, min_step::Float64=Inf)
+        failure::String, certified_steps::Bool=false, step_budget=nothing, after_step=nothing, step_count::Int=0)
     direction = target_x >= x ? 1.0 : -1.0
     apparent = copy(work.apparent)
     while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
@@ -1201,8 +1191,6 @@ function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dX
         if crossing.jumps !== nothing
             jump = crossing.jumps[1]
             push!(patches, Patch(jump.center, x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - x))
-            min_step = min(min_step, abs(crossing.x_b - x))
             x, X, dXdx = crossing.x_b, jump.X, jump.dXdx
             continue
         end
@@ -1232,28 +1220,23 @@ function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dX
         x = next_x
         X = state_scale * best.value
         dXdx = state_scale * best.derivative
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
         after_step === nothing && continue
         suffix = after_step(a_coeffs, b_coeffs, x, X, dXdx)
         suffix === nothing && continue
         append!(patches, suffix.patches)
         x, X, dXdx = suffix.x, suffix.value, suffix.derivative
         step_count += length(suffix.patches)
-        max_step = max(max_step, suffix.max_step)
-        min_step = min(min_step, suffix.min_step)
         direction * (target_x - x) <= 100eps(Float64) * max(1.0, abs(x)) && break
     end
-    return (x, X, dXdx, step_count, max_step, isempty(patches) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
+    return (x, X, dXdx, step_count)
 end
 
 # The pair form of _taylor_march!: two solutions on one step sequence (`_pair_step`), each with its own patches,
 # truncation records and failure message ("<failure> for first/second solution"). `after_step(a_coeffs, b_coeffs, x,
 # X1, dX1dx, X2, dX2dx)` (optional) may return a march to the end (fields patches1, patches2, value1, deriv1, value2,
-# deriv2, max_step, min_step), which is appended. Returns (x, X1, dX1dx, X2, dX2dx, step_count, max_step, min_step).
+# deriv2), which is appended. Returns (x, X1, dX1dx, X2, dX2dx, step_count).
 function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, work, coefficients, kind1, kind2, x,
-        value1, deriv1, value2, deriv2, target_x, order, tol; failure::String, after_step=nothing, step_count::Int=0,
-        max_step::Float64=0.0, min_step::Float64=Inf)
+        value1, deriv1, value2, deriv2, target_x, order, tol; failure::String, after_step=nothing, step_count::Int=0)
     direction = target_x >= x ? 1.0 : -1.0
     local1 = work.local_coeffs
     local2 = work.local_coeffs2
@@ -1265,8 +1248,6 @@ function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, wor
             jump1, jump2 = crossing.jumps
             push!(patches1, Patch(jump1.center, x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
             push!(patches2, Patch(jump2.center, x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - x))
-            min_step = min(min_step, abs(crossing.x_b - x))
             x = crossing.x_b
             value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
             continue
@@ -1308,8 +1289,6 @@ function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, wor
         deriv1 = state_scale1 * best.deriv1
         value2 = state_scale2 * best.value2
         deriv2 = state_scale2 * best.deriv2
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
         after_step === nothing && continue
         suffix = after_step(a_coeffs, b_coeffs, x, value1, deriv1, value2, deriv2)
         suffix === nothing && continue
@@ -1318,12 +1297,9 @@ function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, wor
         value1, deriv1, value2, deriv2 = suffix.value1, suffix.deriv1, suffix.value2, suffix.deriv2
         x = target_x
         step_count += length(suffix.patches1)
-        max_step = max(max_step, suffix.max_step)
-        min_step = min(min_step, suffix.min_step)
         break
     end
-    return (x, value1, deriv1, value2, deriv2, step_count, max_step,
-        isempty(patches1) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
+    return (x, value1, deriv1, value2, deriv2, step_count)
 end
 
 function _build_basis_series(
@@ -1353,8 +1329,7 @@ function _build_basis_series(
         append!(truncations, hybrid.truncations)
         return Basis(
             kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, current_value,
-            current_derivative, endpoint_coeffs, hybrid.patches, hybrid.match_X, hybrid.match_dXdx, hybrid.step_count,
-            hybrid.max_step, hybrid.min_step, ComplexF64(endpoint_variable_scale), truncations,
+            current_derivative, endpoint_coeffs, hybrid.patches, hybrid.match_X, hybrid.match_dXdx, hybrid.step_count, ComplexF64(endpoint_variable_scale), truncations,
         )
     end
     patches = Patch[]
@@ -1368,11 +1343,10 @@ function _build_basis_series(
         match_x, order, getproperty(controls, :tolerance); failure="ordinary recurrence failed", certified_steps,
         step_budget)
     march === nothing && return nothing
-    _, match_X, match_dXdx, step_count, max_step, min_step = march
+    _, match_X, match_dXdx, step_count = march
     return Basis(
         kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, scale * raw_seed,
-        scale * raw_dseed, endpoint_coeffs, patches, match_X, match_dXdx, step_count, max_step,
-        min_step, ComplexF64(endpoint_variable_scale), truncations,
+        scale * raw_dseed, endpoint_coeffs, patches, match_X, match_dXdx, step_count, ComplexF64(endpoint_variable_scale), truncations,
     )
 end
 
@@ -1393,8 +1367,6 @@ function _hybrid_state(
     patches = Union{Patch,EikonalPatch,InfinityLargeFrequencyExpansionPatch}[]
     sizehint!(patches, 48)
     step_count = 0
-    max_step = 0.0
-    min_step = Inf
     tol = getproperty(controls, :tolerance)
     eikonal_limit = _INFINITY_EIKONAL_LIMIT
     truncations = Truncation[]
@@ -1412,9 +1384,6 @@ function _hybrid_state(
             current_value = carrier.state.X
             current_derivative = carrier.state.dXdx
             step_count = 1
-            max_step = abs(carrier.patch.next_x -
-                carrier.patch.center_x)
-            min_step = max_step
             carrier_anchored = true
         end
     end
@@ -1432,8 +1401,6 @@ function _hybrid_state(
             current_derivative = suffix.derivative
             current_x = suffix.x
             step_count += length(suffix.patches)
-            max_step = suffix.max_step
-            min_step = suffix.min_step
             eikonal_attempted = true
         end
     end
@@ -1449,8 +1416,6 @@ function _hybrid_state(
             current_value = carrier.state.X
             current_derivative = carrier.state.dXdx
             step_count = 1
-            max_step = abs(carrier.patch.next_x - carrier.patch.center_x)
-            min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split(
                     coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena,
@@ -1465,8 +1430,6 @@ function _hybrid_state(
                     current_derivative = suffix.derivative
                     current_x = suffix.x
                     step_count += length(suffix.patches)
-                    max_step = max(max_step, suffix.max_step)
-                    min_step = min(min_step, suffix.min_step)
                     eikonal_attempted = true
                 end
             end
@@ -1485,10 +1448,10 @@ function _hybrid_state(
             large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
         )
     end
-    _, current_value, current_derivative, step_count, max_step, min_step = _taylor_march!(patches, truncations, work,
+    _, current_value, current_derivative, step_count = _taylor_march!(patches, truncations, work,
         coefficients, kind, current_x, current_value, current_derivative, target_x, order, tol;
-        failure="hybrid recurrence failed", after_step=try_eikonal, step_count, max_step, min_step)
-    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, current_value, current_derivative, step_count, max_step, min_step, truncations)
+        failure="hybrid recurrence failed", after_step=try_eikonal, step_count)
+    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, current_value, current_derivative, step_count, truncations)
 end
 
 # Paired form of `_hybrid_state` with common steps for both solutions.
@@ -1510,8 +1473,6 @@ function _hybrid_pair(
     sizehint!(patches1, 48)
     sizehint!(patches2, 48)
     step_count = 0
-    max_step = 0.0
-    min_step = Inf
     tol = getproperty(controls, :tolerance)
     eikonal_limit = _INFINITY_EIKONAL_LIMIT
     truncations1 = Truncation[]
@@ -1537,9 +1498,6 @@ function _hybrid_pair(
             value2 = carrier.state2.X
             deriv2 = carrier.state2.dXdx
             step_count = 1
-            max_step = abs(carrier.patch1.next_x -
-                carrier.patch1.center_x)
-            min_step = max_step
             carrier_anchored = true
         end
     end
@@ -1560,8 +1518,6 @@ function _hybrid_pair(
             deriv2 = suffix.deriv2
             current_x = target_x
             step_count += length(suffix.patches1)
-            max_step = suffix.max_step
-            min_step = suffix.min_step
             eikonal_attempted = true
         end
     end
@@ -1583,9 +1539,6 @@ function _hybrid_pair(
             value2 = carrier.state2.X
             deriv2 = carrier.state2.dXdx
             step_count = 1
-            max_step = abs(carrier.patch1.next_x -
-                carrier.patch1.center_x)
-            min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split_pair(
                     coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
@@ -1602,8 +1555,6 @@ function _hybrid_pair(
                     deriv2 = suffix.deriv2
                     current_x = target_x
                     step_count += length(suffix.patches1)
-                    max_step = max(max_step, suffix.max_step)
-                    min_step = min(min_step, suffix.min_step)
                     eikonal_attempted = true
                 end
             end
@@ -1622,11 +1573,11 @@ function _hybrid_pair(
             large_frequency_expansion=work.large_frequency_expansion,
         )
     end
-    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min = _taylor_pair_march!(patches1, patches2,
+    _, value1, deriv1, value2, deriv2, step_count = _taylor_pair_march!(patches1, patches2,
         truncations1, truncations2, work, coefficients, kind1, kind2, current_x, value1, deriv1, value2, deriv2,
-        target_x, order, tol; failure="hybrid pair failed", after_step=try_eikonal, step_count, max_step, min_step)
-    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, max_step, common_min, truncations1)
-    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, max_step, common_min, truncations2)
+        target_x, order, tol; failure="hybrid pair failed", after_step=try_eikonal, step_count)
+    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, truncations1)
+    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, truncations2)
     return basis1, basis2
 end
 
@@ -1654,10 +1605,10 @@ function iterate_from_state(
     patches = Patch[]
     sizehint!(patches, 192)
     truncations = Truncation[]
-    _, match_X, match_dXdx, step_count, max_step, min_step = _taylor_march!(patches, truncations, work, coefficients,
+    _, match_X, match_dXdx, step_count = _taylor_march!(patches, truncations, work, coefficients,
         kind, Float64(seed_x), ComplexF64(seed_X), ComplexF64(seed_dXdx), Float64(match_x), order,
         getproperty(controls, :tolerance); failure="state propagation failed")
-    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, max_step, min_step, truncations)
+    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, truncations)
 end
 
 @inline _scaled_finite(value) =
@@ -1720,8 +1671,6 @@ function iterate_logscaled_from_state(
     patches = LogScaledPatch[]
     sizehint!(patches, 192)
     step_count = 0
-    max_step = 0.0
-    min_step = Inf
     tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
 
@@ -1738,8 +1687,6 @@ function iterate_logscaled_from_state(
             jump = crossing.jumps[1]
             push!(patches, LogScaledPatch(jump.center, current_x, jump.coeffs, state.log_scale),
                 LogScaledPatch(jump.center, crossing.x_b, jump.coeffs, state.log_scale))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
             current_x = crossing.x_b
             state = logscaled_state(jump.X, jump.dXdx, state.log_scale)
             continue
@@ -1775,12 +1722,9 @@ function iterate_logscaled_from_state(
         state = logscaled_state(
             best.value, best.derivative, state.log_scale)
         current_x = next_x
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
     end
-    isempty(patches) && (min_step = 0.0)
     return LogScaledBasis(
-        kind, Float64(seed_x), seed_state, patches, state, step_count, max_step, isfinite(min_step) ? min_step : 0.0,
+        kind, Float64(seed_x), seed_state, patches, state, step_count,
         truncations,
     )
 end
@@ -1820,8 +1764,6 @@ function iterate_scaled_y(
     current_derivative_y = ComplexF64(-omega_scale * seed_dXdx)
     patches = ScaledPatch[]
     sizehint!(patches, 128)
-    max_step = 0.0
-    min_step = Inf
 
     while direction * (final_y - current_y) > 100eps(Float64) * max(1.0, current_y)
         length(patches) < _MAX_MARCH_STEPS || throw(ScaledMarchStepLimit(
@@ -1864,8 +1806,6 @@ function iterate_scaled_y(
         direction * (current_x - next_x) > 0 || break
         push!(patches, ScaledPatch(current_x, next_x, current_y, omega_scale, copy(local_coeffs), state_scale))
         x_step = abs(next_x - current_x)
-        max_step = max(max_step, x_step)
-        min_step = min(min_step, x_step)
         current_y = next_y
         current_value = next_value
         current_derivative_y = next_derivative_y
@@ -1881,7 +1821,7 @@ function iterate_scaled_y(
     return Basis(
         kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), start_y, ComplexF64(seed_X),
         ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value,
-        ComplexF64(-current_derivative_y / omega_scale), length(patches), max_step, isfinite(min_step) ? min_step : 0.0,
+        ComplexF64(-current_derivative_y / omega_scale), length(patches),
         ComplexF64(-omega_scale), Truncation[], false,
     )
 end
@@ -1907,12 +1847,12 @@ function iterate_pair_from_state(
     sizehint!(patches2, 192)
     truncations1 = Truncation[]
     truncations2 = Truncation[]
-    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min_step = _taylor_pair_march!(patches1, patches2,
+    _, value1, deriv1, value2, deriv2, step_count = _taylor_pair_march!(patches1, patches2,
         truncations1, truncations2, work, coefficients, kind1, kind2, Float64(seed_x), ComplexF64(seed_X1),
         ComplexF64(seed_dXdx1), ComplexF64(seed_X2), ComplexF64(seed_dXdx2), Float64(match_x), order,
         getproperty(controls, :tolerance); failure="paired state recurrence failed")
-    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, max_step, common_min_step, truncations1)
-    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, max_step, common_min_step, truncations2)
+    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, truncations1)
+    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, truncations2)
     return basis1, basis2
 end
 
@@ -1958,18 +1898,18 @@ function _build_pair_from_horizon_seed(
         solution1.requested_order, solution1.effective_order, solution1.truncation_reason)
     _record_truncation!(truncations2, :horizon, kind2,
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
-    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min_step = _taylor_pair_march!(patches1, patches2,
+    _, value1, deriv1, value2, deriv2, step_count = _taylor_pair_march!(patches1, patches2,
         truncations1, truncations2, work, coefficients, kind1, kind2, seed_x, scale1 * raw1, scale1 * draw1,
         scale2 * raw2, scale2 * draw2, match_x, order, getproperty(controls, :tolerance);
         failure="paired horizon recurrence failed")
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, scale1 * raw1, scale1 * draw1,
-        solution1.coefficients, patches1, value1, deriv1, step_count, max_step, common_min_step, 1.0 + 0.0im,
+        solution1.coefficients, patches1, value1, deriv1, step_count, 1.0 + 0.0im,
         truncations1,
     )
     basis2 = Basis(
         kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, scale2 * raw2, scale2 * draw2,
-        solution2.coefficients, patches2, value2, deriv2, step_count, max_step, common_min_step, 1.0 + 0.0im,
+        solution2.coefficients, patches2, value2, deriv2, step_count, 1.0 + 0.0im,
         truncations2,
     )
     return _with_horizon_log(basis1, solution1), _with_horizon_log(basis2, solution2)
@@ -1985,7 +1925,7 @@ function _with_horizon_log(basis::Basis, solution)
         basis.kind, basis.scale, basis.exponent1, basis.exponent2,
         basis.seed_x, basis.seed_coord, basis.seed_X, basis.seed_dXdx,
         basis.endpoint_coeffs, basis.patches, basis.match_X, basis.match_dXdx,
-        basis.step_count, basis.max_step, basis.min_step,
+        basis.step_count,
         basis.endpoint_variable_scale, basis.truncations, basis.endpoint_valid,
         ComplexF64.(solution.log_coefficient .* solution.log_coefficients), ComplexF64(solution.log_exponent),
     )
@@ -2033,8 +1973,7 @@ function _hybrid_horizon(
     append!(truncations, result.truncations)
     return Basis(
         kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
-        solution.coefficients, result.patches, result.match_X, result.match_dXdx, result.step_count, result.max_step,
-        result.min_step, 1.0 + 0.0im, truncations,
+        solution.coefficients, result.patches, result.match_X, result.match_dXdx, result.step_count, 1.0 + 0.0im, truncations,
     )
 end
 
@@ -2072,8 +2011,7 @@ function _eikonal_horizon(
         solution.requested_order, solution.effective_order, solution.truncation_reason)
     return Basis(
         kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
-        solution.coefficients, result.patches, result.value, result.derivative, length(result.patches), result.max_step,
-        result.min_step, 1.0 + 0.0im, truncations,
+        solution.coefficients, result.patches, result.value, result.derivative, length(result.patches), 1.0 + 0.0im, truncations,
     )
 end
 
@@ -2111,13 +2049,11 @@ function _hybrid_horizon_pair(
     append!(truncations2, result2.truncations)
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
-        solution1.coefficients, result1.patches, result1.match_X, result1.match_dXdx, result1.step_count,
-        result1.max_step, result1.min_step, 1.0 + 0.0im, truncations1,
+        solution1.coefficients, result1.patches, result1.match_X, result1.match_dXdx, result1.step_count, 1.0 + 0.0im, truncations1,
     )
     basis2 = Basis(
         kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
-        solution2.coefficients, result2.patches, result2.match_X, result2.match_dXdx, result2.step_count,
-        result2.max_step, result2.min_step, 1.0 + 0.0im, truncations2,
+        solution2.coefficients, result2.patches, result2.match_X, result2.match_dXdx, result2.step_count, 1.0 + 0.0im, truncations2,
     )
     return basis1, basis2
 end
@@ -2164,13 +2100,11 @@ function _eikonal_horizon_pair(
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
-        solution1.coefficients, result.patches1, result.value1, result.deriv1, length(result.patches1), result.max_step,
-        result.min_step, 1.0 + 0.0im, truncations1,
+        solution1.coefficients, result.patches1, result.value1, result.deriv1, length(result.patches1), 1.0 + 0.0im, truncations1,
     )
     basis2 = Basis(
         kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
-        solution2.coefficients, result.patches2, result.value2, result.deriv2, length(result.patches2), result.max_step,
-        result.min_step, 1.0 + 0.0im, truncations2,
+        solution2.coefficients, result.patches2, result.value2, result.deriv2, length(result.patches2), 1.0 + 0.0im, truncations2,
     )
     return basis1, basis2
 end
@@ -2386,7 +2320,7 @@ function _large_frequency_expansion_infinity_basis(coefficients, selected, branc
         seed.X, seed.dXdx, data.endpoint_coeffs,
         InfinityLargeFrequencyExpansionPatch[candidate.patch],
         candidate.state.X, candidate.state.dXdx,
-        1, step, step, 1.0 + 0.0im, truncations)
+        1, 1.0 + 0.0im, truncations)
 end
 
 function _large_frequency_expansion_infinity_pair(coefficients, selected, branch1, branch2, match_x)
@@ -2410,7 +2344,7 @@ function _large_frequency_expansion_infinity_pair(coefficients, selected, branch
             ComplexF64(data.sigma), seed_x, selected.endpoint_y,
             seed.X, seed.dXdx, data.endpoint_coeffs,
             InfinityLargeFrequencyExpansionPatch[patch], state.X, state.dXdx,
-            1, step, step, 1.0 + 0.0im, truncations)
+            1, 1.0 + 0.0im, truncations)
     end
     return wrap(data1, candidate.patch1, seed1, candidate.state1),
         wrap(data2, candidate.patch2, seed2, candidate.state2)
@@ -2503,7 +2437,7 @@ function iterate_pair_from_infinity(
         return Basis(
             data.kind, data.scale, ComplexF64(data.rho), ComplexF64(data.endpoint_sigma), seed_x, seed_coord,
             data.value, data.derivative, data.endpoint_coeffs, basis.patches, basis.match_X, basis.match_dXdx,
-            basis.step_count, basis.max_step, basis.min_step, ComplexF64(variable_scale), truncations,
+            basis.step_count, ComplexF64(variable_scale), truncations,
         )
     end
     return wrap(data1, basis1), wrap(data2, basis2)

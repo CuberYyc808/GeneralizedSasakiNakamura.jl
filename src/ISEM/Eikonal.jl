@@ -787,8 +787,6 @@ function eikonal_path(
     direction = target >= current_x ? 1.0 : -1.0
     patches = EikonalPatch[]
     sizehint!(patches, 12)
-    max_step = 0.0
-    min_step = Inf
     max_residual = 0.0
     max_check = 0.0
     order = length(scratch.f) - 1
@@ -821,14 +819,10 @@ function eikonal_path(
         derivative = state_scale * best.step.derivative
         current_x = next_x
         next_h_abs = (best.rejected ? 1.0 : EIKONAL_STEP_GROWTH) * abs(best.h)
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
         max_residual = max(max_residual, best.residual)
         max_check = max(max_check, best.check_error)
     end
-    return (; patches, value, derivative, max_step,
-        min_step=isfinite(min_step) ? min_step : 0.0,
-        max_residual, max_check)
+    return (; patches, value, derivative, max_residual, max_check)
 end
 
 # Like `eikonal_path`, but each step of length 2h is checked against two
@@ -848,8 +842,6 @@ function eikonal_split(
     direction = target >= current_x ? 1.0 : -1.0
     patches = EikonalPatch[]
     sizehint!(patches, 24)
-    max_step = 0.0
-    min_step = Inf
     max_residual = 0.0
     max_check = 0.0
     max_split = 0.0
@@ -857,8 +849,8 @@ function eikonal_split(
     middle_scratch = EikonalScratch(order)
     next_h_abs = Inf
     partial_result() = isempty(patches) ? nothing : (
-        patches=patches, value=value, derivative=derivative, x=current_x, max_step=max_step,
-        min_step=isfinite(min_step) ? min_step : 0.0, max_residual=max_residual, max_check=max_check,
+        patches=patches, value=value, derivative=derivative, x=current_x, max_residual=max_residual,
+        max_check=max_check,
         max_split=max_split,
     )
     while direction * (target - current_x) > 100eps(Float64)
@@ -954,14 +946,11 @@ function eikonal_split(
         current_x = next_x
         next_h_abs = 2 * (rejected ? 1.0 : EIKONAL_STEP_GROWTH) *
             abs(accepted.half_h)
-        max_step = max(max_step, abs(accepted.half_h))
-        min_step = min(min_step, abs(accepted.half_h))
         max_residual = max(max_residual, accepted.residual)
         max_check = max(max_check, accepted.check_error)
         max_split = max(max_split, accepted.split_error)
     end
-    return (; patches, value, derivative, x=current_x, max_step,
-        min_step=isfinite(min_step) ? min_step : 0.0,
+    return (; patches, value, derivative, x=current_x,
         max_residual, max_check, max_split)
 end
 
@@ -984,8 +973,6 @@ function eikonal_split_pair(
     patches2 = EikonalPatch[]
     sizehint!(patches1, 24)
     sizehint!(patches2, 24)
-    max_step = 0.0
-    min_step = Inf
     max_residual = 0.0
     max_check = 0.0
     max_split = 0.0
@@ -1113,15 +1100,11 @@ function eikonal_split_pair(
         current_x = next_x
         next_h_abs = 2 * (rejected ? 1.0 : EIKONAL_STEP_GROWTH) *
             abs(accepted.half_h)
-        max_step = max(max_step, abs(accepted.half_h))
-        min_step = min(min_step, abs(accepted.half_h))
         max_residual = max(max_residual, accepted.residual)
         max_check = max(max_check, accepted.check_error)
         max_split = max(max_split, accepted.split_error)
     end
-    return (; patches1, patches2, value1, deriv1, value2, deriv2,
-        max_step, min_step=isfinite(min_step) ? min_step : 0.0,
-        max_residual, max_check, max_split)
+    return (; patches1, patches2, value1, deriv1, value2, deriv2, max_residual, max_check, max_split)
 end
 
 # Paired form of `eikonal_path`: two solutions share one plan per step (they
@@ -1142,8 +1125,6 @@ function eikonal_pair(
     patches2 = EikonalPatch[]
     sizehint!(patches1, 12)
     sizehint!(patches2, 12)
-    max_step = 0.0
-    min_step = Inf
     max_residual = 0.0
     max_check = 0.0
     order = length(scratch.f) - 1
@@ -1181,13 +1162,10 @@ function eikonal_pair(
         deriv2 = scale2 * best.step2.derivative
         current_x = next_x
         next_h_abs = (best.rejected ? 1.0 : EIKONAL_STEP_GROWTH) * abs(best.h)
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
         max_residual = max(max_residual, best.residual)
         max_check = max(max_check, best.check_error)
     end
-    return (; patches1, patches2, value1, deriv1, value2, deriv2, max_step,
-        min_step=isfinite(min_step) ? min_step : 0.0,
+    return (; patches1, patches2, value1, deriv1, value2, deriv2,
         max_residual, max_check)
 end
 
