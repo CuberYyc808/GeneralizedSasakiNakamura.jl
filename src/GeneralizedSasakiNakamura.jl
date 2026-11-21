@@ -1851,21 +1851,6 @@ end
 # Orbit family with KerrGeodesics' own tolerance (1e-12 on e and on |x| - 1), the classification every route uses.
 _teukolsky_flux_orbit_type(e, x) = kerr_geo_orbit_shape(e, x)
 
-function _teukolsky_flux_geodesic_params(a, p, e, x)
-    if x == -1.0
-        return (-a, p, e, 1.0)
-    end
-    return (a, p, e, x)
-end
-
-function _teukolsky_flux_bound_orbit(a, p, e, x)
-    ag, pg, eg, xg = _teukolsky_flux_geodesic_params(a, p, e, x)
-    orbit = kerr_geo_orbit_type_metadata(ag, pg, eg, xg)
-    return orbit.family == "Stable" ||
-        (orbit.family == "Critical" && orbit.shape == "Circular" &&
-         orbit.energy_regime == "Elliptic")
-end
-
 function _flux_tail_levin_branch_strategy(label::AbstractString, enabled, start_n)
     if enabled === true
         if start_n === nothing
@@ -2096,7 +2081,7 @@ stable (critical) bound circular orbit, as classified by KerrGeodesics.
 function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, fast = true, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
     # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
     a, p, e, x = _pointparticle_float(a, p, e, x)
-    if !_teukolsky_flux_bound_orbit(a, p, e, x)
+    if !kerr_geo_orbit_supported(a, p, e, x)
         @warn "The specified parameters do not correspond to a bound orbit." a p e x
         return nothing
     end
