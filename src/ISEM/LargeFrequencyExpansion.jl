@@ -27,7 +27,7 @@ function large_frequency_expansion_routing(coefficients::CoefficientSet)
         kappa < 0.05 ? 0.15 : 0.25)
 end
 
-function large_frequency_expansion_ab!(a_out, b_out, routing::LargeFrequencyExpansionRouting, x0, order::Integer)
+function large_frequency_expansion_ab!(a_out, b_out, routing::LargeFrequencyExpansionRouting, x0, order::Integer; arena=nothing)
     coefficients = routing.coefficients
     if x0 isa Real && 0 < x0 < routing.handoff
         accepted, a_terms, b_terms, _ = shifted_ab!(
@@ -35,7 +35,7 @@ function large_frequency_expansion_ab!(a_out, b_out, routing::LargeFrequencyExpa
         accepted && return a_terms, b_terms
     end
     x0 isa Real && 0 < x0 < LARGE_FREQUENCY_EXPANSION_CLOSED_FORM_MAX_X &&
-        return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
+        return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order; arena)
     evaluate_ordinary_coefficients!(routing.pq, coefficients.ordinary, x0)
     return ordinary_ab_series!(a_out, b_out, routing.pq, coefficients.params.s, order)
 end

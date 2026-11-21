@@ -9,7 +9,7 @@ using ..CoefficientTables:
 using ...Potentials: sF, sU, sF_delta, sW
 using TaylorSeries: Taylor1, getcoeff, derivative
 
-export PQLayout, release_task_arenas!
+export PQLayout, SeriesArena
 export pq_layout, split_starts, ab_term_counts, horizon_kplus
 export rational_series_from_coefficients!
 export endpoint_ab_series!, endpoint_ab_series
@@ -26,8 +26,13 @@ export series_issue, denom_ok
 include("TaylorArena.jl")
 include("RationalArena.jl")
 
-# Return the current task's series arenas to their pools; called by a task that ends (see TaylorArena.jl).
-release_task_arenas!() = (_release_taylor_arena!(); _release_rational_arena!(); nothing)
+# Work arenas of the binary64 closed-form A, B series, owned by one solve (its scratch) and reused across its steps;
+# a call without one builds its own.
+struct SeriesArena
+    taylor::_TaylorArena
+    rational::_RationalArena
+end
+SeriesArena() = SeriesArena(_TaylorArena(), _RationalArena())
 
 const _SERIES_MAG_LIMIT = sqrt(floatmax(Float64))
 const _SERIES_RATIO_LIMIT = inv(sqrt(eps(Float64)))
@@ -546,13 +551,14 @@ end
 # B = -U / g^2, for X_{r*r*} - F X_{r*} - U X = 0. Its B is good to about 2e-13
 # where the tables are off by 1e-12 to 2e-12 (x = 0.2 - 0.4 for s = -2,
 # l = 3, a = 0.9, omega = 2.35), at about 0.1 ms per call.
-function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer)
+function direct_ab_series!(a_out, b_out, params, x0::Real, order::Integer; arena=nothing)
     _arena_eligible(params, x0) || return _direct_ab_series!(a_out, b_out, params, x0,
         Taylor1(ComplexF64, order + 1), order)
+    arena === nothing && (arena = SeriesArena())
     # binary64: the rational form (RationalArena.jl, ~2.5x faster), the Taylor form if it exceeds its fixed sizes
-    terms = _rational_ab_series!(a_out, b_out, params, x0, order)
+    terms = _rational_ab_series!(a_out, b_out, params, x0, order, arena.rational)
     terms === nothing || return terms
-    return _direct_ab_series!(a_out, b_out, params, x0, _arena_variable(_reset!(_task_arena()), order + 1), order)
+    return _direct_ab_series!(a_out, b_out, params, x0, _arena_variable(_reset!(arena.taylor), order + 1), order)
 end
 
 # Binary64 parameters and point: the series run in _ArenaSeries (bitwise the Taylor1 values, see TaylorArena.jl).
@@ -598,9 +604,10 @@ end
 # (group :O). x0 and omega may be complex. With `kplus` (horizon_kplus), K = K+ + (r - r+)(r + r+) omega carries
 # K+ = 2 r+ omega - a m without the cancellation of S omega - a m (the complex-rational horizon); returns the
 # numbers of terms.
-function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer; kplus=nothing)
+function horizon_closed_form_ab_series!(a_out, b_out, params, x0::Number, order::Integer; kplus=nothing, arena=nothing)
     t = _arena_eligible(params, x0) && (kplus === nothing || kplus isa ComplexF64) ?
-        _arena_variable(_reset!(_task_arena()), order + 4) : Taylor1(ComplexF64, order + 4)
+        _arena_variable(_reset!((arena === nothing ? SeriesArena() : arena).taylor), order + 4) :
+        Taylor1(ComplexF64, order + 4)
     return _horizon_closed_form_ab_series!(a_out, b_out, params, x0, t, order, kplus)
 end
 
@@ -667,15 +674,15 @@ end
 function ordinary_ab_series!(
     a_out::AbstractVector{<:Complex}, b_out::AbstractVector{<:Complex}, pq::AbstractVector{<:Complex},
     coefficients::CoefficientSet, x0, order::Integer; shift_eps_limit::Real=_SHIFT_EPS_LIMIT,
-    closed_form_march::Bool=false,
+    closed_form_march::Bool=false, arena=nothing,
 )
     if x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X && eltype(a_out) === ComplexF64 &&
             (coefficients.params.omega isa Real || closed_form_march)
-        return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
+        return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order; arena)
     end
     if x0 isa Real && HORIZON_SHIFT_MAX_X <= x0 < DIRECT_AB_MAX_X &&
             coefficients.params.omega isa Real && eltype(a_out) === ComplexF64
-        return direct_ab_series!(a_out, b_out, coefficients.params, x0, order)
+        return direct_ab_series!(a_out, b_out, coefficients.params, x0, order; arena)
     end
     # The binary64 shift needs binary64 buffers (_shift_source converts to ComplexF64).
     use_shift = eltype(a_out) === ComplexF64 && (
@@ -689,7 +696,7 @@ function ordinary_ab_series!(
         # Below HORIZON_SHIFT_MAX_X the tables are off by ~1e-12 / x^2 in B: a rejected shift there takes the
         # closed form in the horizon coordinate (horizon_closed_form_ab_series!), not the tables.
         x0 isa Real && 0 < x0 < HORIZON_SHIFT_MAX_X &&
-            return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order)
+            return horizon_closed_form_ab_series!(a_out, b_out, coefficients.params, x0, order; arena)
     end
     evaluate_ordinary_coefficients!(pq, coefficients.ordinary, x0)
     return ordinary_ab_series!(a_out, b_out, pq, coefficients.params.s, order)

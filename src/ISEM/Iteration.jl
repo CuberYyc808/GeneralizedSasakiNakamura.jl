@@ -2,7 +2,7 @@ module Iteration
 using ...Errors: absorbable
 
 using ..CoefficientTables: CoefficientSet
-using ..OrdinaryPointExpansion: direct_ab_value
+using ..OrdinaryPointExpansion: direct_ab_value, SeriesArena
 using ..ApparentSingularities: ApparentPoint, apparent_points, apparent_basis, apparent_jump, next_apparent,
     APPARENT_STEP_FRACTION
 using ..Parameters: horizon_tail
@@ -307,6 +307,8 @@ struct IterationScratch{L<:Union{Nothing,LargeFrequencyExpansionRouting}}
     # Apparent singular points of the mode (one eigenvalue problem); each march works on its own copy, since it
     # removes the points it has crossed.
     apparent::Vector{ApparentPoint{ComplexF64}}
+    # work arenas of the closed-form A, B series of this solve (OrdinaryPointExpansion.SeriesArena)
+    arena::SeriesArena
 end
 
 function IterationScratch(
@@ -328,7 +330,7 @@ function IterationScratch(
         buffer_order >= 2 ? [1.0 / ((n + 2) * (n + 1)) for n in 0:(buffer_order - 2)] : Float64[],
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
         large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing, closed_form_march,
-        apparent_points(coefficients.params),
+        apparent_points(coefficients.params), SeriesArena(),
     )
 end
 
@@ -347,11 +349,12 @@ _scratch(coefficients, order, controls) = IterationScratch(
 
 function _local_ab!(work, coefficients, x, order)
     work.large_frequency_expansion === nothing || return large_frequency_expansion_ab!(
-        work.avec, work.bvec, work.large_frequency_expansion, x, order)
+        work.avec, work.bvec, work.large_frequency_expansion, x, order; arena=work.arena)
     # Near extremality the march below x = 0.1 takes the closed form in the horizon coordinate also at complex
     # omega (the shift of the horizon rational functions is rejected there for small kappa).
     return ordinary_ab_series!(
-        work.avec, work.bvec, work.pq, coefficients, x, order; closed_form_march=work.closed_form_march)
+        work.avec, work.bvec, work.pq, coefficients, x, order; closed_form_march=work.closed_form_march,
+        arena=work.arena)
 end
 
 # Apparent-point crossing (ApparentSingularities) for a march at current_x towards target_x with the given
@@ -1317,7 +1320,7 @@ function _hybrid_state(
 
     if current_x != target_x && _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split(
-            coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, bvec=work.bvec,
+            coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
             pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
             large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
@@ -1349,7 +1352,7 @@ function _hybrid_state(
             min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split(
-                    coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec,
+                    coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena,
                     bvec=work.bvec, pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit,
                     check_limit=eikonal_limit,
                     terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
@@ -1423,7 +1426,7 @@ function _hybrid_state(
         if eikonal_ready && !eikonal_attempted
             eikonal_attempted = true
             suffix = eikonal_split(
-                coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, bvec=work.bvec,
+                coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
                 pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
                 large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
             )
@@ -1507,7 +1510,7 @@ function _hybrid_pair(
     if current_x != target_x && work.large_frequency_expansion !== nothing &&
             _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split_pair(
-            coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+            coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
             pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS, large_frequency_expansion=work.large_frequency_expansion,
         )
@@ -1548,7 +1551,7 @@ function _hybrid_pair(
             min_step = max_step
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split_pair(
-                    coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+                    coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
                     pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
                     terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
                     large_frequency_expansion=work.large_frequency_expansion,
@@ -1634,7 +1637,7 @@ function _hybrid_pair(
         if eikonal_ready && !eikonal_attempted
             eikonal_attempted = true
             suffix = eikonal_pair(
-                coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+                coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
                 pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
                 large_frequency_expansion=work.large_frequency_expansion,
             )
@@ -2319,12 +2322,12 @@ function _eikonal_horizon(
     limit = _INFINITY_EIKONAL_LIMIT
     result = fast ? eikonal_path(
             coefficients, seed_x, seed_value, seed_derivative, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion) :
         eikonal_split(
             coefficients, seed_x, seed_value, seed_derivative, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion)
     result === nothing && return nothing
@@ -2407,13 +2410,13 @@ function _eikonal_horizon_pair(
     result = fast ? eikonal_pair(
             coefficients, seed_x, seed_value1, seed_derivative1,
             seed_value2, seed_derivative2, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion) :
         eikonal_split_pair(
             coefficients, seed_x, seed_value1, seed_derivative1,
             seed_value2, seed_derivative2, match_x;
-            avec=work.avec, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion)
     result === nothing && return nothing

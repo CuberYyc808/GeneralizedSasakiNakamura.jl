@@ -5,7 +5,7 @@
 # recurrence that multiplies by u in O(n), followed by one series division; B = -U / g^2 is the product of the series
 # of U and of 1 / g^2. Small polynomial products, six divisions and one product replace the dozens of order-n series
 # products of the Taylor1 form (30 us against 77 us at order 40). Polynomials and work series live in a task-local
-# arena (bounded by one call's use); a call that would exceed the fixed sizes returns `nothing` (the caller takes
+# arena (SeriesArena, owned by the solve); a call that would exceed the fixed sizes returns `nothing` (the caller takes
 # the Taylor1 form).
 
 const _RA_CAPACITY = 48       # coefficients per polynomial (degree < 48)
@@ -31,30 +31,6 @@ function _ra_take!(arena::_RationalArena)
         push!(arena.degree, 0)
     end
     return arena.used
-end
-
-# the arena of the current task, from the pool of the arenas of finished tasks as in TaylorArena.jl
-const _RATIONAL_ARENA_POOL = _RationalArena[]
-const _RATIONAL_ARENA_POOL_LOCK = ReentrantLock()
-
-function _ra_task_arena()
-    tls = task_local_storage()
-    arena = get(tls, :GSN_ISEM_RATIONAL_ARENA, nothing)
-    arena === nothing || return arena::_RationalArena
-    arena = lock(_RATIONAL_ARENA_POOL_LOCK) do
-        isempty(_RATIONAL_ARENA_POOL) ? _RationalArena() : pop!(_RATIONAL_ARENA_POOL)
-    end
-    tls[:GSN_ISEM_RATIONAL_ARENA] = arena
-    return arena
-end
-
-function _release_rational_arena!()
-    arena = pop!(task_local_storage(), :GSN_ISEM_RATIONAL_ARENA, nothing)
-    arena === nothing && return nothing
-    lock(_RATIONAL_ARENA_POOL_LOCK) do
-        length(_RATIONAL_ARENA_POOL) < 2 * Threads.nthreads() && push!(_RATIONAL_ARENA_POOL, arena)
-    end
-    return nothing
 end
 
 # Sum of up to _RA_TERMS fractions num[k] / den[k] (indices of polynomials in `arena`).
@@ -251,7 +227,7 @@ function _ra_add_series!(out, buffers, arena, num, den, lam, ga, n)
 end
 
 # A and B of direct_ab_series! (same equation, same output layout); `nothing` when the sizes are exceeded.
-function _rational_ab_series!(a_out, b_out, params, x0, order::Integer)
+function _rational_ab_series!(a_out, b_out, params, x0, order::Integer, arena::_RationalArena)
     s, m, a, omega, lambda = params.s, params.m, params.a, params.omega, params.lambda
     kappa = sqrt(1 - a^2)
     rplus, rminus = 1 + kappa, 1 - kappa
@@ -259,7 +235,7 @@ function _rational_ab_series!(a_out, b_out, params, x0, order::Integer)
     r0 = (rplus - rminus * x0) / ga
     lam = (rplus - rminus) / ga^2
     n = order + 1
-    arena = _ra_reset!(_ra_task_arena())
+    _ra_reset!(arena)
     try
         one_ = _ra_poly!(arena, one(_C))
         r = _ra_single_sum(arena, _ra_poly!(arena, convert(_C, r0), one(_C)), one_)

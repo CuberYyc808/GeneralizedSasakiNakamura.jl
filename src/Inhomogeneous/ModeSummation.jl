@@ -828,11 +828,7 @@ function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimu
     ahead = Dict{Int, Task}()
     if speculate
         for l in lmin:min(lmax, l_pred)
-            ahead[l] = Threads.@spawn try
-                compute(s, l, m, n, q, factors)
-            finally
-                ConvolutionIntegrals.ISEM.release_task_arenas!()   # the task's ISEM series arenas go to the next task
-            end
+            ahead[l] = Threads.@spawn compute(s, l, m, n, q, factors)
         end
     end
     modes = Tuple{Int, Any}[]

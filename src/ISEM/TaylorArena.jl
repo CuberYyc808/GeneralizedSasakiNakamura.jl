@@ -17,7 +17,7 @@ end
 
 _TaylorArena() = _TaylorArena(Dict{Int,Vector{Taylor1{_C}}}(), Dict{Int,Int}(), 0)
 
-# Coefficients an arena keeps between calls (16 MB); above this the pools are dropped at the next reset.
+# Coefficients an arena keeps between the steps of its solve (16 MB); above this the pools are dropped at the next reset.
 const _ARENA_MAX_STORED = 2^20
 
 # A zeroed Taylor1 of `order` from the arena.
@@ -35,34 +35,6 @@ function _reset!(arena::_TaylorArena)
     empty!(arena.used)
     arena.stored > _ARENA_MAX_STORED && (empty!(arena.pools); arena.stored = 0)
     return arena
-end
-
-# The arena of the current task: each task has its own (no state shared between tasks or threads), and the series
-# of a call are copied out before the call returns. A task that ends (the l walks of a flux sum computed ahead on
-# tasks of their own) returns its arena to a pool (_release_taylor_arena!) for the next task, instead of each task
-# building one (about 200 KB per task, half the allocation of such a sum).
-const _TAYLOR_ARENA_POOL = _TaylorArena[]
-const _TAYLOR_ARENA_POOL_LOCK = ReentrantLock()
-
-function _task_arena()
-    tls = task_local_storage()
-    arena = get(tls, :GSN_ISEM_TAYLOR_ARENA, nothing)
-    arena === nothing || return arena::_TaylorArena
-    arena = lock(_TAYLOR_ARENA_POOL_LOCK) do
-        isempty(_TAYLOR_ARENA_POOL) ? _TaylorArena() : pop!(_TAYLOR_ARENA_POOL)
-    end
-    tls[:GSN_ISEM_TAYLOR_ARENA] = arena
-    return arena
-end
-
-# Return the current task's arena to the pool (at most two per Julia thread are kept).
-function _release_taylor_arena!()
-    arena = pop!(task_local_storage(), :GSN_ISEM_TAYLOR_ARENA, nothing)
-    arena === nothing && return nothing
-    lock(_TAYLOR_ARENA_POOL_LOCK) do
-        length(_TAYLOR_ARENA_POOL) < 2 * Threads.nthreads() && push!(_TAYLOR_ARENA_POOL, arena)
-    end
-    return nothing
 end
 
 struct _ArenaSeries

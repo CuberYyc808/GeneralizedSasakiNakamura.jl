@@ -27,7 +27,8 @@ using ..OrdinaryPointExpansion:
     shifted_ab!,
     shifted_infinity_ab!,
     horizon_closed_form_ab_series!,
-    ordinary_scaled_y_ab_series!
+    ordinary_scaled_y_ab_series!,
+    SeriesArena
 using ..LocalSolutionAtZero:
     horizon_rotation_frequency
 using ..NearExtreme: HorizonClosedFormLaurent
@@ -153,6 +154,7 @@ struct ComplexRationalScratch
     local_error::Base.RefValue{Float64}
     # Optional record of the pair at the path nodes reached (x-derivatives).
     nodes::Union{Nothing,Vector{NTuple{3,Any}}}
+    arena::SeriesArena
 end
 
 function ComplexRationalScratch(coefficients, order::Integer,
@@ -161,7 +163,7 @@ function ComplexRationalScratch(coefficients, order::Integer,
     return ComplexRationalScratch(
         Vector{ComplexF64}(undef, coefficients.ordinary.value_count), Vector{ComplexF64}(undef, size),
         Vector{ComplexF64}(undef, size), Vector{ComplexF64}(undef, size), Vector{ComplexF64}(undef, size), Ref(0.0),
-        nodes,
+        nodes, SeriesArena(),
     )
 end
 
@@ -553,7 +555,7 @@ end
 @inline function _ode_ab!(scratch, coefficients, x)
     try
         ordinary_ab_series!(
-            scratch.avec, scratch.bvec, scratch.pq, coefficients, x, 0)
+            scratch.avec, scratch.bvec, scratch.pq, coefficients, x, 0; arena=scratch.arena)
     catch error
         _ordinary_q0_degeneracy(error) || rethrow()
         try
@@ -1336,7 +1338,7 @@ function _local_ab_series!(scratch, coefficients, x, order, eps_limit, shifted)
         try
             a_terms, b_terms = ordinary_ab_series!(
                 scratch.avec, scratch.bvec, scratch.pq,
-                coefficients, x, order)
+                coefficients, x, order; arena=scratch.arena)
             return a_terms, b_terms, :ordinary, 0.0
         catch error
             _ordinary_q0_degeneracy(error) || rethrow()
@@ -1371,7 +1373,7 @@ function _local_ab_series!(scratch, coefficients, x, order, eps_limit, shifted)
         end
     end
     a_terms, b_terms = ordinary_ab_series!(
-        scratch.avec, scratch.bvec, scratch.pq, coefficients, x, order)
+        scratch.avec, scratch.bvec, scratch.pq, coefficients, x, order; arena=scratch.arena)
     return a_terms, b_terms, :ordinary_shift_fallback, shift_condition
 end
 
@@ -1533,7 +1535,7 @@ function _scaled_step!(
             representation = :scaled_y_ordinary
         else
             a_terms, b_terms = horizon_closed_form_ab_series!(scratch.avec, scratch.bvec, coefficients.params,
-                scale * variable, settings.order)
+                scale * variable, settings.order; arena=scratch.arena)
             power = scale
             @inbounds for k in 1:max(a_terms, b_terms)
                 k <= a_terms && (scratch.avec[k] *= power)

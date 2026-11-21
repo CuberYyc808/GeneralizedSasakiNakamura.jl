@@ -776,7 +776,7 @@ end
 # re-planning at each patch start. Returns patches, the final state and step
 # statistics, or nothing as soon as a plan or an accepted step is unavailable.
 function eikonal_path(
-    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, scratch=EikonalScratch(),
+    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, arena=nothing, scratch=EikonalScratch(),
     residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT, terms::Integer=EIKONAL_TERMS,
     large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
@@ -796,8 +796,8 @@ function eikonal_path(
     while direction * (target - current_x) > 100eps(Float64)
         a_terms, b_terms = large_frequency_expansion === nothing ?
             ordinary_ab_series!(
-                avec, bvec, pq, coefficients, current_x, order) :
-            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
+                avec, bvec, pq, coefficients, current_x, order; arena) :
+            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order; arena)
         plan = _eikonal_plan(@view(avec[1:a_terms]),
             @view(bvec[1:b_terms]), scratch, terms)
         plan === nothing && return nothing
@@ -836,7 +836,7 @@ end
 # when the full and split states agree within `split_limit`. With
 # `allow_partial`, a failure returns the patches built so far (with `x`).
 function eikonal_split(
-    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, scratch=EikonalScratch(),
+    coefficients::CoefficientSet, seed_x, seed_X, seed_dXdx, target_x; avec, bvec, pq, arena=nothing, scratch=EikonalScratch(),
     residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT, split_limit=EIKONAL_SPLIT_LIMIT,
     terms::Integer=EIKONAL_TERMS, large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
     allow_partial::Bool=false,
@@ -872,8 +872,8 @@ function eikonal_split(
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
         a_terms, b_terms = large_frequency_expansion === nothing ?
             ordinary_ab_series!(
-                avec, bvec, pq, coefficients, current_x, order) :
-            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
+                avec, bvec, pq, coefficients, current_x, order; arena) :
+            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order; arena)
         plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
             @view(bvec[1:b_terms]), scratch, terms)
         plan1 === nothing && return allow_partial ? partial_result() : nothing
@@ -907,8 +907,8 @@ function eikonal_split(
 
                 middle_a, middle_b = large_frequency_expansion === nothing ?
                     ordinary_ab_series!(avec, bvec, pq,
-                        coefficients, midpoint_x, order) :
-                    large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order)
+                        coefficients, midpoint_x, order; arena) :
+                    large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order; arena)
                 plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
                     @view(bvec[1:middle_b]), middle_scratch, terms)
                 if plan2 === nothing
@@ -969,7 +969,7 @@ end
 # Returns nothing (no partial result) when any step fails.
 function eikonal_split_pair(
     coefficients::CoefficientSet, seed_x, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2, target_x; avec, bvec, pq,
-    scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
+    arena=nothing, scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
     split_limit=EIKONAL_SPLIT_LIMIT, terms::Integer=EIKONAL_TERMS,
     large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
@@ -1003,8 +1003,8 @@ function eikonal_split_pair(
         min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
         a_terms, b_terms = large_frequency_expansion === nothing ?
             ordinary_ab_series!(
-                avec, bvec, pq, coefficients, current_x, order) :
-            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
+                avec, bvec, pq, coefficients, current_x, order; arena) :
+            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order; arena)
         plan1 = _eikonal_plan!(@view(avec[1:a_terms]),
             @view(bvec[1:b_terms]), scratch, terms)
         plan1 === nothing && return nothing
@@ -1046,8 +1046,8 @@ function eikonal_split_pair(
 
                 middle_a, middle_b = large_frequency_expansion === nothing ?
                     ordinary_ab_series!(avec, bvec, pq,
-                        coefficients, midpoint_x, order) :
-                    large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order)
+                        coefficients, midpoint_x, order; arena) :
+                    large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, midpoint_x, order; arena)
                 plan2 = _eikonal_plan!(@view(avec[1:middle_a]),
                     @view(bvec[1:middle_b]), middle_scratch, terms)
                 if plan2 === nothing
@@ -1128,7 +1128,7 @@ end
 # differ only in cplus/cminus) and advance with a common step size.
 function eikonal_pair(
     coefficients::CoefficientSet, seed_x, seed_X1, seed_dXdx1, seed_X2, seed_dXdx2, target_x; avec, bvec, pq,
-    scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
+    arena=nothing, scratch=EikonalScratch(), residual_limit=EIKONAL_RESIDUAL_LIMIT, check_limit=EIKONAL_CHECK_LIMIT,
     terms::Integer=EIKONAL_TERMS, large_frequency_expansion::Union{Nothing,LargeFrequencyExpansionRouting}=nothing,
 )
     current_x = Float64(seed_x)
@@ -1151,8 +1151,8 @@ function eikonal_pair(
     while direction * (target - current_x) > 100eps(Float64)
         a_terms, b_terms = large_frequency_expansion === nothing ?
             ordinary_ab_series!(
-                avec, bvec, pq, coefficients, current_x, order) :
-            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order)
+                avec, bvec, pq, coefficients, current_x, order; arena) :
+            large_frequency_expansion_ab!(avec, bvec, large_frequency_expansion, current_x, order; arena)
         plan = _eikonal_plan(@view(avec[1:a_terms]),
             @view(bvec[1:b_terms]), scratch, terms)
         plan === nothing && return nothing
