@@ -87,7 +87,8 @@ end
 # retried with the small-frequency expansion off; if that fails too it is recorded as a failed mode (zero flux,
 # FailedMode = true, counted in reached) with a warning. The coverage error is recognized by its message: ISEM keeps
 # it an ErrorException because its complex-frequency paths catch that type. Interrupts always propagate.
-const _FORCE_ORDINARY_KEY = :GSN_FORCE_ORDINARY_Y
+# The retry runs in this scope (a ScopedValue: seen by the tasks the mode spawns, set by nobody else).
+const _FORCE_ORDINARY_Y = Base.ScopedValues.ScopedValue(false)
 _is_basis_coverage_error(err) = (err isa ErrorException &&
     (occursin("basis does not cover", err.msg) || occursin("basis has no patch for", err.msg))) ||
     # The MST certificate can reject a sum just above its residual tolerance (1.0e-13 to 1.3e-13 for modes at
@@ -117,7 +118,7 @@ function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing,
         end
     end
     try
-        return task_local_storage(f, _FORCE_ORDINARY_KEY, true)
+        return Base.ScopedValues.with(f, _FORCE_ORDINARY_Y => true)
     catch err
         absorbable(err) || rethrow()
         if negligible_if_failed
@@ -327,7 +328,7 @@ const _INHOMOGENEOUS_ORDINARY_MAX_L = 4
 # Small-frequency-expansion control for the ISEM Y solve: off for real, low-l (l <= 4) modes with
 # |omega| >= 0.05 and |a| <= 0.95, otherwise left to ISEM (:auto).
 @inline function _inhomogeneous_small_frequency_expansion_control(l, a, omega)
-    get(task_local_storage(), _FORCE_ORDINARY_KEY, false) && return false
+    _FORCE_ORDINARY_Y[] && return false
     regular_low_mode = isreal(omega) &&
         abs(omega) >= _INHOMOGENEOUS_ORDINARY_MIN_OMEGA &&
         l <= _INHOMOGENEOUS_ORDINARY_MAX_L && abs(a) <= 0.95
