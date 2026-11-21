@@ -175,9 +175,8 @@ Public dispatch uses a bounded mode family and checks refinement separately.
 """
 function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
         infinity_order=32,infinity_radius=100.0,match_radius=3.0,horizon_scale=0.15,
-        infinity_coordinate=:tortoise,extremal_scale=nothing,
-        extremal_radius=0.03,extremal_order=64,horizon_ray=false,
-        horizon_tortoise=false,potential_order=16,potential_series=:auto)
+        extremal_scale,extremal_radius,extremal_order,horizon_ray=false,
+        horizon_tortoise=false,potential_series)
     mode=root.mode
     s,m,a,w0=mode.s,mode.m,Float64(root.a),ComplexF64(root.omega)
     s in -2:2 || throw(ArgumentError("variational GSN supports integer spin -2 through 2"))
@@ -191,8 +190,7 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
         alpha=im*(2w0-m*a)
         # |alpha| / max(extremal_scale, |P_0|): the asymptotic horizon state inside its region of use.
         p0=Base.inferencebarrier(ExtremalRadial.extremal_gsn_horizon_coefficients)(s,m,a,w0,lambda0,:ingoing;order=0).p0
-        distance=extremal_scale === nothing ? extremal_radius :
-            min(extremal_radius,abs(alpha)/max(extremal_scale,abs(p0)))
+        distance=min(extremal_radius,abs(alpha)/max(extremal_scale,abs(p0)))
         1+distance*cis(angle(alpha)-copysign(pi/2,imag(alpha)))
     else
         complex(rp+horizon_scale*sqrt(1-a*a))
@@ -217,23 +215,18 @@ function _qnm_variational_excitation(root;tol=1e-11,horizon_order=16,
     end
     radius=max(infinity_radius,(infinity_order+8)/abs(w0))
     ri=rm+radius*sign(real(w0))*cis(-angle(w0))
-    if infinity_coordinate === :tortoise
-        # Balance the two wave carriers in r*, not r: the logarithmic phase
-        # otherwise amplifies tangent roundoff at higher damping.
-        target=_qnm_complex_rstar(a,rm)+radius*sign(real(w0))*cis(-angle(w0))
-        for _ in 1:12
-            step=(_qnm_complex_rstar(a,ri)-target)*(ri*ri-2ri+a*a)/(ri*ri+a*a)
-            ri-=step
-            abs(step)<=1e-13*abs(ri) && break
-        end
-        abs(_qnm_complex_rstar(a,ri)-target)<=1e-11*max(1,abs(target)) ||
-            error("complex tortoise endpoint did not converge")
-    elseif infinity_coordinate !== :r
-        throw(ArgumentError("infinity_coordinate must be :r or :tortoise"))
+    # Balance the two wave carriers in r*, not r: the logarithmic phase
+    # otherwise amplifies tangent roundoff at higher damping.
+    target=_qnm_complex_rstar(a,rm)+radius*sign(real(w0))*cis(-angle(w0))
+    for _ in 1:12
+        step=(_qnm_complex_rstar(a,ri)-target)*(ri*ri-2ri+a*a)/(ri*ri+a*a)
+        ri-=step
+        abs(step)<=1e-13*abs(ri) && break
     end
+    abs(_qnm_complex_rstar(a,ri)-target)<=1e-11*max(1,abs(target)) ||
+        error("complex tortoise endpoint did not converge")
     t0=time_ns()
-    series=potential_series===:auto ?
-        _qnm_horizon_potential_series(s,m,a,w0,lambda0,dlambda,potential_order) : potential_series
+    series=potential_series
     h=_qnm_horizon_jet(s,m,a,w,lambda,rh,abs(a)==1 ? extremal_order : horizon_order)
     incoming=_qnm_infinity_jet(s,m,a,w,lambda,ri,infinity_order,-1)
     outgoing=_qnm_infinity_jet(s,m,a,w,lambda,ri,infinity_order,1)

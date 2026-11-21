@@ -138,10 +138,6 @@ function _qnm_branch_observables(root, excitation_options;
             !_qnm_use_variational(root, excitation_options)
         radial_solver = get(excitation_options, :radial_solver,
             _extremal_qnm_radial_solver)
-        incidence_tolerance = get(excitation_options, :incidence_tolerance, 1.0e-8)
-        wronskian_tolerance = get(excitation_options, :wronskian_tolerance, 1.0e-8)
-        root = _polish_extremal_damped_root_with_gsn(root;
-            incidence_tolerance, wronskian_tolerance, radial_solver)
         excitation_options = merge(
             excitation_options, (radial_solver=radial_solver,))
     end

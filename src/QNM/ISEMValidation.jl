@@ -204,67 +204,6 @@ function _wronskian_incidence(result::LeaverResult, omega=result.omega;
     )
 end
 
-function _scaled_wronskian_incidence(pair)
-    absolute_incidence = abs(pair.incidence)
-    scale = max(one(absolute_incidence), abs(pair.reflection),
-        abs(pair.transmission), maximum(abs, pair.incidence_values))
-    return absolute_incidence / scale
-end
-
-function _replace_extremal_damped_root_frequency(
-        result::LeaverResult, omega, polish_metadata)
-    provenance = result.provenance
-    angular_order = hasproperty(provenance, :angular_order) ?
-        provenance.angular_order : 80
-    sheet_id = hasproperty(provenance, :angular_sheet) ?
-        Symbol(provenance.angular_sheet, :_gsn_endpoint_polish) :
-        :extremal_gsn_endpoint_polish
-    angular = angular_branch(result.mode, result.a, omega;
-        truncation_order=angular_order, sheet_id)
-    angular.status in (
-        :continued, :predictor_corrected, :spherical_anchor,
-        :high_precision_refined) || return result
-    T = typeof(result.a)
-    return LeaverResult(
-        result.mode, result.convention, result.overtone_index,
-        result.inversion_index, result.a, omega, angular.angular_A,
-        angular.lambda, angular.mixing, result.cf_value, result.cf_error,
-        result.cf_iterations, result.root_residual, T(angular.residual),
-        result.precision_bits, result.status, result.stop_reason,
-        merge(provenance, polish_metadata, (
-            angular_route=angular.metadata.route, angular_sheet=angular.sheet_id,
-            angular_order=angular.truncation_order,
-        )),
-    )
-end
-
-# At a = +-1, check (and, for roots not from the exact-extremal recurrence,
-# Newton-correct) a damped root against the GSN Wronskian incidence.
-function _polish_extremal_damped_root_with_gsn(result::LeaverResult;
-        incidence_tolerance=1.0e-8,
-        wronskian_tolerance=1.0e-8,
-        radial_solver=GSN_radial)
-    _is_extremal_damped_simple_pole(result) || return result
-    T = typeof(real(result.omega))
-    tolerance = T(incidence_tolerance)
-    wronskian_gate = T(wronskian_tolerance)
-    initial = _wronskian_incidence(
-        result, result.omega; radial_solver)
-    initial_scaled = T(_scaled_wronskian_incidence(initial))
-    # Every extremal damped simple pole comes from the exact-extremal (Richartz) recurrence, which fixes the
-    # frequency; the radial incidence is only a closure check of the radial basis.
-    return _replace_extremal_damped_root_frequency(
-        result, result.omega, (
-            exact_gsn_root_polish=initial_scaled <= tolerance &&
-                initial.wronskian_drift <= wronskian_gate ?
-                :not_needed : :radial_closure_failed,
-            exact_gsn_initial_scaled_incidence=initial_scaled,
-            exact_gsn_selected_scaled_incidence=initial_scaled,
-            exact_gsn_root_shift=zero(T),
-            exact_gsn_polish_rows=NamedTuple[],
-        ))
-end
-
 """
     validate_qnm_with_isem(result::LeaverResult; incidence_tolerance=1e-8,
         wronskian_tolerance=1e-8, radial_solver=GSN_radial)
