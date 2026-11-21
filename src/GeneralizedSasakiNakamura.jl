@@ -593,7 +593,7 @@ function _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing,
         direct = _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition;
             xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
         direct === nothing ||
-            return _teukolsky_from_gsn(direct, s, m, a, omega, ComplexF64, tol)
+            return _teukolsky_from_gsn(direct, s, m, a, omega, ComplexF64)
         Rin = _teukolsky_from_isem(s, l, m, a, omega, IN;
             xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
         Rup = _teukolsky_from_isem(s, l, m, a, omega, UP;
@@ -685,14 +685,8 @@ function GSN_radial(
                 s, l, m, a, omega, boundary_condition;
                 xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
         catch err
-            absorbable(err) || rethrow()
-            # The legacy route cannot honor a requested ISEM junction, and the ODE routes are
-            # binary64: arbitrary-precision inputs report the ISEM failure instead.
-            xm === nothing || rethrow()
-            _binary64_inputs(a, omega) || rethrow()
-            _warn_low_frequency_fallback(omega)
+            _absorb_auto_isem_failure(err, s, l, m, a, omega, boundary_condition, xm)
             legacy_fallback = true
-            @debug "ISEM failed under method=\"auto\"; falling back to the uncertified legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err) maxlog=1
         end
     end
     # Compile the legacy solver only when it is actually requested or needed.
@@ -701,13 +695,26 @@ function GSN_radial(
         horizon_expansion_order, infinity_expansion_order, method, data_type,
         ODE_algorithm, tolerance, tol, rsmp, xm, sfe, lfe,
         N, lambda)
-    legacy_fallback || return result
+    return legacy_fallback ? _mark_legacy_fallback(result) : result
+end
+
+function _mark_legacy_fallback(result)
     all(isfinite, (result.transmission_amplitude, result.incidence_amplitude,
         result.reflection_amplitude)) ||
         error("uncertified legacy fallback produced nonfinite radial amplitudes")
     return ISEM._with_fields(result, (numerical_GSN_solution=
         ISEM.Certification.LegacyFallbackSolution(result.numerical_GSN_solution),
         GSN_solution=ISEM.Certification.LegacyFallbackSolution(result.GSN_solution)))
+end
+
+# An ISEM failure under method="auto" falls back to the legacy route unless it is a programming error, a junction
+# `xm` was requested (the legacy route cannot honor it) or the inputs are arbitrary precision (the ODE routes are
+# binary64): then the ISEM failure is reported.
+function _absorb_auto_isem_failure(err, s, l, m, a, omega, boundary_condition, xm)
+    absorbable(err) && xm === nothing && _binary64_inputs(a, omega) || rethrow(err)
+    _warn_low_frequency_fallback(omega)
+    @debug "ISEM failed under method=\"auto\"; falling back to the uncertified legacy automatic radial route." s l m a omega boundary_condition failure=sprint(showerror, err) maxlog=1
+    return nothing
 end
 
 function _gsn_radial_legacy(
@@ -1368,7 +1375,7 @@ with the normalization convention that the transmission amplitude is normalized 
 When `method` is `"auto"`, the homogeneous Teukolsky solution tries
 `ISEM` first and falls back to the ODE methods only if
 ISEM fails and `xm` was not supplied. Explicit `method="ISEM"` is strict.
-For $|a| < 1$ and nonzero `omega`, `method="ISEM"` (and `UP` at the superradiant threshold) builds the Teukolsky solution directly with ISEM,
+For $|a| < 1$ and nonzero `omega`, ISEM (under `"auto"` or `"ISEM"`, and `UP` at the superradiant threshold) builds the Teukolsky solution directly,
 and `Teukolsky_solution(r)` then returns `(R, dR/dr, d2R/dr2, err)` instead of `[R, dR/dr]`.
 The arguments and keywords have the meanings given for `GSN_radial` with explicit `rsin, rsout`.
 
@@ -1397,16 +1404,26 @@ function Teukolsky_radial(
     elseif _is_isem_method(method) ||
             (_is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP)
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
+    elseif _is_auto_method(method)
+        try
+            return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=requested_tolerance, sfe=sfe, lfe=lfe)
+        catch err
+            _absorb_auto_isem_failure(err, s, l, m, a, omega, boundary_condition, xm)
+        end
+        gsn_func = _mark_legacy_fallback(Base.inferencebarrier(_gsn_radial_legacy)(
+            s, l, m, a, omega, boundary_condition, rsin, rsout; horizon_expansion_order, infinity_expansion_order,
+            method, data_type, ODE_algorithm, tol=requested_tolerance, rsmp))
+        return _teukolsky_from_gsn(gsn_func, s, m, a, omega, data_type)
     end
 
     gsn_func = GSN_radial(s, l, m, a, omega, boundary_condition, rsin, rsout;
         horizon_expansion_order, infinity_expansion_order, method, data_type,
         ODE_algorithm, tolerance=requested_tolerance, rsmp, xm, sfe, lfe, N)
 
-    return _teukolsky_from_gsn(gsn_func,s,m,a,omega,data_type,requested_tolerance)
+    return _teukolsky_from_gsn(gsn_func, s, m, a, omega, data_type)
 end
 
-function _teukolsky_from_gsn(gsn_func,s,m,a,omega,data_type,requested_tolerance)
+function _teukolsky_from_gsn(gsn_func, s, m, a, omega, data_type)
 
     # Convert asymptotic amplitudes from GSN to Teukolsky formalism
     if gsn_func.boundary_condition == IN
@@ -1435,51 +1452,10 @@ function _teukolsky_from_gsn(gsn_func,s,m,a,omega,data_type,requested_tolerance)
         error("Does not understand the boundary condition applied to the solution")
     end
 
-    # Convert the GSN solution to the Teukolsky solution
-    # For real-frequency ISEM UP solutions, R(r) at large r is taken from the Teukolsky asymptotic series, which
-    # returns `nothing` outside its convergence radius; the GSN-to-Teukolsky
-    # transformation is used there instead.
-    infinity_series = gsn_func.boundary_condition == UP && isreal(omega) &&
-            gsn_func.method == "ISEM" &&
-            !ExtremalRadial.is_exact_extremal_spin(a) ?
-        ISEM.RadialFunctions.teukolsky_infinity_series(
-            gsn_func.mode,max(gsn_func.infinity_expansion_order,gsn_func.numerical_GSN_solution.ordinary_order),
-            requested_tolerance === nothing ? ISEM.Iteration._ENDPOINT_SEED_TARGET :
-                max(requested_tolerance,ISEM.Iteration._ENDPOINT_SEED_TARGET)) : nothing
     converted_solution = Solutions.Teukolsky_radial_function_from_Sasaki_Nakamura_function(
-        gsn_func.mode.s,
-        gsn_func.mode.m,
-        gsn_func.mode.a,
-        gsn_func.mode.omega,
-        gsn_func.mode.lambda,
+        gsn_func.mode.s, gsn_func.mode.m, gsn_func.mode.a, gsn_func.mode.omega, gsn_func.mode.lambda,
         gsn_func.GSN_solution)
-    # Real-frequency ISEM IN solutions take R(r) at large r from the two Teukolsky series at infinity,
-    # B_inc R_in + B_ref R_out, where they beat the conversion's eps (2 omega r)^4 (ISEM.RadialFunctions.TeukolskyTwoWave).
-    # The series are set up on the first evaluation at r >= 3 (under a lock: one function may be evaluated from
-    # several threads), so a solution only used near the horizon does not pay for them.
-    use_two_wave = gsn_func.boundary_condition == IN && isreal(omega) && gsn_func.method == "ISEM" &&
-        !ExtremalRadial.is_exact_extremal_spin(a) && data_type <: Complex{Float64}
-    two_wave = Ref{Any}(missing)
-    two_wave_lock = ReentrantLock()
-    lambda_value = gsn_func.mode.lambda
-    teuk_func = r -> begin
-        if infinity_series !== nothing
-            endpoint = infinity_series(r)
-            endpoint !== nothing && return Solutions.SA[endpoint[1],endpoint[2]]
-        end
-        if use_two_wave && r isa Real && r >= first(ISEM.RadialFunctions.TWO_WAVE_RADII)
-            tw = lock(two_wave_lock) do
-                two_wave[] === missing && (two_wave[] = ISEM.RadialFunctions.teukolsky_two_wave(s, m, a, real(omega),
-                    real(lambda_value), incidence_amplitude, reflection_amplitude))
-                two_wave[]
-            end
-            if tw !== nothing
-                pair = ISEM.RadialFunctions.two_wave_pair(tw, r)
-                pair !== nothing && return Solutions.SA[pair[1],pair[2]]
-            end
-        end
-        return converted_solution(r)/transmission_amplitude_conv_factor
-    end
+    teuk_func = r -> converted_solution(r)/transmission_amplitude_conv_factor
 
     return TeukolskyRadialFunction(
         gsn_func.mode,
@@ -1521,9 +1497,7 @@ function Teukolsky_radial(
             s, l, m, a, omega, boundary_condition, rsin, rsout;
             method, tolerance=tol === nothing ? Solutions._DEFAULTTOLERANCE : tol)
     elseif !_is_static_frequency(omega) && (_is_isem_method(method) ||
-            (_is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP) ||
-            (_is_auto_method(method) && !_binary64_inputs(a, omega)))
-        # Arbitrary-precision inputs stay on the ISEM route (the ODE routes are binary64).
+            (_is_horizon_superradiance_frequency(a, m, omega) && boundary_condition == UP))
         return _teukolsky_from_isem(s, l, m, a, omega, boundary_condition; xm=xm, N=N, tol=tol, sfe=sfe, lfe=lfe)
     elseif !_is_static_frequency(omega)
         return Teukolsky_radial(s, l, m, a, omega, boundary_condition,

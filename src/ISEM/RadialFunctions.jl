@@ -325,8 +325,6 @@ function teukolsky_two_wave(s, m, a, omega, lambda, incidence, reflection)
     return nothing
 end
 
-two_wave_pair(t::TeukolskyTwoWave, r) = _two_wave_pair(t, r)
-
 function _two_wave_pair(t::TeukolskyTwoWave, r)
     (r isa Real && r >= t.r_two) || return nothing
     Rin, dRin, Rout, dRout, err = _infinity_solutions(t.s, t.a, t.omega, ComplexF64(r), t.cin, t.cout)

@@ -201,12 +201,12 @@ Rin(10.0)                       # R at r = 10
 Rin.Teukolsky_solution(10.0)    # R and dR/dr at r = 10
 ```
 
-`Rin.Teukolsky_solution(r)` returns the vector `[R, dR/dr]` with the default
-`method = "auto"` and with the ODE methods, and the tuple
-`(R, dR/dr, d²R/dr², err)` with `method = "ISEM"` (for `err` see Accuracy).
-At $|a| = 1$ and at `omega = 0` every method returns `[R, dR/dr]`; for
-$|a| < 1$ the `UP` solution at $\omega = m\Omega_H$ returns the four-entry
-tuple with every method.
+`Rin.Teukolsky_solution(r)` returns the tuple `(R, dR/dr, d²R/dr², err)`
+when ISEM solved it (`method = "auto"` or `"ISEM"`; for `err` see Accuracy)
+and the vector `[R, dR/dr]` with the ODE methods, including the fallback of
+`"auto"`. At $|a| = 1$ and at `omega = 0` every method returns `[R, dR/dr]`;
+for $|a| < 1$ the `UP` solution at $\omega = m\Omega_H$ returns the
+four-entry tuple with every method.
 
 ```@docs
 Teukolsky_radial
@@ -312,7 +312,7 @@ YRadialFunction
 - `X.GSN_solution(rstar)` of an ISEM solution returns `err = 0.0` at real
   frequency, where no error estimate is computed (`0.0` does not mean exact),
   and an estimate of the local error, not a bound, at complex frequency.
-- With `method = "ISEM"`, the `err` entry of `R.Teukolsky_solution(r)` is
+- With ISEM, the `err` entry of `R.Teukolsky_solution(r)` is
   likewise an estimate at complex frequency; at real frequency it is `0.0`,
   except at large `r` on an `UP` solution and on the `OUT` and `DOWN`
   solutions built from it, where it is the truncation estimate of the
