@@ -247,32 +247,18 @@ end
 
 function _spin_reflect_teukolsky_radial_function(
         f::TeukolskyRadialFunction, m::Int, a)
-    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
-    return TeukolskyRadialFunction(
-        mode, f.boundary_condition, f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude,
-        f.P_solution, f.GSN_solution, f.Teukolsky_solution, f.normalization_convention,
-    )
+    return _with_fields(f, (mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda),))
 end
 
 
 function _spin_reflect_gsn_radial_function(f::GSNRadialFunction, m::Int, a)
-    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
-    metadata = _spin_reflection_metadata(
-        f.numerical_GSN_solution, f.mode.a, f.mode.m, a, m)
-    return GSNRadialFunction(
-        mode, f.boundary_condition, f.rsin, f.rsout, f.rsmp, f.horizon_expansion_order, f.infinity_expansion_order,
-        f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude, metadata, f.numerical_Riccati_solution,
-        f.GSN_solution, f.normalization_convention, f.method,
-    )
+    return _with_fields(f, (mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda),
+        numerical_GSN_solution = _spin_reflection_metadata(f.numerical_GSN_solution, f.mode.a, f.mode.m, a, m)))
 end
 
 
 function _spin_reflect_y_radial_function(f::YRadialFunction, m::Int, a)
-    mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda)
-    return YRadialFunction(
-        mode, f.boundary_condition, f.transmission_amplitude, f.incidence_amplitude, f.reflection_amplitude,
-        f.P_solution, f.Teukolsky_solution, f.X_solution, f.Y_scalar_solution, f.Y_solution, f.normalization_convention,
-    )
+    return _with_fields(f, (mode = Mode(f.mode.s, f.mode.l, m, a, f.mode.omega, f.mode.lambda),))
 end
 
 _kerr_delta(r, a) = r^2 + a^2 - 2 * r
