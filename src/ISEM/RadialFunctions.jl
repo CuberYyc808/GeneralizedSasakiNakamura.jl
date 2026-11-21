@@ -1087,7 +1087,8 @@ function teukolsky_radial_function(route::Route; normalize=:teukolsky)
     scale, convention = _normalization_scale_from_factors(route, normalize, factors)
     solution = route_teukolsky_solution(route; normalize=normalize, scale=scale)
     return TeukolskyRadialFunction(
-        _route_mode(route), _route_boundary_condition(route), route.solution_scale * factors.trans / scale,
+        _route_mode(route), _route_boundary_condition(route),
+        normalize == :teukolsky ? one(scale) : route.solution_scale * factors.trans / scale,
         route.incidence * factors.incidence / scale, route.reflection * factors.reflection / scale, missing,
         gsn_radial_function(route), solution, convention,
     )
