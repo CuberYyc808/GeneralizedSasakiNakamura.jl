@@ -143,12 +143,9 @@ function _extremal_complex_path_incidence(result::LeaverResult, inputs;
     eigenvalue(w) = _swsh_eigenvalue(mode.s, mode.l, mode.m, inputs.a * w)
     omega = inputs.omega
     lambda = eigenvalue(omega)
-    dlambda = nothing
-    if derivative
-        h = 1.0e-3 * max(1.0, abs(omega))
-        dlambda = (8 * (eigenvalue(omega + h) - eigenvalue(omega - h)) -
-            (eigenvalue(omega + 2h) - eigenvalue(omega - 2h))) / (12h)
-    end
+    # d lambda / d omega = a d lambda / dc (Hellmann-Feynman; was a five-point difference of four eigen-solves, ~1e-12)
+    dlambda = derivative ? inputs.a * SpinWeightedSpheroidalHarmonics.angular_eigenvalue_derivative(
+        mode.s, mode.l, mode.m, inputs.a * omega) : nothing
     path = ExtremalRadial.extremal_complex_path_amplitudes(
         mode.s, mode.m, inputs.a, omega, lambda; dlambda)
     method = "ExtremalComplexPath"
