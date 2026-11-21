@@ -1152,7 +1152,6 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     n_reached_hor = nothing
     last_shell_inf = (0.0, 0.0, 0.0)
     last_shell_hor = (0.0, 0.0, 0.0)
-    below_count_n = 0
 
     shell_n_infinity_energy = 0.0
     shell_n_infinity_energy_last = 0.0
@@ -1162,7 +1161,6 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     shell_n_horizon_energy_last = 0.0
     shell_n_horizon_angular = 0.0
     shell_n_horizon_carter = 0.0
-    below_count_m = 0
     mode_index = Ref(0)
     # progress = true: one line per finished n shell on stdout (the number of shells is not known in advance)
     t_start = rs === nothing ? time() : rs.t_start
@@ -1189,7 +1187,6 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     levin_floor_tracks_mode_floor = levin_mode_abs_floor == mode_abs_floor
     branch_mode_floor = s -> s == -2 ? branch_mode_floor_inf[] : branch_mode_floor_hor[]
     branch_levin_floor = s -> levin_floor_tracks_mode_floor ? branch_mode_floor(s) : Float64(levin_mode_abs_floor)
-    ci_kwargs = (Nmax = Nmax, threaded_sampling = threaded_sampling)
     tail_levin_infinity_active = rs === nothing ? Ref(false) : rs.tail_levin_infinity_active
     tail_levin_horizon_active = rs === nothing ? Ref(false) : rs.tail_levin_horizon_active
     tail_levin_infinity_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_infinity_start_n
@@ -1272,78 +1269,46 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
     n0_reach_hor = 0
     rs === nothing || (total_modes = rs.n0_modes)
     if rs === nothing
-    for m in 1:lmax
-        n0_reach_inf = m
-        lmin = max(2, abs(m))
-        shell_m_infinity_energy = 0.0
-        shell_m_infinity_angular = 0.0
-        shell_m_infinity_carter = 0.0
-        below_count_l = 0
-
-        for l in lmin:lmax
-            mode = let; with_submission_mode(scope; mode = (-2, l, m, 0, 0)) do mode_cache
-                ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, -2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-            end; end
-            _record_current_mode!(record_h5, record, "I", mode_index, mode; l, m, n = 0, N_sample = N)
-            shell_m_infinity_energy += 2 * mode["EnergyFlux"]
-            shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
-            shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 1
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_infinity_energy), _adaptive_branch_mode_floor(shell_n_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
-            below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-            if below_count_l >= minimum_consecutive
-                break
+    # The n = 0 shell of each boundary: m = 1, 2, ... l walks, every mode through ecc_compute / ecc_accept! (the
+    # negligible-mode skip, coverage retry, counters, finite check and cap tracking of the n >= 1 shells) refined to
+    # MODE_REFINE_FLOOR_FRACTION of the running floor; an l walk stops after minimum_consecutive modes below tol times
+    # its m shell, the m walk after minimum_consecutive m shells below tol times the n shell. Returns the shell sums,
+    # the last m reached and the modes computed.
+    n0_shell = s -> begin
+        boundary = s == -2 ? "I" : "H"
+        energy, angular, carter = 0.0, 0.0, 0.0
+        below_m, reach, modes = 0, 0, 0
+        for m in 1:lmax
+            reach = m
+            m_energy, m_angular, m_carter = 0.0, 0.0, 0.0
+            below_l = 0
+            for l in max(2, m):lmax
+                floor = _adaptive_branch_mode_floor(energy + m_energy, tol, mode_abs_floor)
+                mode = ecc_accept!(s, l, m, 0,
+                    ecc_compute(s, l, m, 0, 1.0, false, MODE_REFINE_FLOOR_FRACTION * floor, floor, 0.0, nothing))
+                _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, n = 0, N_sample = N)
+                m_energy += 2 * mode["EnergyFlux"]
+                m_angular += 2 * mode["AngularMomentumFlux"]
+                m_carter += 2 * mode["CarterConstantFlux"]
+                modes += 1
+                below_l = abs(mode["EnergyFlux"]) <= _mode_cutoff_threshold(tol * abs(m_energy), floor) ? below_l + 1 : 0
+                below_l >= minimum_consecutive && break
             end
+            energy += m_energy
+            angular += m_angular
+            carter += m_carter
+            threshold = _mode_cutoff_threshold(tol * abs(energy), _adaptive_branch_mode_floor(energy, tol, mode_abs_floor))
+            below_m = abs(m_energy) <= threshold ? below_m + 1 : 0
+            below_m >= minimum_consecutive && break
         end
-
-        shell_n_infinity_energy += shell_m_infinity_energy
-        shell_n_infinity_angular += shell_m_infinity_angular
-        shell_n_infinity_carter += shell_m_infinity_carter
-
-        layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_infinity_energy), _adaptive_branch_mode_floor(shell_n_infinity_energy, tol, mode_abs_floor))
-        below_count_m = abs(shell_m_infinity_energy) <= layer_threshold ? below_count_m + 1 : 0
-        if below_count_m >= minimum_consecutive
-            shell_n_infinity_energy_last = shell_n_infinity_energy
-            break
-        end
+        return energy, angular, carter, reach, modes
     end
-
-    below_count_m = 0
-    for m in 1:lmax
-        n0_reach_hor = m
-        lmin = max(2, abs(m))
-        shell_m_horizon_energy = 0.0
-        shell_m_horizon_angular = 0.0
-        shell_m_horizon_carter = 0.0
-        below_count_l = 0
-
-        for l in lmin:lmax
-            mode = let; with_submission_mode(scope; mode = (2, l, m, 0, 0)) do mode_cache
-                ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, 2, l, m, 0, N; tol = tol, sample_tol = sample_tol, mode_abs_floor = _adaptive_branch_mode_floor(shell_n_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), ci_kwargs..., cache = mode_cache)
-            end; end
-            _record_current_mode!(record_h5, record, "H", mode_index, mode; l, m, n = 0, N_sample = N)
-            shell_m_horizon_energy += 2 * mode["EnergyFlux"]
-            shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
-            shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 1
-            layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_horizon_energy), _adaptive_branch_mode_floor(shell_n_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
-            below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
-            if below_count_l >= minimum_consecutive
-                break
-            end
-        end
-
-        shell_n_horizon_energy += shell_m_horizon_energy
-        shell_n_horizon_angular += shell_m_horizon_angular
-        shell_n_horizon_carter += shell_m_horizon_carter
-
-        layer_threshold = _mode_cutoff_threshold(tol * abs(shell_n_horizon_energy), _adaptive_branch_mode_floor(shell_n_horizon_energy, tol, mode_abs_floor))
-        below_count_m = abs(shell_m_horizon_energy) <= layer_threshold ? below_count_m + 1 : 0
-        if below_count_m >= minimum_consecutive
-            shell_n_horizon_energy_last = shell_n_horizon_energy
-            break
-        end
-    end
+    shell_n_infinity_energy, shell_n_infinity_angular, shell_n_infinity_carter, n0_reach_inf, modes_n0_inf = n0_shell(-2)
+    shell_n_horizon_energy, shell_n_horizon_angular, shell_n_horizon_carter, n0_reach_hor, modes_n0_hor = n0_shell(2)
+    total_modes += modes_n0_inf + modes_n0_hor
+    # the reference of the n = 1 shell, whether the m walk stopped by its rule or ran off lmax
+    shell_n_infinity_energy_last = shell_n_infinity_energy
+    shell_n_horizon_energy_last = shell_n_horizon_energy
 
     push!(Energy_flux_inf, shell_n_infinity_energy)
     push!(Energy_flux_hor, shell_n_horizon_energy)
