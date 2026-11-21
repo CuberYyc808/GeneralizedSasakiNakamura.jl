@@ -11,9 +11,9 @@ export kerr_geo_inclined_sample_dense, subsample_inclined_sample, refine_incline
 export kerr_geo_eccentric_sample_dense, subsample_eccentric_sample, refine_eccentric_y_sample
 export swsh_sample
 export y_sample_m2_isem, y_sample_p2_isem
-export integrand_generic_sample_m2, integrand_generic_sample_p2, integrand_inclined_sample_m2, integrand_inclined_sample_p2
+export integrand_generic_sample_m2, integrand_generic_sample_p2, integrand_inclined_sample
 export kerr_geo_inclined_sample_cheby
-export integrand_generic_sample_cheby_m2, integrand_generic_sample_cheby_p2, integrand_eccentric_sample_cheby_p2, integrand_inclined_sample_cheby_m2, integrand_inclined_sample_cheby_p2
+export integrand_generic_sample_cheby_m2, integrand_generic_sample_cheby_p2, integrand_eccentric_sample_cheby_p2, integrand_inclined_sample_cheby
 export kerr_geo_eccentric_segment_sample_cheby, eccentric_segment_geometry_cache, eccentric_segment_phase_basis_cache, eccentric_segment_sample_bundle_cheby, integrand_eccentric_factored_segment_cheby_m2
 
 # The orbit evaluated by its phases (KerrGeodesics.kerr_geo_orbit_phases: q_r = 0 at periapsis, q_theta = 0 at the
@@ -2361,79 +2361,50 @@ function integrand_eccentric_sample_cheby_p2(KG_samp, Y_samp, SH, n::Int64)
     return Jp, Jm, drphase, rphaseL, rphaseR, prefactor
 end
 
-function integrand_inclined_sample_m2(KG_samp, Y_dic, SH_samp, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Polar, r fixed as constant)
-    # --------------------------
-    r = KG_samp["r"]              # Fixed radial coordinate (scalar)
-    rs = KG_samp["rs"]            # Precomputed tortoise coordinate (scalar)
-    θ_vec = KG_samp["θ"]          # Polar sampling points (length K)
-    K = KG_samp["K_sample"]       # Number of polar grid points
-    Γ = KG_samp["Γ"]
-    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]  # Omit radial initial phase
-    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]  # Only polar cross functions
-
-    # Polar velocities
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Polar cross functions
-    Δtθ = KG_samp["Δtθ"]          # Polar time difference
-    Δφθ = KG_samp["Δφθ"]          # Polar azimuthal difference
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (polar-dependent, 1D vectors)
-    S0 = SH_samp["S0"]            # Base value (length K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (length K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (length K)
-
-    # Constant parameters
+# The per-θ terms of the source of a spherical (inclined circular) orbit at fixed r, for s = -2 (W_nn, W_nmbar,
+# W_mbarmbar with N and Mbar) and s = +2 (W_ll, W_lm, W_mm with L and M). The two differ in the signs of m and
+# a omega in the angular operators, the sign of the radial carrier and of M, and the weights (1/2, -1, 1) against
+# (2, 4, 4) (powers of two and signs, so the merged form rounds as the two separate ones did). `rs`: the tortoise
+# coordinate (one scalar, or one per θ).
+function _inclined_source_terms(KG_samp, Y_dic, SH_samp, s, rs)
+    r = KG_samp["r"]
+    θ_vec = KG_samp["θ"]
+    uθp = KG_samp["uθ_fwd"]
+    uθm = KG_samp["uθ_rev"]
+    E = KG_samp["E"]
+    Lz = KG_samp["Lz"]
+    S0, S1, S2 = SH_samp["S0"], SH_samp["S1"], SH_samp["S2"]
     params = Y_dic["params"]
-    s, l, m = params.s, params.l, params.m
+    m = params.m
     a, ω, λ = params.a, params.omega, params.lambda
+    rp = 1.0 + sqrt(1.0 - a^2)
+    rm = 1.0 - sqrt(1.0 - a^2)
+    σ = s == -2 ? -1.0 : 1.0
+    w1, w2, w3 = s == -2 ? (0.5, -1.0, 1.0) : (2.0, 4.0, 4.0)
 
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
+    r2 = r^2
+    Δ = r2 - 2r + a^2
+    sqrt_r2_a2 = sqrt(r2 + a^2)
 
-    # --------------------------
-    # 2. r-fixed Terms (retained as constants)
-    # --------------------------
-    r2 = r^2                      # r² (fixed)
-    Δ = r2 - 2r + a^2             # Kerr metric Δ(r) (fixed)
-    sqrt_r2_a2 = sqrt(r2 + a^2)   # √(r² + a²) (fixed)
-
-    # --------------------------
-    # 3. Complex Parameters (polar 1D vectors)
-    # --------------------------
     cosθ = cos.(θ_vec)
-    ρ = -1.0 ./ (r .- im .* a .* cosθ)  # ρ(θ)
-    ρbar = -1.0 ./ (r .+ im .* a .* cosθ)  # ρ̄(θ)
-    inv_ρ = 1.0 ./ ρ              # 1/ρ(θ)
+    ρ = -1.0 ./ (r .- im .* a .* cosθ)
+    ρbar = -1.0 ./ (r .+ im .* a .* cosθ)
+    inv_ρ = 1.0 ./ ρ
 
-    # --------------------------
-    # 4. L-series Operators (polar 1D vectors)
-    # --------------------------
     sinθ = sin.(θ_vec)
     inv_sinθ = 1.0 ./ sinθ
     inv_sin2θ = 1.0 ./ (sinθ .^ 2)
     cotθ = cosθ ./ sinθ
 
-    L1 = (-m) .* inv_sinθ .+ a .* ω .* sinθ .+ cotθ
-    L2 = (-m) .* inv_sinθ .+ a .* ω .* sinθ .+ 2.0 .* cotθ
-    L2p = m .* cosθ .* inv_sin2θ .+ a .* ω .* cosθ .- 2.0 .* inv_sin2θ
+    # angular operators: L1, L2 with m -> sigma m, a omega -> -sigma a omega
+    L1 = (σ * m) .* inv_sinθ .- σ .* (a .* ω .* sinθ) .+ cotθ
+    L2 = (σ * m) .* inv_sinθ .- σ .* (a .* ω .* sinθ) .+ 2.0 .* cotθ
+    L2p = (-σ * m) .* cosθ .* inv_sin2θ .+ (-σ) .* (a .* ω .* cosθ) .- 2.0 .* inv_sin2θ
 
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (polar 1D vectors)
-    # --------------------------
     L2S = S1 .+ L2 .* S0
     L1Sp = S2 .+ L1 .* S1
     L1L2S = L1Sp .+ L2p .* S0 .+ L2 .* S1 .+ L1 .* L2 .* S0
 
-    # L1pL2pS (polar-dependent complex combinations)
     term1 = inv_ρ .* L1L2S
     term2 = 3im .* a .* sinθ .* L1 .* S0
     term3 = 3im .* a .* cosθ .* S0
@@ -2441,502 +2412,78 @@ function integrand_inclined_sample_m2(KG_samp, Y_dic, SH_samp, k::Int64)
     term5 = -1im .* a .* sinθ .* L2 .* S0
     L1pL2pS = term1 .+ term2 .+ term3 .+ term4 .+ term5
 
-    # --------------------------
-    # 6. Phase Terms (polar-only)
-    # --------------------------
-    log_term = log((r - rp) / (r - rm))  # Scalar (r-fixed)
-    phase = exp(im * ω * rs - im * a * m * log_term / (2.0 * sqrt(1.0 - a^2)))  # 1D (K)
+    # radial carrier exp(-+ i (omega r* - a m log((r - r+) / (r - r-)) / (2 sqrt(1 - a^2))))
+    log_term = log((r - rp) / (r - rm))
+    phase = exp.((-σ) .* (im .* ω .* rs .- im .* a .* m .* log_term ./ (2.0 .* sqrt(1.0 .- a^2))))
 
-    qθ = range(0.0, π; length=K)
-    θphase = ω .* Δtθ .- m .* Δφθ .+ k .* qθ  # Polar-only phase (1D K)
+    Y = Y_dic["Y"]
+    Yp = Y_dic["Yp"]
+    X = Y_dic["X"]
 
-    # --------------------------
-    # 7. W-series Quantities (polar 1D vectors)
-    # --------------------------
-    Y = Y_dic["Y"]               # Radial function (scalar, r-fixed)
-    Yp = Y_dic["Yp"]             # Radial derivative (scalar)
-    X = Y_dic["X"]               # Auxiliary radial function (scalar)
-    Binc = Y_dic["Binc"]
-
-    # Wnn: radial terms are scalar (r-fixed)
-    Wnn = ρbar .* L1pL2pS .* r2 .* Y .* phase ./ 2.0
+    W1 = w1 .* (ρbar .* L1pL2pS .* r2 .* Y .* phase)
 
     term_A = L2S .+ im .* a .* sinθ .* (ρ .- ρbar) .* S0
-    term_B = 2.0 .* Y .+ r .* Yp    # Scalar broadcast to 1D
+    term_B = 2.0 .* Y .+ r .* Yp
     term_C = L2S .* (ρ .+ ρbar) .* r .* Y
-    Wnmbar = (-r .* ρbar .* (term_A .* term_B .+ term_C) ./ ρ) .* phase
+    W2 = w2 .* (r .* ρbar .* (term_A .* term_B .+ term_C) ./ ρ) .* phase
 
-    term_D = X ./ (2.0 .* sqrt_r2_a2)  # Scalar broadcast to 1D
+    term_D = X ./ (2.0 .* sqrt_r2_a2)
     term_E = (Y .+ 2.0 .* r .* Yp) .* phase
     term_F = ρ .* r .* (2.0 .* Y .+ r .* Yp) .* phase
-    Wmbarmbar = S0 .* ρbar .* (term_D .+ term_E .+ term_F) ./ ρ
+    W3 = w3 .* (S0 .* ρbar .* (term_D .+ term_E .+ term_F) ./ ρ)
 
-    # --------------------------
-    # 8. N and Mbar Terms (retain N as constant, Mbar polar-dependent)
-    # --------------------------
-    N = (E * (r2 + a^2) - a * Lz) / Δ  # ur_fwd=0 for fixed r → Np = numerator_N / Δ
-
-    # Polar velocity terms (Mbarp/Mbarm are 1D)
-    term_M = im .* sinθ .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ)
-    Mbarp = term_M .+ uθp
-    Mbarm = term_M .+ uθm
-
-    # --------------------------
-    # 9. J-series Terms (1D polar, 1D Fourier normalization)
-    # --------------------------             # Same as Np_sq for fixed r
-    Mbarp_sq = Mbarp .^ 2
-    Mbarm_sq = Mbarm .^ 2
-
-    exp_p = exp.(im .* θphase)
-    exp_m = exp.(-im .* θphase)
-
-    # 1D Fourier transform: normalization factor 1/(2π) (polar-only)
-    Jp = (Wnn .* N^2 .+ Wnmbar .* N .* Mbarp .+ Wmbarmbar .* Mbarp_sq) .* exp_p
-    Jm = (Wnn .* N^2 .+ Wnmbar .* N .* Mbarm .+ Wmbarmbar .* Mbarm_sq) .* exp_m
-    Jlmk = (Jp .+ Jm) ./ (2π)  # Corrected: 1D Fourier normalization
-
-    # --------------------------
-    # 10. Final Phase Correction and Result
-    # --------------------------
-    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0  # No radial terms
-
-    return 4im .* π .* ω .* Jlmk .* exp.(im .* Xi) ./ (Γ .* Binc)
+    # N (L) is the radial and Mbar (M) the polar velocity term; ur = 0 at fixed r
+    N = (E * (r2 + a^2) - a * Lz) / Δ
+    term_M = (s == -2 ? im : -im) .* sinθ .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ)
+    return (; W1, W2, W3, N, Mp=term_M .+ uθp, Mm=term_M .+ uθm, m, a, ω, λ, rp)
 end
 
-function integrand_inclined_sample_p2(KG_samp, Y_dic, SH_samp, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Polar, r fixed as constant)
-    # --------------------------
-    r = KG_samp["r"]              # Fixed radial coordinate (scalar)
-    rs = KG_samp["rs"]            # Precomputed tortoise coordinate (scalar)
-    θ_vec = KG_samp["θ"]          # Polar sampling points (length K)
-    K = KG_samp["K_sample"]       # Number of polar grid points
+# The prefactor of the s = -2 (B_inc) or s = +2 (C_inc, horizon factors) amplitude, times `J`.
+_inclined_prefactor(t, J, s, Γ, Y_dic, Xi) = s == -2 ?
+    4im .* π .* t.ω .* J .* exp.(im .* Xi) ./ (Γ .* Y_dic["Binc"]) :
+    ((κ, η, factor) = _plus2_source_factors(t.a, t.m, t.ω, t.λ, t.rp);
+    .- im .* π .* η .* J .* exp.(im .* Xi) .* factor ./ (Γ .* Y_dic["Cinc"] .* κ))
+
+# The polar integrand of the s = -2 or s = +2 amplitude of a spherical orbit on the uniform trapezoid grid in q_theta.
+function integrand_inclined_sample(KG_samp, Y_dic, SH_samp, k::Int64, s::Int)
+    K = KG_samp["K_sample"]
     Γ = KG_samp["Γ"]
-    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]  # Omit radial initial phase
-    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]  # Only polar cross functions
-
-    # Polar velocities
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Polar cross functions
-    Δtθ = KG_samp["Δtθ"]          # Polar time difference
-    Δφθ = KG_samp["Δφθ"]          # Polar azimuthal difference
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (polar-dependent, 1D vectors)
-    S0 = SH_samp["S0"]            # Base value (length K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (length K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (length K)
-
-    # Constant parameters
-    params = Y_dic["params"]
-    s, l, m = params.s, params.l, params.m
-    a, ω, λ = params.a, params.omega, params.lambda
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. r-fixed Terms (retained as constants)
-    # --------------------------
-    r2 = r^2                      # r² (fixed)
-    Δ = r2 - 2r + a^2             # Kerr metric Δ(r) (fixed)
-    sqrt_r2_a2 = sqrt(r2 + a^2)   # √(r² + a²) (fixed)
-
-    # --------------------------
-    # 3. Complex Parameters (polar 1D vectors)
-    # --------------------------
-    cosθ = cos.(θ_vec)
-    ρ = -1.0 ./ (r .- im .* a .* cosθ)  # ρ(θ)
-    ρbar = -1.0 ./ (r .+ im .* a .* cosθ)  # ρ̄(θ)
-    inv_ρ = 1.0 ./ ρ              # 1/ρ(θ)
-
-    # --------------------------
-    # 4. L-series Operators (polar 1D vectors)
-    # --------------------------
-    sinθ = sin.(θ_vec)
-    inv_sinθ = 1.0 ./ sinθ
-    inv_sin2θ = 1.0 ./ (sinθ .^ 2)
-    cotθ = cosθ ./ sinθ
-
-    L1 = m .* inv_sinθ .- a .* ω .* sinθ .+ cotθ
-    L2 = m .* inv_sinθ .- a .* ω .* sinθ .+ 2.0 .* cotθ
-    L2p = .- m .* cosθ .* inv_sin2θ .- a .* ω .* cosθ .- 2.0 .* inv_sin2θ
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (polar 1D vectors)
-    # --------------------------
-    L2S = S1 .+ L2 .* S0
-    L1Sp = S2 .+ L1 .* S1
-    L1L2S = L1Sp .+ L2p .* S0 .+ L2 .* S1 .+ L1 .* L2 .* S0
-
-    # L1pL2pS (polar-dependent complex combinations)
-    term1 = inv_ρ .* L1L2S
-    term2 = 3im .* a .* sinθ .* L1 .* S0
-    term3 = 3im .* a .* cosθ .* S0
-    term4 = 2im .* a .* sinθ .* S1
-    term5 = -1im .* a .* sinθ .* L2 .* S0
-    L1pL2pS = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (polar-only)
-    # --------------------------
-    log_term = log((r - rp) / (r - rm))  # Scalar (r-fixed)
-    phase = exp(- im * ω * rs + im * a * m * log_term / (2.0 * sqrt(1.0 - a^2)))  # 1D (K)
-
+    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]
+    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]
+    Δtθ = KG_samp["Δtθ"]
+    Δφθ = KG_samp["Δφθ"]
+    t = _inclined_source_terms(KG_samp, Y_dic, SH_samp, s, KG_samp["rs"])
+    m, ω = t.m, t.ω
     qθ = range(0.0, π; length=K)
-    θphase = ω .* Δtθ .- m .* Δφθ .+ k .* qθ  # Polar-only phase (1D K)
-
-    # --------------------------
-    # 7. W-series Quantities (polar 1D vectors)
-    # --------------------------
-    Y = Y_dic["Y"]               # Radial function (scalar, r-fixed)
-    Yp = Y_dic["Yp"]             # Radial derivative (scalar)
-    X = Y_dic["X"]               # Auxiliary radial function (scalar)
-    Cinc = Y_dic["Cinc"]
-
-    # Wll: radial terms are scalar (r-fixed)
-    Wll = 2.0 .* ρbar .* L1pL2pS .* r2 .* Y .* phase
-
-    term_A = L2S .+ im .* a .* sinθ .* (ρ .- ρbar) .* S0
-    term_B = 2.0 .* Y .+ r .* Yp    # Scalar broadcast to 1D
-    term_C = L2S .* (ρ .+ ρbar) .* r .* Y
-    Wlm = 4.0 .* (r .* ρbar .* (term_A .* term_B .+ term_C) ./ ρ) .* phase
-
-    term_D = X ./ (2.0 .* sqrt_r2_a2)  # Scalar broadcast to 1D
-    term_E = (Y .+ 2.0 .* r .* Yp) .* phase
-    term_F = ρ .* r .* (2.0 .* Y .+ r .* Yp) .* phase
-    Wmm = 4.0 .* S0 .* ρbar .* (term_D .+ term_E .+ term_F) ./ ρ
-
-    # --------------------------
-    # 8. L and M Terms
-    # --------------------------
-    L = (E * (r2 + a^2) - a * Lz) / Δ
-
-    # Polar velocity terms (Mp/Mm are 1D)
-    term_M = - im .* sinθ .* (a .* E .- Lz .* inv_sin2θ)
-    Mp = term_M .+ uθp
-    Mm = term_M .+ uθm
-
-    # --------------------------
-    # 9. J-series Terms (1D polar, 1D Fourier normalization)
-    # --------------------------           
-    Mp_sq = Mp .^ 2
-    Mm_sq = Mm .^ 2
-
+    θphase = ω .* Δtθ .- m .* Δφθ .+ k .* qθ
     exp_p = exp.(im .* θphase)
     exp_m = exp.(-im .* θphase)
-
-    # 1D Fourier transform: normalization factor 1/(2π) (polar-only)
-    Jp = (Wll .* L^2 .+ Wlm .* L .* Mp .+ Wmm .* Mp_sq) .* exp_p
-    Jm = (Wll .* L^2 .+ Wlm .* L .* Mm .+ Wmm .* Mm_sq) .* exp_m
-    Jlmk = (Jp .+ Jm) ./ (2π)  # Corrected: 1D Fourier normalization
-
-    # --------------------------
-    # 10. Final Phase Correction and Result
-    # --------------------------
-    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0  # No radial terms
-    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
-
-    return .- im .* π .* η .* Jlmk .* exp.(im .* Xi) .* factor ./ (Γ .* Cinc .* κ)
+    Jp = (t.W1 .* t.N^2 .+ t.W2 .* t.N .* t.Mp .+ t.W3 .* t.Mp .^ 2) .* exp_p
+    Jm = (t.W1 .* t.N^2 .+ t.W2 .* t.N .* t.Mm .+ t.W3 .* t.Mm .^ 2) .* exp_m
+    Jlmk = (Jp .+ Jm) ./ (2π)
+    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0
+    return _inclined_prefactor(t, Jlmk, s, Γ, Y_dic, Xi)
 end
 
-function integrand_inclined_sample_cheby_m2(KG_samp, Y_dic, SH_samp, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Polar, r fixed as constant)
-    # --------------------------
-    r = KG_samp["r"]              # Fixed radial coordinate (scalar)
-    rs_vals = KG_samp["rs"]       # Precomputed tortoise coordinates (length K)
-    θ_vec = KG_samp["θ"]          # Polar sampling points (length K)
-    K = KG_samp["K_sample"]       # Number of polar grid points
+# The same on the Chebyshev polar nodes: the two polar branches without their phase, the phase derivative and end
+# values, and the prefactor (for the adaptive Levin route).
+function integrand_inclined_sample_cheby(KG_samp, Y_dic, SH_samp, k::Int64, s::Int)
     Γ = KG_samp["Γ"]
-    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]  # Omit radial initial phase
-    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]  # Only polar cross functions
+    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]
+    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]
     dtθ = KG_samp["dtθ"]
     dφθ = KG_samp["dφθ"]
-
-    # Polar velocities
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Polar cross functions
-    Δtθ = KG_samp["Δtθ"]          # Polar time difference
-    Δφθ = KG_samp["Δφθ"]          # Polar azimuthal difference
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (polar-dependent, 1D vectors)
-    S0 = SH_samp["S0"]            # Base value (length K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (length K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (length K)
-
-    # Constant parameters
-    params = Y_dic["params"]
-    s, l, m = params.s, params.l, params.m
-    a, ω, λ = params.a, params.omega, params.lambda
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. r-fixed Terms (retained as constants)
-    # --------------------------
-    r2 = r^2                      # r² (fixed)
-    Δ = r2 - 2r + a^2             # Kerr metric Δ(r) (fixed)
-    sqrt_r2_a2 = sqrt(r2 + a^2)   # √(r² + a²) (fixed)
-
-    # --------------------------
-    # 3. Complex Parameters (polar 1D vectors)
-    # --------------------------
-    cosθ = cos.(θ_vec)
-    ρ = -1.0 ./ (r .- im .* a .* cosθ)  # ρ(θ)
-    ρbar = -1.0 ./ (r .+ im .* a .* cosθ)  # ρ̄(θ)
-    inv_ρ = 1.0 ./ ρ              # 1/ρ(θ)
-
-    # --------------------------
-    # 4. L-series Operators (polar 1D vectors)
-    # --------------------------
-    sinθ = sin.(θ_vec)
-    inv_sinθ = 1.0 ./ sinθ
-    inv_sin2θ = 1.0 ./ (sinθ .^ 2)
-    cotθ = cosθ ./ sinθ
-
-    L1 = (-m) .* inv_sinθ .+ a .* ω .* sinθ .+ cotθ
-    L2 = (-m) .* inv_sinθ .+ a .* ω .* sinθ .+ 2.0 .* cotθ
-    L2p = m .* cosθ .* inv_sin2θ .+ a .* ω .* cosθ .- 2.0 .* inv_sin2θ
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (polar 1D vectors)
-    # --------------------------
-    L2S = S1 .+ L2 .* S0
-    L1Sp = S2 .+ L1 .* S1
-    L1L2S = L1Sp .+ L2p .* S0 .+ L2 .* S1 .+ L1 .* L2 .* S0
-
-    # L1pL2pS (polar-dependent complex combinations)
-    term1 = inv_ρ .* L1L2S
-    term2 = 3im .* a .* sinθ .* L1 .* S0
-    term3 = 3im .* a .* cosθ .* S0
-    term4 = 2im .* a .* sinθ .* S1
-    term5 = -1im .* a .* sinθ .* L2 .* S0
-    L1pL2pS = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (polar-only)
-    # --------------------------
-    log_term = log((r - rp) / (r - rm))  # Scalar (r-fixed)
-    phase = exp.(im .* ω .* rs_vals .- im .* a .* m .* log_term ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D (K)
-
-    qθ = range(0.0, π; length=K)
+    Δtθ = KG_samp["Δtθ"]
+    Δφθ = KG_samp["Δφθ"]
+    t = _inclined_source_terms(KG_samp, Y_dic, SH_samp, s, KG_samp["rs"])
+    m, ω = t.m, t.ω
     dθphase = ω .* dtθ .- m .* dφθ .+ k
     θphaseL = ω * Δtθ[1] - m * Δφθ[1]
     θphaseR = ω * Δtθ[end] - m * Δφθ[end] + k * 1.0pi
-
-    # --------------------------
-    # 7. W-series Quantities (polar 1D vectors)
-    # --------------------------
-    Y = Y_dic["Y"]               # Radial function (scalar, r-fixed)
-    Yp = Y_dic["Yp"]             # Radial derivative (scalar)
-    X = Y_dic["X"]               # Auxiliary radial function (scalar)
-    Binc = Y_dic["Binc"]
-
-    # Wnn: radial terms are scalar (r-fixed)
-    Wnn = ρbar .* L1pL2pS .* r2 .* Y .* phase ./ 2.0
-
-    term_A = L2S .+ im .* a .* sinθ .* (ρ .- ρbar) .* S0
-    term_B = 2.0 .* Y .+ r .* Yp    # Scalar broadcast to 1D
-    term_C = L2S .* (ρ .+ ρbar) .* r .* Y
-    Wnmbar = (-r .* ρbar .* (term_A .* term_B .+ term_C) ./ ρ) .* phase
-
-    term_D = X ./ (2.0 .* sqrt_r2_a2)  # Scalar broadcast to 1D
-    term_E = (Y .+ 2.0 .* r .* Yp) .* phase
-    term_F = ρ .* r .* (2.0 .* Y .+ r .* Yp) .* phase
-    Wmbarmbar = S0 .* ρbar .* (term_D .+ term_E .+ term_F) ./ ρ
-
-    # --------------------------
-    # 8. N and Mbar Terms (retain N as constant, Mbar polar-dependent)
-    # --------------------------
-    # Radial velocity terms (Np/Nm are scalar for fixed r)
-    numerator_N = E .* (r2 + a^2) .- a .* Lz  # Scalar
-    Np = (numerator_N) ./ Δ  # ur_fwd=0 for fixed r → Np = numerator_N / Δ
-    Nm = (numerator_N) ./ Δ  # ur_rev=0 for fixed r → Nm = Np
-
-    # Polar velocity terms (Mbarp/Mbarm are 1D)
-    term_M = im .* sinθ .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ)
-    Mbarp = term_M .+ uθp
-    Mbarm = term_M .+ uθm
-
-    # --------------------------
-    # 9. J-series Terms (1D polar, 1D Fourier normalization)
-    # --------------------------
-    Np_sq = Np^2                  # Scalar squared
-    Nm_sq = Nm^2                  # Same as Np_sq for fixed r
-    Mbarp_sq = Mbarp .^ 2
-    Mbarm_sq = Mbarm .^ 2
-
-    # 1D Fourier transform: normalization factor 1/(2π) (polar-only)
-    Jp = (Wnn .* Np_sq .+ Wnmbar .* Np .* Mbarp .+ Wmbarmbar .* Mbarp_sq) ./ (2.0pi)
-    Jm = (Wnn .* Nm_sq .+ Wnmbar .* Nm .* Mbarm .+ Wmbarmbar .* Mbarm_sq) ./ (2.0pi)
-
-    # --------------------------
-    # 10. Final Phase Correction and Result
-    # --------------------------
-    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0  # No radial terms
-    prefactor = 4im * π * ω * exp(im * Xi) / (Γ * Binc)
-
-    return Jp, Jm, dθphase, θphaseL, θphaseR, prefactor
-end
-
-function integrand_inclined_sample_cheby_p2(KG_samp, Y_dic, SH_samp, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Polar, r fixed as constant)
-    # --------------------------
-    r = KG_samp["r"]              # Fixed radial coordinate (scalar)
-    rs_vals = KG_samp["rs"]       # Precomputed tortoise coordinates (length K)
-    θ_vec = KG_samp["θ"]          # Polar sampling points (length K)
-    K = KG_samp["K_sample"]       # Number of polar grid points
-    Γ = KG_samp["Γ"]
-    qt0, _, qθ0, qφ0 = KG_samp["InitialPhases"]  # Omit radial initial phase
-    Δtθ_func, Δφθ_func = KG_samp["CrossFunction"]  # Only polar cross functions
-    dtθ = KG_samp["dtθ"]
-    dφθ = KG_samp["dφθ"]
-
-    # Polar velocities
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Polar cross functions
-    Δtθ = KG_samp["Δtθ"]          # Polar time difference
-    Δφθ = KG_samp["Δφθ"]          # Polar azimuthal difference
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (polar-dependent, 1D vectors)
-    S0 = SH_samp["S0"]            # Base value (length K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (length K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (length K)
-
-    # Constant parameters
-    params = Y_dic["params"]
-    s, l, m = params.s, params.l, params.m
-    a, ω, λ = params.a, params.omega, params.lambda
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. r-fixed Terms (retained as constants)
-    # --------------------------
-    r2 = r^2                      # r² (fixed)
-    Δ = r2 - 2*r + a^2             # Kerr metric Δ(r) (fixed)
-    sqrt_r2_a2 = sqrt(r2 + a^2)   # √(r² + a²) (fixed)
-
-    # --------------------------
-    # 3. Complex Parameters (polar 1D vectors)
-    # --------------------------
-    cosθ = cos.(θ_vec)
-    ρ = -1.0 ./ (r .- im .* a .* cosθ)  # ρ(θ)
-    ρbar = -1.0 ./ (r .+ im .* a .* cosθ)  # ρ̄(θ)
-    inv_ρ = 1.0 ./ ρ              # 1/ρ(θ)
-
-    # --------------------------
-    # 4. L-series Operators (polar 1D vectors)
-    # --------------------------
-    sinθ = sin.(θ_vec)
-    inv_sinθ = 1.0 ./ sinθ
-    inv_sin2θ = 1.0 ./ (sinθ .^ 2)
-    cotθ = cosθ ./ sinθ
-
-    L1 = m .* inv_sinθ .- a .* ω .* sinθ .+ cotθ
-    L2 = m .* inv_sinθ .- a .* ω .* sinθ .+ 2.0 .* cotθ
-    L2p = - m .* cosθ .* inv_sin2θ .- a .* ω .* cosθ .- 2.0 .* inv_sin2θ
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (polar 1D vectors)
-    # --------------------------
-    L2S = S1 .+ L2 .* S0
-    L1Sp = S2 .+ L1 .* S1
-    L1L2S = L1Sp .+ L2p .* S0 .+ L2 .* S1 .+ L1 .* L2 .* S0
-
-    # L1pL2pS (polar-dependent complex combinations)
-    term1 = inv_ρ .* L1L2S
-    term2 = 3im .* a .* sinθ .* L1 .* S0
-    term3 = 3im .* a .* cosθ .* S0
-    term4 = 2im .* a .* sinθ .* S1
-    term5 = -1im .* a .* sinθ .* L2 .* S0
-    L1pL2pS = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (polar-only)
-    # --------------------------
-    log_term = log((r - rp) / (r - rm))  # Scalar (r-fixed)
-    phase = exp.(.- im .* ω .* rs_vals .+ im .* a .* m .* log_term ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D (K)
-
-    qθ = range(0.0, π; length=K)
-    dθphase = ω .* dtθ .- m .* dφθ .+ k
-    θphaseL = ω * Δtθ[1] - m * Δφθ[1]
-    θphaseR = ω * Δtθ[end] - m * Δφθ[end] + k * 1.0pi
-
-    # --------------------------
-    # 7. W-series Quantities (polar 1D vectors)
-    # --------------------------
-    Y = Y_dic["Y"]               # Radial function (scalar, r-fixed)
-    Yp = Y_dic["Yp"]             # Radial derivative (scalar)
-    X = Y_dic["X"]               # Auxiliary radial function (scalar)
-    Cinc = Y_dic["Cinc"]
-
-    # Wll: radial terms are scalar (r-fixed)
-    Wll = 2.0 .* ρbar .* L1pL2pS .* r2 .* Y .* phase
-
-    term_A = L2S .+ im .* a .* sinθ .* (ρ .- ρbar) .* S0
-    term_B = 2.0 .* Y .+ r .* Yp    # Scalar broadcast to 1D
-    term_C = L2S .* (ρ .+ ρbar) .* r .* Y
-    Wlm = 4.0 .* (r .* ρbar .* (term_A .* term_B .+ term_C) ./ ρ) .* phase
-
-    term_D = X ./ (2.0 .* sqrt_r2_a2)  # Scalar broadcast to 1D
-    term_E = (Y .+ 2.0 .* r .* Yp) .* phase
-    term_F = ρ .* r .* (2.0 .* Y .+ r .* Yp) .* phase
-    Wmm = 4.0 .* S0 .* ρbar .* (term_D .+ term_E .+ term_F) ./ ρ
-
-    # --------------------------
-    # 8. L and M Terms
-    # --------------------------
-    # Radial velocity terms
-    L = (E .* (r2 .+ a^2) .- a .* Lz) ./ Δ 
-
-    # Polar velocity terms (Mp/Mm are 1D)
-    term_M = .- im .* sinθ .* (a .* E .- Lz .* inv_sin2θ)
-    Mp = term_M .+ uθp
-    Mm = term_M .+ uθm
-
-    # --------------------------
-    # 9. J-series Terms (1D polar, 1D Fourier normalization)
-    # --------------------------             
-    Mp_sq = Mp .^ 2
-    Mm_sq = Mm .^ 2
-
-    # 1D Fourier transform: normalization factor 1/(2π) (polar-only)
-    Jp = (Wll .* L .^ 2 .+ Wlm .* L .* Mp .+ Wmm .* Mp_sq) ./ (2.0pi)
-    Jm = (Wll .* L .^ 2 .+ Wlm .* L .* Mm .+ Wmm .* Mm_sq) ./ (2.0pi)
-
-    # --------------------------
-    # 10. Final Phase Correction and Result
-    # --------------------------
-    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
-    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0 
-    prefactor = .- im .* π .* η .* exp(im * Xi) .* factor ./ (Γ .* Cinc .* κ)
-
-    return Jp, Jm, dθphase, θphaseL, θphaseR, prefactor
+    Jp = (t.W1 .* t.N^2 .+ t.W2 .* t.N .* t.Mp .+ t.W3 .* t.Mp .^ 2) ./ (2.0pi)
+    Jm = (t.W1 .* t.N^2 .+ t.W2 .* t.N .* t.Mm .+ t.W3 .* t.Mm .^ 2) ./ (2.0pi)
+    Xi = m * (Δφθ_func(qθ0) - qφ0) - ω * (Δtθ_func(qθ0) - qt0) - k * qθ0
+    return Jp, Jm, dθphase, θphaseL, θphaseR, _inclined_prefactor(t, one(ComplexF64), s, Γ, Y_dic, Xi)
 end
 
 # Dense uniform master grid of a generic orbit: (N_interval + 1) x (K_interval + 1) points in (qr, qθ).

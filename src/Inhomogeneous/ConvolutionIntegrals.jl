@@ -304,7 +304,7 @@ end
 function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Dict, s::Int, a, ω, m, k::Int)
     carter_factor = _carter_factor(KG_samp, m, ω)
     if s == 2
-        inte = integrand_inclined_sample_p2(KG_samp, Ydic, SH_samp, k)
+        inte = integrand_inclined_sample(KG_samp, Ydic, SH_samp, k, 2)
         integral = trapezoidal_1d_integral(inte)
         hf = horizon_factor(ω, a, m)
         return Dict(
@@ -318,7 +318,7 @@ function _inclined_flux_from_sample(KG_samp::Dict, Ysol, Ydic::Dict, SH_samp::Di
             "SWSH" => SH_samp,
         )
     elseif s == -2
-        inte = integrand_inclined_sample_m2(KG_samp, Ydic, SH_samp, k)
+        inte = integrand_inclined_sample(KG_samp, Ydic, SH_samp, k, -2)
         integral = trapezoidal_1d_integral(inte)
         return Dict(
             "Amplitude" => integral,
@@ -3170,7 +3170,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
             "X" => X)
         SH_p2_samp = swsh_sample(SH_p2, KG_samp)
         θphase = _polar_phase_vector(KG_samp, omega, m, k)
-        Jp_up, Jm_up, dθphase_up, θphaseL_up, θphaseR_up, prefactor_up = integrand_inclined_sample_cheby_p2(KG_samp, Yup, SH_p2_samp, k)
+        Jp_up, Jm_up, dθphase_up, θphaseL_up, θphaseR_up, prefactor_up = integrand_inclined_sample_cheby(KG_samp, Yup, SH_p2_samp, k, 2)
         integralp_up = levin_1d_integral_local_phase(Jp_up, dθphase_up, θphase)
         integralm_up = levin_1d_integral_local_phase(Jm_up, -dθphase_up, -θphase)
         integral_up = (integralp_up + integralm_up) * prefactor_up
@@ -3197,7 +3197,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
             "X" => X)
         SH_m2_samp = swsh_sample(SH_m2, KG_samp)
         θphase = _polar_phase_vector(KG_samp, omega, m, k)
-        Jp_in, Jm_in, dθphase_in, θphaseL_in, θphaseR_in, prefactor_in = integrand_inclined_sample_cheby_m2(KG_samp, Yin, SH_m2_samp, k)
+        Jp_in, Jm_in, dθphase_in, θphaseL_in, θphaseR_in, prefactor_in = integrand_inclined_sample_cheby(KG_samp, Yin, SH_m2_samp, k, -2)
         integralp_in = levin_1d_integral_local_phase(Jp_in, dθphase_in, θphase)
         integralm_in = levin_1d_integral_local_phase(Jm_in, -dθphase_in, -θphase)
         integral_in = (integralp_in + integralm_in) * prefactor_in
