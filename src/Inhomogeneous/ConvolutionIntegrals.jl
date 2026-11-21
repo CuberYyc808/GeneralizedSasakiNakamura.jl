@@ -1788,24 +1788,9 @@ const DEFAULT_ADAPTIVE_LEVIN_TOL0 = 1e-6
 const DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH = 2
 const DEFAULT_ADAPTIVE_LEVIN_TOL_MAX = 1e-2
 
-# Plans depend on (n, local_order) only and are read only once built; kept under a lock (a plan took a tenth of a
-# 16-node phase factorization).
-const LEVIN_PLANS = Dict{Tuple{Int, Int}, Any}()
-const LEVIN_PLANS_LOCK = ReentrantLock()
-
+# Nodes (Chebyshev points of [0, pi], sorted), their permutation and the segments of local_order points with their
+# differentiation matrices: O(n^2), built where it is used.
 function _levin_1d_local_plan(n::Int, local_order::Int)
-    plan = lock(LEVIN_PLANS_LOCK) do
-        get(LEVIN_PLANS, (n, local_order), nothing)
-    end
-    plan === nothing || return plan::Levin1DLocalPlan
-    plan = _levin_1d_local_plan_build(n, local_order)
-    lock(LEVIN_PLANS_LOCK) do
-        get!(LEVIN_PLANS, (n, local_order), plan)
-    end
-    return plan
-end
-
-function _levin_1d_local_plan_build(n::Int, local_order::Int)
     p = min(max(local_order, 4), n)
     x_ref = [cos(π * k / (n - 1)) for k in 0:n-1]
     x_phys = π .* (x_ref .+ 1.0) ./ 2.0

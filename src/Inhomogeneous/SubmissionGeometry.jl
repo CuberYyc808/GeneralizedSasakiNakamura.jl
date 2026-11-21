@@ -94,17 +94,10 @@ mutable struct _PendingBuild
 end
 _PendingBuild() = _PendingBuild(Threads.Event(), nothing, nothing)
 
-# Numerical context captured when an owner is built; the owner refuses use once it changes.
-# The KerrGeodesics version and path of a loaded module cannot change, so they are read once: pathof and pkgversion
-# took 6% of an adaptive Levin mode, as every geometry lookup checks the context.
-const _KG_LOADED = Ref{Any}(nothing)
-
-function _submission_geometry_context()
-    kg = _KG_LOADED[]
-    kg === nothing && (kg = _KG_LOADED[] = (Base.pkgversion(KerrGeodesics), pathof(KerrGeodesics)))
-    return (precision_bits = precision(BigFloat), rounding_mode = rounding(BigFloat),
-        kg_module = KerrGeodesics, kg_version = kg[1], kg_path = kg[2])
-end
+# Numerical context captured when an owner is built; the owner refuses use once it changes. The loaded KerrGeodesics
+# module stands for its version and path (a reloaded package is a new module).
+_submission_geometry_context() =
+    (precision_bits = precision(BigFloat), rounding_mode = rounding(BigFloat), kg_module = KerrGeodesics)
 
 GenericGeometryOwner(master::Dict) = GenericGeometryOwner(master,
     Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Dict}(),
