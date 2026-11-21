@@ -2722,26 +2722,35 @@ function _amp_logsum(logtermfun, nmin::Int, nmax::Int)
         ComplexF64[logtermfun(n) for n in nmin:nmax])
 end
 
-# Log-sum of a_n times a weight accumulated from exp(ratio_log(n)) outward from n = 0;
-# _amp_rec_pair also returns the sum over [check_min, check_max].
-function _amp_rec_sum(ratio_log, data::ManoSuzukiTakasugiSeriesData, nmin::Int, nmax::Int, base_extra)
-    nmin <= 0 <= nmax || throw(ArgumentError(
-        "MST amplitude recurrence range must contain zero."))
+# The logs of a_n times a weight accumulated from exp(ratio_log(n)) outward from n = `anchor` (exp(base_extra)
+# there), n = nmin..nmax.
+function _amp_rec_logs(ratio_log, data::ManoSuzukiTakasugiSeriesData, nmin::Int, nmax::Int, base_extra, anchor::Int)
     logs = Vector{ComplexF64}(undef, nmax - nmin + 1)
     at(n) = n - nmin + 1
     extra = ComplexF64(base_extra)
-    logs[at(0)] = log_series_coefficient!(data, 0) + extra
-    for n in 0:(nmax - 1)
+    logs[at(anchor)] = log_series_coefficient!(data, anchor) + extra
+    for n in anchor:(nmax - 1)
         extra += ComplexF64(ratio_log(n))
-        logs[at(n + 1)] =
-            log_series_coefficient!(data, n + 1) + extra
+        logs[at(n + 1)] = log_series_coefficient!(data, n + 1) + extra
     end
     extra = ComplexF64(base_extra)
-    for n in -1:-1:nmin
+    for n in (anchor - 1):-1:nmin
         extra -= ComplexF64(ratio_log(n))
         logs[at(n)] = log_series_coefficient!(data, n) + extra
     end
-    return _amp_logsum_values(logs)
+    return logs
+end
+
+# Log-sum of those logs (weight anchored at n = 0); with `check` = (check_min, check_max) also the log-sum over
+# that range (the pair, as _amp_pair_sum returns it).
+function _amp_rec_sum(ratio_log, data::ManoSuzukiTakasugiSeriesData, nmin::Int, nmax::Int, base_extra;
+        check=nothing, anchor::Int=0)
+    check === nothing && (nmin <= anchor <= nmax ||
+        throw(ArgumentError("MST amplitude recurrence range must contain zero.")))
+    check === nothing || nmin <= check[1] <= anchor <= check[2] <= nmax ||
+        throw(ArgumentError("MST amplitude recurrence ranges must contain the anchor."))
+    logs = _amp_rec_logs(ratio_log, data, nmin, nmax, base_extra, anchor)
+    return check === nothing ? _amp_logsum_values(logs) : _amp_pair_sum(logs, nmin, check[1], check[2])
 end
 
 # Log-sums of `logs` over the full range and over [check_min, check_max].
@@ -2751,29 +2760,6 @@ function _amp_pair_sum(logs, nmin::Int, check_min::Int, check_max::Int)
     1 <= first_index <= last_index <= length(logs) ||
         throw(ArgumentError("invalid MST amplitude check range."))
     return (_amp_logsum_values(logs), _amp_logsum_values(@view logs[first_index:last_index]),)
-end
-
-function _amp_rec_pair(
-    ratio_log, data::ManoSuzukiTakasugiSeriesData, nmin::Int, nmax::Int, check_min::Int, check_max::Int, base_extra,
-)
-    nmin <= check_min <= 0 <= check_max <= nmax ||
-        throw(ArgumentError(
-            "MST amplitude recurrence ranges must contain zero."))
-    logs = Vector{ComplexF64}(undef, nmax - nmin + 1)
-    at(n) = n - nmin + 1
-    extra = ComplexF64(base_extra)
-    logs[at(0)] = log_series_coefficient!(data, 0) + extra
-    for n in 0:(nmax - 1)
-        extra += ComplexF64(ratio_log(n))
-        logs[at(n + 1)] =
-            log_series_coefficient!(data, n + 1) + extra
-    end
-    extra = ComplexF64(base_extra)
-    for n in -1:-1:nmin
-        extra -= ComplexF64(ratio_log(n))
-        logs[at(n)] = log_series_coefficient!(data, n) + extra
-    end
-    return _amp_pair_sum(logs, nmin, check_min, check_max)
 end
 
 function _amp_logadd(first::ComplexF64, second::ComplexF64)
@@ -2816,33 +2802,23 @@ function _amp_coeff_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nm
     return _amp_pair_sum(logs, -nmax, -check_nmax, check_nmax)
 end
 
-function _amp_aminus_sum_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
+# Sum of A_minus a_n over |n| <= nmax (with check_nmax: and over |n| <= check_nmax).
+function _amp_aminus_sum(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax=nothing)
     p = data.params
     nu = _nu_shift(p)
     epsc = ComplexF64(p.epsilon)
     numerator = nu + 1 + p.s - I * epsc
     denominator = nu + 1 - p.s + I * epsc
-    return _amp_rec_sum(data, -nmax, nmax, 0.0 + 0.0im) do n
+    check = check_nmax === nothing ? nothing : (-check_nmax, check_nmax)
+    return _amp_rec_sum(data, -nmax, nmax, 0.0 + 0.0im; check) do n
         I * pi +
             log(ComplexF64(numerator + n)) -
             log(ComplexF64(denominator + n))
     end
 end
 
-function _amp_aminus_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    numerator = nu + 1 + p.s - I * epsc
-    denominator = nu + 1 - p.s + I * epsc
-    return _amp_rec_pair(data, -nmax, nmax, -check_nmax, check_nmax, 0.0 + 0.0im) do n
-        I * pi +
-            log(ComplexF64(numerator + n)) -
-            log(ComplexF64(denominator + n))
-    end
-end
-
-function _amp_knu_sums_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
+# Upper and lower sums of K_nu (with check_nmax: as pairs, (full sums, sums to check_nmax)).
+function _amp_knu_sums(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax=nothing)
     p = data.params
     nu = _nu_shift(p)
     epsc = ComplexF64(p.epsilon)
@@ -2859,7 +2835,7 @@ function _amp_knu_sums_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
         _amp_lgamma(up_c) -
         _amp_lgamma(up_d) -
         _amp_lgamma(up_e)
-    up = _amp_rec_sum(data, 0, nmax, up_base) do n
+    up = _amp_rec_sum(data, 0, nmax, up_base; check=check_nmax === nothing ? nothing : (0, check_nmax)) do n
         I * pi +
             log(ComplexF64(up_a + n)) +
             log(ComplexF64(up_b + n)) +
@@ -2872,84 +2848,20 @@ function _amp_knu_sums_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
     down_a = 1 + p.s - I * epsc + nu
     down_d = 1 - p.s + I * epsc + nu
     down_e = 2 + 2nu
-    down = _amp_rec_sum(data, -nmax, 0, 0.0 + 0.0im) do n
+    down = _amp_rec_sum(data, -nmax, 0, 0.0 + 0.0im; check=check_nmax === nothing ? nothing : (-check_nmax, 0)) do n
         I * pi +
             log(ComplexF64(down_a + n)) +
             log(ComplexF64(-n)) -
             log(ComplexF64(down_d + n)) -
             log(ComplexF64(down_e + n))
     end
-    return up, down
-end
-
-function _amp_knu_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-
-    up_a = 1 + p.s + I * epsc + nu
-    up_b = 1 + 2nu
-    up_c = 1 + nu + I * tau
-    up_d = 1 - p.s - I * epsc + nu
-    up_e = 1 + nu - I * tau
-    up_base =
-        _amp_lgamma(up_a) +
-        _amp_lgamma(up_b) +
-        _amp_lgamma(up_c) -
-        _amp_lgamma(up_d) -
-        _amp_lgamma(up_e)
-    up = _amp_rec_pair(data, 0, nmax, 0, check_nmax, up_base) do n
-        I * pi +
-            log(ComplexF64(up_a + n)) +
-            log(ComplexF64(up_b + n)) +
-            log(ComplexF64(up_c + n)) -
-            log(ComplexF64(n + 1)) -
-            log(ComplexF64(up_d + n)) -
-            log(ComplexF64(up_e + n))
-    end
-
-    down_a = 1 + p.s - I * epsc + nu
-    down_d = 1 - p.s + I * epsc + nu
-    down_e = 2 + 2nu
-    down = _amp_rec_pair(data, -nmax, 0, -check_nmax, 0, 0.0 + 0.0im) do n
-        I * pi +
-            log(ComplexF64(down_a + n)) +
-            log(ComplexF64(-n)) -
-            log(ComplexF64(down_d + n)) -
-            log(ComplexF64(down_e + n))
-    end
-    return ((up[1], down[1]), (up[2], down[2]),)
-end
-
-# As _amp_rec_pair with the weight anchored at n = `anchor` (exp(base_extra) there) instead of n = 0.
-function _amp_rec_pair_at(
-    ratio_log, data::ManoSuzukiTakasugiSeriesData, nmin::Int, nmax::Int, check_min::Int, check_max::Int, base_extra,
-    anchor::Int,
-)
-    nmin <= check_min <= anchor <= check_max <= nmax ||
-        throw(ArgumentError(
-            "MST amplitude recurrence ranges must contain the anchor."))
-    logs = Vector{ComplexF64}(undef, nmax - nmin + 1)
-    at(n) = n - nmin + 1
-    extra = ComplexF64(base_extra)
-    logs[at(anchor)] = log_series_coefficient!(data, anchor) + extra
-    for n in anchor:(nmax - 1)
-        extra += ComplexF64(ratio_log(n))
-        logs[at(n + 1)] = log_series_coefficient!(data, n + 1) + extra
-    end
-    extra = ComplexF64(base_extra)
-    for n in (anchor - 1):-1:nmin
-        extra -= ComplexF64(ratio_log(n))
-        logs[at(n)] = log_series_coefficient!(data, n) + extra
-    end
-    return _amp_pair_sum(logs, nmin, check_min, check_max)
+    return check_nmax === nothing ? (up, down) : ((up[1], down[1]), (up[2], down[2]),)
 end
 
 # Upper and lower sums of K_nu with the Sasaki-Tagoshi split index r (K_nu does not depend on r; Living Rev.
 # Relativ. 6, 6 (2003), eq. 165): the upper sum of (-1)^n Gamma(n + r + 2nu + 1) / (n - r)! times the Gamma ratios
 # of _amp_knu_sums over n >= r, the lower sum of (-1)^n / ((r - n)! (r + 2nu + 2)_n) times the Pochhammer ratios
-# over n <= r, both weighted from n = r. r = 0 is _amp_knu_pair; each part carries r for _amp_klog.
+# over n <= r, both weighted from n = r. r = 0 is _amp_knu_sums with a check range; each part carries r for _amp_klog.
 function _amp_knu_split_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax::Int, r::Int)
     p = data.params
     nu = _nu_shift(p)
@@ -2967,7 +2879,7 @@ function _amp_knu_split_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, chec
         _amp_lgamma(up_c + r) -
         _amp_lgamma(up_d + r) -
         _amp_lgamma(up_e + r)
-    up = _amp_rec_pair_at(data, r, nmax, r, check_nmax, up_base, r) do n
+    up = _amp_rec_sum(data, r, nmax, up_base; check=(r, check_nmax), anchor=r) do n
         I * pi +
             log(ComplexF64(n + r + 2nu + 1)) +
             log(ComplexF64(up_a + n)) +
@@ -2984,7 +2896,7 @@ function _amp_knu_split_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, chec
         (_amp_lgamma(2r + 2nu + 2) - _amp_lgamma(r + 2nu + 2)) +
         (_amp_lgamma(down_a + r) - _amp_lgamma(down_a)) -
         (_amp_lgamma(down_d + r) - _amp_lgamma(down_d))
-    down = _amp_rec_pair_at(data, -nmax, r, -check_nmax, r, down_base, r) do n
+    down = _amp_rec_sum(data, -nmax, r, down_base; check=(-check_nmax, r), anchor=r) do n
         I * pi +
             log(ComplexF64(r - n)) +
             log(ComplexF64(down_a + n)) -
@@ -3007,7 +2919,8 @@ function _amp_split_index(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_n
     return r
 end
 
-function _amp_dsum_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
+# Sum of the D-weighted a_n over |n| <= nmax (with check_nmax: and over |n| <= check_nmax).
+function _amp_d_sum(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax=nothing)
     p = data.params
     nu = _nu_shift(p)
     epsc = ComplexF64(p.epsilon)
@@ -3021,29 +2934,8 @@ function _amp_dsum_fast(data::ManoSuzukiTakasugiSeriesData, nmax::Int)
         _amp_lgamma(numerator_b) -
         _amp_lgamma(denominator_a) -
         _amp_lgamma(denominator_b)
-    return _amp_rec_sum(data, -nmax, nmax, base) do n
-        log(ComplexF64(numerator_a + n)) +
-            log(ComplexF64(numerator_b + n)) -
-            log(ComplexF64(denominator_a + n)) -
-            log(ComplexF64(denominator_b + n))
-    end
-end
-
-function _amp_d_pair(data::ManoSuzukiTakasugiSeriesData, nmax::Int, check_nmax::Int)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-    numerator_a = 1 + nu + p.s + I * epsc
-    numerator_b = 1 + nu + I * tau
-    denominator_a = 1 + nu - p.s - I * epsc
-    denominator_b = 1 + nu - I * tau
-    base =
-        _amp_lgamma(numerator_a) +
-        _amp_lgamma(numerator_b) -
-        _amp_lgamma(denominator_a) -
-        _amp_lgamma(denominator_b)
-    return _amp_rec_pair(data, -nmax, nmax, -check_nmax, check_nmax, base) do n
+    check = check_nmax === nothing ? nothing : (-check_nmax, check_nmax)
+    return _amp_rec_sum(data, -nmax, nmax, base; check) do n
         log(ComplexF64(numerator_a + n)) +
             log(ComplexF64(numerator_b + n)) -
             log(ComplexF64(denominator_a + n)) -
@@ -3070,23 +2962,8 @@ function _amp_klog(data::ManoSuzukiTakasugiSeriesData, sums::Tuple{Any,Any,Int})
     return ComplexF64(sum(pieces)), Float64(error)
 end
 
-function _amp_klog(data::ManoSuzukiTakasugiSeriesData, sums)
-    p = data.params
-    nu = _nu_shift(p)
-    epsc = ComplexF64(p.epsilon)
-    tau = ComplexF64(p.tau)
-    epsp = (tau + epsc) / 2
-    up, down = sums
-    pieces = (
-        -nu * log(2.0), I * epsc * p.kappa, (p.s - nu) * log(epsc * p.kappa), _amp_lgamma(1 - p.s - 2I * epsp),
-        _amp_lgamma(2 + 2nu), -_amp_lgamma(1 - p.s + I * epsc + nu), -_amp_lgamma(1 + p.s + I * epsc + nu),
-        -_amp_lgamma(1 + nu + I * tau), up.logvalue, -down.logvalue,
-    )
-    # Absolute error of the log: the two sums' relative errors and the
-    # rounding of each piece and of the additions.
-    error = up.error + down.error + eps(Float64) * 2 * sum(abs, pieces)
-    return ComplexF64(sum(pieces)), Float64(error)
-end
+# Without a split index: r = 0 (the same pieces and additions; the extra piece is zero).
+_amp_klog(data::ManoSuzukiTakasugiSeriesData, sums) = _amp_klog(data, (sums[1], sums[2], 0))
 
 # log(exp(first) + exp(second)) and its absolute error from those of the
 # two parts: a cancelling combination amplifies them by
@@ -3329,13 +3206,13 @@ end
     splits=nothing,
 )
     fsum = _amp_coeff_sum(data, nmax)
-    asum = _amp_aminus_sum_fast(data, nmax)
+    asum = _amp_aminus_sum(data, nmax)
     ksum1 = splits !== nothing ? first(_amp_knu_split_pair(data, nmax, nmax, splits[1])) :
-        _amp_knu_sums_fast(data, nmax)
+        _amp_knu_sums(data, nmax)
     ksum2 = splits !== nothing ? first(_amp_knu_split_pair(data2, nmax, nmax, splits[2])) :
-        _amp_knu_sums_fast(data2, nmax)
-    dsum1 = _amp_dsum_fast(data, nmax)
-    dsum2 = _amp_dsum_fast(data2, nmax)
+        _amp_knu_sums(data2, nmax)
+    dsum1 = _amp_d_sum(data, nmax)
+    dsum2 = _amp_d_sum(data2, nmax)
     return _amp_build(
         data, data2, fsum, asum, ksum1, ksum2, dsum1, dsum2)
 end
@@ -3349,13 +3226,13 @@ end
     data2 = ManoSuzukiTakasugiSeriesData(ManoSuzukiTakasugiParams(
         p.s, p.l, p.m, p.a, p.omega, p.lambda, nu2))
     fsum = _amp_coeff_pair(data, nmax, check_nmax)
-    asum = _amp_aminus_pair(data, nmax, check_nmax)
-    ksum1 = splits === nothing ? _amp_knu_pair(data, nmax, check_nmax) :
+    asum = _amp_aminus_sum(data, nmax, check_nmax)
+    ksum1 = splits === nothing ? _amp_knu_sums(data, nmax, check_nmax) :
         _amp_knu_split_pair(data, nmax, check_nmax, splits[1])
-    ksum2 = splits === nothing ? _amp_knu_pair(data2, nmax, check_nmax) :
+    ksum2 = splits === nothing ? _amp_knu_sums(data2, nmax, check_nmax) :
         _amp_knu_split_pair(data2, nmax, check_nmax, splits[2])
-    dsum1 = _amp_d_pair(data, nmax, check_nmax)
-    dsum2 = _amp_d_pair(data2, nmax, check_nmax)
+    dsum1 = _amp_d_sum(data, nmax, check_nmax)
+    dsum2 = _amp_d_sum(data2, nmax, check_nmax)
     full = _amp_build(data, data2, fsum[1], asum[1], ksum1[1], ksum2[1], dsum1[1], dsum2[1])
     check = _amp_build(data, data2, fsum[2], asum[2], ksum1[2], ksum2[2], dsum1[2], dsum2[2])
     return full, check
@@ -4070,7 +3947,7 @@ end
 # The same normalization from fixed-order A_- sums (full and check order); throws when
 # truncation or conditioning exceed `tolerance`.
 function _outgoing_raw_fast(data::ManoSuzukiTakasugiSeriesData, tolerance::Float64)
-    full, check = _amp_aminus_pair(
+    full, check = _amp_aminus_sum(
         data, MANO_SUZUKI_TAKASUGI_AMP_NMAX, MANO_SUZUKI_TAKASUGI_AMP_CHECK_NMAX)
     truncation = abs(exp(check.logvalue - full.logvalue) - 1)
     condition = max(full.condition, check.condition)
