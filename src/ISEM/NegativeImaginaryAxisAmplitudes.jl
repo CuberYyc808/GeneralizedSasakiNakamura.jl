@@ -24,6 +24,7 @@ import ..ComplexRational
 using ..ComplexFrequency:
     ComplexRoute,
     ComplexRoutePlan,
+    _with,
     ComplexSmallFrequencyExpansionEvaluator,
     ComplexStateEvaluator
 using ..ComplexRational:
@@ -340,32 +341,20 @@ function _overlay(
     plan = ComplexRoutePlan(
         route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
     )
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, state_evaluator, metadata, plan,
-        route.transmission, incidence, reflection, route.teukolsky_transmission, teukolsky_incidence,
-        teukolsky_reflection,
-    )
+    return _with(route; state_evaluator, metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
 function _state_overlay(route::ComplexRoute, anchor)
     anchor.evaluator === route.state_evaluator &&
         isempty(anchor.metadata) && return route
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, anchor.evaluator,
-        merge(route.metadata, anchor.metadata), route.plan, route.transmission, route.incidence, route.reflection,
-        route.teukolsky_transmission, route.teukolsky_incidence, route.teukolsky_reflection,
-    )
+    return _with(route; state_evaluator=anchor.evaluator, metadata=merge(route.metadata, anchor.metadata))
 end
 
 function _with_amplitude_errors(route, errors)
     metadata = merge(route.metadata, (;
         incidence_error=Float64(errors[1]),
         reflection_error=Float64(errors[2])))
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
-        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
-        route.teukolsky_reflection,
-    )
+    return _with(route; metadata)
 end
 
 function _retain_analytic_agreement(route, result, agreement)
@@ -392,11 +381,7 @@ function _retain_analytic_agreement(route, result, agreement)
             hasproperty(result, :coefficient_source_shift) ?
             Int(result.coefficient_source_shift) : 0,
     ))
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
-        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
-        route.teukolsky_reflection,
-    )
+    return _with(route; metadata)
 end
 
 @inline function _nu_delta(nu)

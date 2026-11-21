@@ -151,6 +151,10 @@ struct ComplexRoute{P,C,F,E,M,Q,T}
     teukolsky_reflection::T
 end
 
+# `route` with the given fields replaced (the other fields shared).
+_with(route::ComplexRoute; kwargs...) =
+    ComplexRoute((haskey(kwargs, f) ? kwargs[f] : getfield(route, f) for f in fieldnames(ComplexRoute))...)
+
 _finite_complex(value) = isfinite(real(value)) && isfinite(imag(value))
 _optional_float(value) = value === nothing ? nothing : Float64(value)
 _optional_int(value) = value === nothing ? nothing : Int(value)
@@ -506,11 +510,7 @@ function _tag_p_build_fallback(route::ComplexRoute, fallback_trigger::Symbol, ra
         fallback_trigger,
         rational_build_error,
     ))
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
-        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
-        route.teukolsky_reflection,
-    )
+    return _with(route; metadata)
 end
 
 @inline function _physical_ray_direction(q)
@@ -1186,11 +1186,7 @@ function _tag_principal_build_fallback(
         principal_small_frequency_expansion_build_error=build_error,
         principal_fallback_certificate=certificate,
     ))
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, route.plan,
-        route.transmission, route.incidence, route.reflection, route.teukolsky_transmission, route.teukolsky_incidence,
-        route.teukolsky_reflection,
-    )
+    return _with(route; metadata)
 end
 
 # When the principal-MST route fails: use a dual-order P-equation route if its
@@ -2182,11 +2178,7 @@ function _p_consensus_route(rational::ComplexRoute, candidate::ComplexRoute, met
             rational_metadata, :coefficient2_cancellation) ?
             rational_metadata.coefficient2_cancellation : missing,
     ))
-    return ComplexRoute(
-        candidate.branch, candidate.params, candidate.controls, candidate.p_solution, candidate.state_evaluator,
-        metadata, candidate.plan, candidate.transmission, candidate.incidence, candidate.reflection,
-        candidate.teukolsky_transmission, candidate.teukolsky_incidence, candidate.teukolsky_reflection,
-    )
+    return _with(candidate; metadata)
 end
 
 # Rebuild the route with the P-equation backend when the rational match looks
@@ -2394,11 +2386,7 @@ function _negative_imaginary_axis_p_overlay(
     plan = ComplexRoutePlan(
         route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
     )
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, plan,
-        route.transmission, incidence, reflection, route.teukolsky_transmission, teukolsky_incidence,
-        teukolsky_reflection,
-    )
+    return _with(route; metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
 function _try_negative_imaginary_axis_partner(route::ComplexRoute, s, l, m, a, omega, branch)
@@ -2577,11 +2565,7 @@ function _negative_imaginary_axis_side_overlay(route::ComplexRoute, mapped, conf
     plan = ComplexRoutePlan(
         route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
     )
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, plan,
-        route.transmission, incidence, reflection, route.teukolsky_transmission, teukolsky_incidence,
-        teukolsky_reflection,
-    )
+    return _with(route; metadata, plan, incidence, reflection, teukolsky_incidence, teukolsky_reflection)
 end
 
 function _try_negative_imaginary_axis_side(route::ComplexRoute, s, l, m, a, omega)
@@ -2647,11 +2631,7 @@ function _negative_imaginary_axis_side_retry(route, s, l, m, a, omega)
         nia_lateral_in_patch_count=in_source.patch_count,
         nia_lateral_in_backend=in_source.backend,
     ))
-    return ComplexRoute(
-        overlaid.branch, overlaid.params, overlaid.controls, overlaid.p_solution, overlaid.state_evaluator, metadata,
-        overlaid.plan, overlaid.transmission, overlaid.incidence, overlaid.reflection, overlaid.teukolsky_transmission,
-        overlaid.teukolsky_incidence, overlaid.teukolsky_reflection,
-    )
+    return _with(overlaid; metadata)
 end
 
 @inline function _pole_reciprocal_pretrigger(route::ComplexRoute)
@@ -2856,11 +2836,7 @@ function _apply_exact_pole_normalization(route::ComplexRoute)
     plan = ComplexRoutePlan(
         route.plan.contour, route.plan.matching, route.plan.controls, amplitudes, route.plan.patch_count,
     )
-    return ComplexRoute(
-        route.branch, route.params, route.controls, route.p_solution, route.state_evaluator, metadata, plan,
-        route.transmission, incidence, route.reflection, route.teukolsky_transmission, teukolsky_incidence,
-        route.teukolsky_reflection,
-    )
+    return _with(route; metadata, plan, incidence, teukolsky_incidence)
 end
 
 @inline function _apply_exact_pole_normalization(route::ComplexRoute, requested::Bool)
