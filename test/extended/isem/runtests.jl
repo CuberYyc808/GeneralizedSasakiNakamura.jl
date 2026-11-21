@@ -780,11 +780,14 @@ end
     for w in (-1e-13, 1e-13)
         @test !GSN._is_horizon_superradiance_frequency(.5, 0, w)
     end
+    # One threshold window for every method: ISEM's 8 ulp of 2 r_+ omega against a m.
     for a in (.5, .9), m in (1, 2, 3)
         w = m * GSN.Kerr.omega_horizon(a)
         @test GSN._is_horizon_superradiance_frequency(a, m, w)
-        @test !GSN._is_horizon_superradiance_frequency(a, m, nextfloat(w))
-        @test !GSN._is_horizon_superradiance_frequency(a, m, prevfloat(w))
+        @test GSN._is_horizon_superradiance_frequency(a, m, nextfloat(w))
+        @test GSN._is_horizon_superradiance_frequency(a, m, prevfloat(w))
+        @test !GSN._is_horizon_superradiance_frequency(a, m, w * (1 + 64eps()))
+        @test !GSN._is_horizon_superradiance_frequency(a, m, w * (1 - 64eps()))
     end
     rows = split.(readlines(data_file("near_static.tsv"))[2:end], '\t')
     ultra(row) = startswith(row[1], "EM_") || startswith(row[1], "M0_")
