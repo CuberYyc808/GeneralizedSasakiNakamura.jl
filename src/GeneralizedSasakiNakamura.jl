@@ -2154,7 +2154,7 @@ _pointparticle_share_geometry(method, e) =
         !isequal(e, 0.0) && isapprox(e, 0.0; atol = 1e-12))
 
 @doc raw"""
-    Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N=-1, K=-1, Nmax=2^12, Kmax=2^9, tol=1e-8, sample_tol=1e-3, max_flux=1.0, truncation_floor=1e-16, threaded_sampling=false, levin_max_depth=8, submission=nothing, stop_requested=nothing)
+    Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N=-1, K=-1, Nmax=2^12, Kmax=2^9, tol=nothing, sample_tol=1e-3, max_flux=1.0, truncation_floor=1e-16, threaded_sampling=false, levin_max_depth=8, submission=nothing, stop_requested=nothing)
 
 Compute the amplitude of the inhomogeneous Teukolsky solution _at infinity_ (for `s = -2`) and _at the horizon_ (for `s = +2`) due to a point particle on a generic timelike bound orbit around a Kerr black hole,
 with a spin parameter of `a`, for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `n` the radial index and `k` the polar index).
@@ -2167,6 +2167,7 @@ Use `method = "isem_trapezoidal"` for the ISEM trapezoidal path and `method = "i
 Both ISEM convolution paths use `ISEM` for their homogeneous radial input.
 `N` and `K` are the starting sizes of the radial and polar sampling grids (uniform grids for the trapezoidal paths, Chebyshev nodes for the Levin paths);
 `N, K ≤ 0` select the defaults, `N = 256` and `K = 64` (`K = 32` for the Levin paths). `N`, `K`, `Nmax` and `Kmax` must be powers of 2.
+`tol = nothing` means `1e-8` for a binary64 orbit and the arbitrary-precision route's own default for a wider one.
 The ISEM trapezoidal path doubles the grid, up to `Nmax` and `Kmax`, until the relative change of the energy flux between successive grids is at most `min(sample_tol, 3*sqrt(tol))`,
 or the flux falls below `truncation_floor`. `max_flux` is the flux scale of this test: a mode whose energy flux exceeds it must converge more tightly
 (the total-flux summation passes an estimate of the total flux). `threaded_sampling = true` samples the radial function and the harmonic over the grid with multiple threads.
@@ -2176,7 +2177,7 @@ Pass `submission` (see `with_pointparticle_submission`, which also describes `st
 Return a `TeukolskyPointParticleMode` holding the mode information, the Teukolsky amplitude, the three fluxes,
 the trajectory, the Y solution, the spin-weighted spheroidal harmonic and the method settings used.
 """
-function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
+function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = nothing, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
     # A non-binary64 floating-point orbit (BigFloat, Double64) takes the arbitrary-precision route
     # (ArbitraryPrecisionModes); the binary64 routes take any other real input converted to Float64.
     if _arbitrary_precision_orbit(a, p, e, x)
@@ -2185,13 +2186,14 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
             "cannot use a submission (its geometry and caches are binary64)."))
         T = promote_type(typeof.((a, p, e, x))...)
         r = ArbitraryPrecisionModes.arbitrary_precision_pointparticle_mode(s, l, m, n, k, T(a), T(p), T(e), T(x);
-            tol = tol == 1e-8 ? nothing : tol)
+            tol = tol)
         return TeukolskyPointParticleMode(PointParticleMode(s, l, m, n, k, T(a), r.omega, r.lambda), r.amplitude,
             r.energy_flux, r.angular_momentum_flux, r.carter_constant_flux, r.orbit, r.Y_solution, r.SWSH,
             (method = "arbitrary_precision_trapezoidal", radial_method = "ISEM arbitrary precision", N = r.N, K = r.K,
                 change = r.change, roundoff = r.roundoff))
     end
     a, p, e, x = _pointparticle_float(a, p, e, x)
+    tol = something(tol, 1e-8)
     method = lowercase(String(method))
     if method == "auto"
         method = "isem_trapezoidal"
@@ -2273,7 +2275,7 @@ function _pointparticle_output_mode(Y_solution, s, l, m, a, omega)
 end
 
 @doc raw"""
-    GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N=-1, K=-1, Nmax=2^12, Kmax=2^9, tol=1e-8, sample_tol=1e-3, max_flux=1.0, truncation_floor=1e-16, threaded_sampling=false, levin_max_depth=8, submission=nothing, stop_requested=nothing)
+    GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", N=-1, K=-1, Nmax=2^12, Kmax=2^9, tol=nothing, sample_tol=1e-3, max_flux=1.0, truncation_floor=1e-16, threaded_sampling=false, levin_max_depth=8, submission=nothing, stop_requested=nothing)
 
 Compute the amplitude of the inhomogeneous GSN solution _at infinity_ (for `s = -2`) and _at the horizon_ (for `s = +2`) due to a point particle on a generic timelike bound orbit around a Kerr black hole,
 with a spin parameter of `a`, for a given mode (specified by `s` the spin weight, `l` the harmonic index, `m` the azimuthal index, `n` the radial index and `k` the polar index).
@@ -2291,7 +2293,7 @@ The other keywords are those of `Teukolsky_pointparticle_mode`.
 Return a `GSNPointParticleMode`, whose amplitude is the Teukolsky amplitude divided by the GSN-to-Teukolsky
 transmission conversion factor (`Btrans` for `s = +2`, `Ctrans` for `s = -2`).
 """
-function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
+function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = nothing, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
     Teukolsky_mode = Teukolsky_pointparticle_mode(s, l, m, n, k, a, p, e, x; method=method, N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, truncation_floor=truncation_floor, mode_abs_floor=mode_abs_floor, threaded_sampling=threaded_sampling, levin_max_depth=levin_max_depth, submission=submission, stop_requested=stop_requested)
     if iszero(Teukolsky_mode.amplitude)
         T_to_SN = one(Teukolsky_mode.amplitude)
