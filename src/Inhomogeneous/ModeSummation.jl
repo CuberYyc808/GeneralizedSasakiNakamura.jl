@@ -1682,12 +1682,11 @@ function _inclined_branch_shells!(s::Int, ctx, prefetch)
             _push_trail!(m_trail, shell_m_energy)
 
             below_count_m = !_before_m_peak(m, k, x) && (abs(shell_m_energy) <= layer_threshold) && (abs(m) >= Max_m) ? below_count_m + 1 : 0
-            if below_count_m >= minimum_consecutive
-                shell_k_energy_last = shell_k_energy
-                break
-            end
+            below_count_m >= minimum_consecutive && break
         end
         below_count_m < minimum_consecutive && _tail_hit(_geometric_tail(m_trail, lmax), tol, total_energy + shell_k_energy) && (lmax_hit = true)
+        # the next shell's reference, whether the m walk stopped by its rule or ran off lmax (as in the other sums)
+        shell_k_energy_last = shell_k_energy
         prefetch === nothing || _walk_discard!(prefetch)
         prev_reach_pos = reach_pos
         prev_reach_neg = reach_neg
@@ -1856,7 +1855,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 l_trail = Float64[]
 
                 for l in lmin:lmax
-                    mode_inf = inc_mode(-2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
+                    mode_inf = inc_mode(-2, l, m, 0, 1.0, MODE_REFINE_FLOOR_FRACTION *
+                        _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
                     _record_current_mode!(record_h5, record, "I", mode_index, mode_inf; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1889,7 +1889,8 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                 below_count_l = 0
                 l_trail = Float64[]
                 for l in lmin:lmax
-                    mode_hor = inc_mode(2, l, m, 0, 1.0, _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
+                    mode_hor = inc_mode(2, l, m, 0, 1.0, MODE_REFINE_FLOOR_FRACTION *
+                        _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
                     _record_current_mode!(record_h5, record, "H", mode_index, mode_hor; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
