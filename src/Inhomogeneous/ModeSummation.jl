@@ -1374,7 +1374,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
         i = s == -2 ? 1 : 2
         failed_modes[i] += p.failed
         near_static_zero[i] += p.near_static
-        reused_modes[i] += 2 * Int(p.count)
+        reused_modes[i] += Int(p.count)
     end
     branch_ctx = s -> (lmax = lmax, nmax = nmax, minimum_consecutive = minimum_consecutive, n_stop_run = n_stop_run,
         radial_over_azimuthal = radial_over_azimuthal, high_e = rules.high_e, e = e, tol = Float64(tol), model = model, p0 = p0,
@@ -3031,7 +3031,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             i = s == -2 ? 1 : 2
             failed_modes[i] += p.failed
             near_static_zero[i] += p.near_static
-            reused_modes[i] += 2 * Int(p.count)
+            reused_modes[i] += Int(p.count)
         end
         branch_ctx = s -> (e = e, x = x, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = minimum_consecutive,
             mode_abs_floor = mode_abs_floor, beta = beta, deep = deep, neg_branch_scale = neg_branch_scale,
