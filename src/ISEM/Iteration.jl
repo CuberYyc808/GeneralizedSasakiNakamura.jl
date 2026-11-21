@@ -273,7 +273,7 @@ end
 function IterationScratch(
     coefficients::CoefficientSet, order::Integer; force_eikonal::Bool=false, large_frequency_expansion::Bool=false,
     small_frequency_expansion::Bool=false, route_branch::Union{Nothing,Symbol}=nothing,
-    closed_form_march::Bool=near_extreme_march(coefficients),
+    closed_form_march::Bool=near_extreme_march(coefficients), arena::SeriesArena=SeriesArena(),
 )
     order_int = Int(order)
     order_int >= 0 || throw(ArgumentError("ordinary order must be non-negative."))
@@ -289,7 +289,7 @@ function IterationScratch(
         buffer_order >= 2 ? [1.0 / ((n + 2) * (n + 1)) for n in 0:(buffer_order - 2)] : Float64[],
         use_eikonal ? EikonalScratch(eikonal_order) : nothing,
         large_frequency_expansion ? large_frequency_expansion_routing(coefficients) : nothing, closed_form_march,
-        apparent_points(coefficients.params), SeriesArena(),
+        apparent_points(coefficients.params), arena,
     )
 end
 

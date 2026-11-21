@@ -891,16 +891,19 @@ function _eccentric_l_walk(compute, s::Int, m::Int, n::Int, q, lmax::Int, minimu
     speculate = l_pred !== nothing && l_pred > lmin
     factors = speculate ? ConvolutionIntegrals._SharedFactors() : Dict{Any, Any}()
     ahead = Dict{Int, Task}()
+    # the work arena of the closed-form series for the modes this walk computes itself (a task computing ahead gets
+    # its own)
+    arena = ConvolutionIntegrals._series_arena()
     if speculate
         for l in lmin:min(lmax, l_pred)
-            ahead[l] = Threads.@spawn compute(s, l, m, n, q, factors)
+            ahead[l] = Threads.@spawn compute(s, l, m, n, q, factors, ConvolutionIntegrals._series_arena())
         end
     end
     modes = Tuple{Int, Any}[]
     stopped = false
     for l in lmin:lmax
         task = pop!(ahead, l, nothing)
-        mode = task === nothing ? compute(s, l, m, n, q, factors) : _fetch_mode(task)
+        mode = task === nothing ? compute(s, l, m, n, q, factors, arena) : _fetch_mode(task)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, 0)
         strip && _strip_mode!(mode)
         push!(modes, (l, mode))
@@ -1277,7 +1280,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
     # One mode from the shell's parameters (no summation state is read or written here, so modes of one shell can be
     # computed concurrently) and `factors`, the phase factorizations shared by its l walk (see _eccentric_l_walk), and
     # its acceptance (the counters), which the summation applies in its own order.
-    ecc_compute = (s, l, m, n, max_flux, use_levin, floor, levin_floor, levin_abs, factors) -> begin
+    ecc_compute = (s, l, m, n, max_flux, use_levin, floor, levin_floor, levin_abs, factors, arena) -> begin
         ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"]) / F_orbit["ϒt"]
         mode = if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
             res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
@@ -1287,11 +1290,11 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
         let; ConvolutionIntegrals._with_coverage_retry(s, l, m, n, 0; omega = ω_mode, Ωφ = F_orbit["ϒϕ"] / F_orbit["ϒt"], rmax = p / (1 - e), negligible_if_failed = _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e; bound = ConvolutionIntegrals.NEGLIGIBLE_FAILED_MODE_BOUND)) do; if use_levin
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
                 mode_cache.walk_factors = factors
-                ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, levin_floor), energy_abs_tol = levin_abs, threaded_sampling = threaded_sampling, cache = mode_cache)
+                ConvolutionIntegrals.convolution_integral_eccentric_adaptive_levin_isem(KG_sample, s, l, m, n; local_n = adaptive_local_n, max_depth = levin_max_depth, tol = tol, mode_abs_floor = _tail_levin_mode_floor(floor, levin_floor), energy_abs_tol = levin_abs, threaded_sampling = threaded_sampling, cache = mode_cache, arena)
             end
         else
             with_submission_mode(scope; mode = (s, l, m, n, 0)) do mode_cache
-                ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, threaded_sampling = threaded_sampling, cache = mode_cache)
+                ConvolutionIntegrals.convolution_integral_eccentric_trapezoidal_isem(KG_sample, s, l, m, n, N; tol = tol, sample_tol = sample_tol, max_flux = max_flux, Nmax = Nmax, mode_abs_floor = floor, threaded_sampling = threaded_sampling, cache = mode_cache, arena)
             end
         end; end; end
         end
@@ -1306,7 +1309,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
     end
     shell_parameters = s -> (MODE_REFINE_FLOOR_FRACTION * branch_mode_floor(s), branch_levin_floor(s),
         s == -2 ? branch_levin_abs_inf[] : branch_levin_abs_hor[])
-    ecc_compute_q = (s, l, m, n, q, factors) -> ecc_compute(s, l, m, n, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_abs, factors)
+    ecc_compute_q = (s, l, m, n, q, factors, arena) -> ecc_compute(s, l, m, n, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_abs, factors, arena)
     pf_inf = nothing   # the walk prefetches of the two boundaries (mode_parallelism > 1), set below, drained in finally
     pf_hor = nothing
 
@@ -1340,6 +1343,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
         boundary = s == -2 ? "I" : "H"
         energy, angular, carter = 0.0, 0.0, 0.0
         below_m, reach, modes = 0, 0, 0
+        arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this shell's modes
         for m in 1:lmax
             reach = m
             m_energy, m_angular, m_carter = 0.0, 0.0, 0.0
@@ -1347,7 +1351,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
             for l in max(2, m):lmax
                 floor = _adaptive_branch_mode_floor(energy + m_energy, tol, mode_abs_floor)
                 mode = ecc_accept!(s, l, m, 0,
-                    ecc_compute(s, l, m, 0, 1.0, false, MODE_REFINE_FLOOR_FRACTION * floor, floor, 0.0, nothing))
+                    ecc_compute(s, l, m, 0, 1.0, false, MODE_REFINE_FLOOR_FRACTION * floor, floor, 0.0, nothing, arena))
                 _record_current_mode!(record_h5, record, boundary, mode_index, mode; l, m, n = 0, N_sample = N)
                 m_energy += 2 * mode["EnergyFlux"]
                 m_angular += 2 * mode["AngularMomentumFlux"]
@@ -1596,8 +1600,9 @@ function _inclined_l_walk(compute, s::Int, m::Int, k::Int, q, lmax::Int, minimum
         prior = nothing, lmax_prior::Int = 0)
     modes = Tuple{Int, Any}[]
     lmin = max(2, abs(m))
+    arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this walk's modes
     eval_l = l -> begin
-        mode = compute(s, l, m, k, q)
+        mode = compute(s, l, m, k, q, arena)
         strip && _strip_mode!(mode)
         push!(modes, (l, mode))
         mode["EnergyFlux"]
@@ -1853,11 +1858,11 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
     branch_mode_floor_hor = rs === nothing ? Ref(Float64(mode_abs_floor)) : rs.branch_mode_floor_hor
     # One mode from its parameters (max_flux, floor; the k = 0 walks use the default max_flux 1.0); the walks do the
     # bookkeeping. The k >= 1 shells are walked by _inclined_branch_shells! (computed ahead with mode_parallelism > 1).
-    inc_compute = (s, l, m, k, max_flux, floor) -> with_submission_mode(scope; mode = (s, l, m, 0, k)) do mode_cache
-        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = floor, ci_kwargs..., cache = mode_cache)
+    inc_compute = (s, l, m, k, max_flux, floor, arena) -> with_submission_mode(scope; mode = (s, l, m, 0, k)) do mode_cache
+        ConvolutionIntegrals.convolution_integral_inclined_trapezoidal_isem(KG_sample, s, l, m, k, K; tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = floor, ci_kwargs..., cache = mode_cache, arena)
     end
     inc_mode = inc_compute
-    inc_compute_q = (s, l, m, k, q) -> inc_compute(s, l, m, k, q.max_flux, q.floor)
+    inc_compute_q = (s, l, m, k, q, arena) -> inc_compute(s, l, m, k, q.max_flux, q.floor, arena)
     pf_inf = nothing   # the walk prefetches of the two boundaries (mode_parallelism > 1), set below, drained in finally
     pf_hor = nothing
 
@@ -1903,6 +1908,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
         else
         for m in 1:lmax
             k0_reach = m
+            k0_arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this m's modes
             lmin = max(2, abs(m))
             shell_m_infinity_energy = 0.0
             shell_m_infinity_angular = 0.0
@@ -1916,7 +1922,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
 
                 for l in lmin:lmax
                     mode_inf = inc_mode(-2, l, m, 0, 1.0, MODE_REFINE_FLOOR_FRACTION *
-                        _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
+                        _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor), k0_arena)
                     _record_current_mode!(record_h5, record, "I", mode_index, mode_inf; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_inf, "NearStaticOverflow", false) && (near_static_zero_inf += 1)
                     get(mode_inf, "FailedMode", false) && (failed_modes_inf += 1)
@@ -1950,7 +1956,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x, o::FluxOptions; lmax = 
                 l_trail = Float64[]
                 for l in lmin:lmax
                     mode_hor = inc_mode(2, l, m, 0, 1.0, MODE_REFINE_FLOOR_FRACTION *
-                        _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
+                        _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor), k0_arena)
                     _record_current_mode!(record_h5, record, "H", mode_index, mode_hor; l, m, k = 0, signed_k = false, K_sample = K)
                     get(mode_hor, "NearStaticOverflow", false) && (near_static_zero_hor += 1)
                     get(mode_hor, "FailedMode", false) && (failed_modes_hor += 1)
@@ -2130,6 +2136,7 @@ end
 function _generic_l_walk(compute, s::Int, m::Int, n::Int, k::Int, q, lmax::Int, minimum_consecutive::Int, x, strip::Bool;
         prior = nothing, lmax_prior::Int = 0)
     factors = Dict{Any, Any}()
+    arena = ConvolutionIntegrals._series_arena()   # work arena of the closed-form series for this walk's modes
     modes = Tuple{Int, Any}[]
     prior === nothing || _continues(prior, lmax, lmax_prior) ||
         return (modes = modes, tail = prior.tail, prior = prior, state = _entry_state(prior))
@@ -2137,7 +2144,7 @@ function _generic_l_walk(compute, s::Int, m::Int, n::Int, k::Int, q, lmax::Int, 
     mq = (max_flux = q.max_flux, use_levin = use_levin, floor = q.floor, levin_floor = q.levin_floor,
         levin_flux_scale = use_levin ? q.levin_flux_scale : 0.0)
     eval_l = l -> begin
-        mode = compute(s, l, m, n, k, mq, factors)
+        mode = compute(s, l, m, n, k, mq, factors, arena)
         ConvolutionIntegrals._check_finite_mode_flux(mode, s, l, m, n, k)
         strip && _strip_mode!(mode)
         push!(modes, (l, mode))
@@ -2995,7 +3002,7 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
         near_static_zero = rs === nothing ? [0, 0] : rs.near_static_zero
         # One mode from its parameters (max_flux, Levin choice, floors; levin_flux_scale is passed to the adaptive Levin
         # route, which does not use it), and its acceptance, which the walks apply in their order.
-        gen_compute = (s, l, m, n, k, max_flux, use_levin, floor, levin_floor, levin_flux_scale, factors) -> begin
+        gen_compute = (s, l, m, n, k, max_flux, use_levin, floor, levin_floor, levin_flux_scale, factors, arena) -> begin
             ω_mode = (m * F_orbit["ϒϕ"] + n * F_orbit["ϒr"] + k * F_orbit["ϒθ"]) / F_orbit["ϒt"]
             if _negligible_low_frequency_mode(s, l, ω_mode, F_orbit["ϒϕ"] / F_orbit["ϒt"], a, p, e)
                 res = ConvolutionIntegrals._zero_radiative_mode(ω_mode, nothing; reason = "negligible_low_frequency")
@@ -3006,11 +3013,11 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
                 if use_levin
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
                         mode_cache.walk_factors = factors
-                        ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth)
+                        ConvolutionIntegrals.generic_mode_flux_from_master_cached_adaptive_levin!(mode_cache, KG_master, s, l, m, n, k; sample_tol = sample_tol, tol = tol, max_flux = levin_flux_scale, mode_abs_floor = levin_floor, threaded_sampling = threaded_sampling, confirm_low_flux = true, local_r_intervals = levin_local_n, local_theta_intervals = levin_local_n, max_depth = levin_max_depth, arena)
                     end
                 else
                     with_submission_mode(scope; mode = (s, l, m, n, k)) do mode_cache
-                        ConvolutionIntegrals.generic_mode_flux_from_master_cached!(mode_cache, KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, threaded_sampling = threaded_sampling)
+                        ConvolutionIntegrals.generic_mode_flux_from_master_cached!(mode_cache, KG_master, s, l, m, n, k; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, sample_tol = sample_tol, tol = tol, max_flux = max_flux, mode_abs_floor = floor, threaded_sampling = threaded_sampling, arena)
                     end
                 end
             end; end
@@ -3038,9 +3045,9 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
         # _generic_l_walk with gen_compute_q
         eval_mode = (s, l, m, n, k, max_flux, use_levin=false) -> begin
             q = gen_parameters(s, l, m, n, k, max_flux, use_levin)
-            gen_accept!(s, l, m, n, k, gen_compute(s, l, m, n, k, q..., nothing))
+            gen_accept!(s, l, m, n, k, gen_compute(s, l, m, n, k, q..., nothing, nothing))
         end
-        gen_compute_q = (s, l, m, n, k, q, factors) -> gen_compute(s, l, m, n, k, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_flux_scale, factors)
+        gen_compute_q = (s, l, m, n, k, q, factors, arena) -> gen_compute(s, l, m, n, k, q.max_flux, q.use_levin, q.floor, q.levin_floor, q.levin_flux_scale, factors, arena)
 
         record_mode = (s, l, m, n, k, mode) -> begin
             _record_current_mode!(record_h5, record, s == -2 ? "I" : "H", mode_index, mode; l, m, n, k, N_sample = N0, K_sample = K0)

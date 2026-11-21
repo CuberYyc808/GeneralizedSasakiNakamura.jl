@@ -5,6 +5,7 @@ using ..CoefficientTables: CoefficientSet, gsn_coefficients
 using ..ComplexPathAmplitudes: complex_path_amplitudes
 import ...ConversionFactors
 using ..Iteration: ScaledMarchStepLimit
+using ..OrdinaryPointExpansion: SeriesArena
 using ..Iteration:
     Basis,
     Patch,
@@ -793,17 +794,19 @@ function _public_exterior_covered(bridge, endpoint_plan)
 end
 
 """
-    match_route(coefficients, branch; controls=nothing)
+    match_route(coefficients, branch; controls=nothing, arena=nothing)
 
 Build the horizon and infinity bases for `branch` (`:IN` or `:UP`), match them
 at `controls.match_x` with the Abel (Wronskian) denominator, and return the
-`Route` with its incidence and reflection coefficients.
+`Route` with its incidence and reflection coefficients. `arena` is the caller's work arena of the closed-form
+series (OrdinaryPointExpansion.SeriesArena, used by one task at a time; the route keeps no reference to it); without
+it the solve makes its own.
 """
-function match_route(coefficients::CoefficientSet, branch; controls=nothing)
-    return _match_impl(coefficients, branch, controls)
+function match_route(coefficients::CoefficientSet, branch; controls=nothing, arena=nothing)
+    return _match_impl(coefficients, branch, controls, arena)
 end
 
-function _match_impl(coefficients::CoefficientSet, branch, controls)
+function _match_impl(coefficients::CoefficientSet, branch, controls, arena=nothing)
     base_ctrl = controls === nothing ? gsn_controls(coefficients.params) : controls
     route_branch = _normalized_route_branch(branch)
     side = _route_side(route_branch)
@@ -816,7 +819,7 @@ function _match_impl(coefficients::CoefficientSet, branch, controls)
     # The small-frequency-expansion (MST) machinery is large; with small_frequency_expansion as a type parameter an ordinary
     # solve compiles only the branches it can reach.
     return _match_body(
-        coefficients, route_branch, base_ctrl, ctrl, Val(ctrl.small_frequency_expansion))
+        coefficients, route_branch, base_ctrl, ctrl, Val(ctrl.small_frequency_expansion), arena)
 end
 
 # Core of match_route: propagates the horizon and infinity bases to match_x, solves
@@ -824,7 +827,7 @@ end
 # re-enters _match_impl with ordinary controls when an MST certificate fails under
 # sfe=:auto.
 function _match_body(
-    coefficients::CoefficientSet, route_branch, base_ctrl, ctrl, ::Val{UseSmallFrequencyExpansion},
+    coefficients::CoefficientSet, route_branch, base_ctrl, ctrl, ::Val{UseSmallFrequencyExpansion}, arena=nothing,
 ) where {UseSmallFrequencyExpansion}
     match_x = ctrl.match_x
     side = _route_side(route_branch)
@@ -835,7 +838,7 @@ function _match_body(
     scratch = IterationScratch(coefficients,
         getproperty(ctrl, :ordinary_order);
         force_eikonal=ctrl.large_frequency_expansion, large_frequency_expansion=ctrl.large_frequency_expansion, small_frequency_expansion=UseSmallFrequencyExpansion,
-        route_branch=side)
+        route_branch=side, arena=arena === nothing ? SeriesArena() : arena)
     mst_branches = route_branch == :IN ? (:in, :out) : (:out,)
     mst_plan = if UseSmallFrequencyExpansion
         try
@@ -844,7 +847,7 @@ function _match_body(
             _small_frequency_expansion_auto_fallback(base_ctrl, err) || rethrow()
             fallback = _ordinary_fallback(
                 base_ctrl, :small_frequency_expansion_infinity_in_tail_fallback)
-            return _match_impl(coefficients, route_branch, fallback)
+            return _match_impl(coefficients, route_branch, fallback, arena)
         end
     else
         nothing
@@ -854,7 +857,7 @@ function _match_body(
             base_ctrl.frequency_selection.small_frequency_expansion_request == :auto
         fallback = _ordinary_fallback(
             base_ctrl, :small_frequency_expansion_no_safe_seed_fallback)
-        return _match_impl(coefficients, route_branch, fallback)
+        return _match_impl(coefficients, route_branch, fallback, arena)
     end
     endpoint_y = mst_plan === nothing ? selection.endpoint_y :
         1.0 - mst_plan.seed_x
@@ -874,7 +877,7 @@ function _match_body(
                     fallback = _ordinary_fallback(
                         base_ctrl, :small_frequency_expansion_infinity_in_tail_fallback)
                     return _match_impl(
-                        coefficients, route_branch, fallback)
+                        coefficients, route_branch, fallback, arena)
                 end
                 try
                     incoming, outgoing = _logscaled_mano_suzuki_takasugi_pair(
@@ -887,7 +890,7 @@ function _match_body(
                     fallback = _ordinary_fallback(
                         base_ctrl, :small_frequency_expansion_infinity_in_tail_fallback)
                     return _match_impl(
-                        coefficients, route_branch, fallback)
+                        coefficients, route_branch, fallback, arena)
                 end
             end
         else
@@ -935,7 +938,7 @@ function _match_body(
                     fallback = _ordinary_fallback(
                         base_ctrl, :small_frequency_expansion_evaluation_plan_fallback)
                     return _match_impl(
-                        coefficients, route_branch, fallback)
+                        coefficients, route_branch, fallback, arena)
                 end
             end
         end
@@ -976,7 +979,7 @@ function _match_body(
                 fallback = _ordinary_fallback(
                     base_ctrl, :small_frequency_expansion_infinity_in_tail_fallback)
                 return _match_impl(
-                    coefficients, route_branch, fallback)
+                    coefficients, route_branch, fallback, arena)
             end
             try
                 (_logscaled_mano_suzuki_takasugi_basis(coefficients, :out, match_x, ctrl, scratch, mst_plan), true)
@@ -987,7 +990,7 @@ function _match_body(
                 fallback = _ordinary_fallback(
                     base_ctrl, :small_frequency_expansion_infinity_in_tail_fallback)
                 return _match_impl(
-                    coefficients, route_branch, fallback)
+                    coefficients, route_branch, fallback, arena)
             end
         end
     else
@@ -1045,7 +1048,7 @@ function _match_body(
                 _small_frequency_expansion_auto_fallback(base_ctrl, err) || rethrow()
                 fallback = _ordinary_fallback(
                     base_ctrl, :small_frequency_expansion_evaluation_plan_fallback)
-                return _match_impl(coefficients, route_branch, fallback)
+                return _match_impl(coefficients, route_branch, fallback, arena)
             end
         end
     end
@@ -1077,16 +1080,17 @@ function _match_body(
 end
 
 """
-    radial_route(s, l, m, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing, kwargs...)
-    radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, kwargs...)
+    radial_route(s, l, m, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing, arena=nothing, kwargs...)
+    radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, arena=nothing, kwargs...)
 
 Build the ISEM GSN route for the `:IN`, `:UP`, `:OUT` or `:DOWN` solution (OUT and DOWN are returned as routes of
 the IN and UP side whose amplitudes are the coefficients of the far pair, see `_route_side`). Extra keywords are
-passed to `gsn_controls` when `controls` is not given. A real negative
-frequency is solved at (-m, -omega) and returned as a `ConjugatedRoute`.
+passed to `gsn_controls` when `controls` is not given; `arena` is a work arena owned by the caller (see
+`match_route`). A real negative frequency is solved at (-m, -omega) and returned as a `ConjugatedRoute`.
 """
 function radial_route(
-    s::Integer, l::Integer, m::Integer, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing, kwargs...,
+    s::Integer, l::Integer, m::Integer, a, omega, branch=:IN; lambda=nothing, nu=nothing, controls=nothing,
+    arena=nothing, kwargs...,
 )
     params = gsn_parameters(s, l, m, a, omega; lambda=lambda, nu=nu)
     # Inputs beyond binary64 take the arbitrary-precision series route (ArbitraryPrecisionRoute.jl),
@@ -1103,14 +1107,15 @@ function radial_route(
         )
         # The reflected route is the positive-frequency route itself, so the
         # two signs agree by construction.
-        positive_route = radial_route(positive_params, branch; controls=ctrl)
+        positive_route = radial_route(positive_params, branch; controls=ctrl, arena)
         return ConjugatedRoute(positive_route, params)
     end
     coefficients = gsn_coefficients(params; controls=ctrl)
-    return _matched_route(coefficients, branch, ctrl)
+    return _matched_route(coefficients, branch, ctrl, arena)
 end
 
-function radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, kwargs...)
+function radial_route(params::GSNParameters, branch=:IN; controls=nothing, coefficients=nothing, arena=nothing,
+        kwargs...)
     if !is_binary64_parameters(params)
         return _arbitrary_precision_route(params, branch;
             N=get(kwargs, :N, nothing), xm=get(kwargs, :xm, nothing),
@@ -1118,13 +1123,13 @@ function radial_route(params::GSNParameters, branch=:IN; controls=nothing, coeff
     end
     ctrl = controls === nothing ? gsn_controls(params; kwargs...) : controls
     coeffs = coefficients === nothing ? gsn_coefficients(params; controls=ctrl) : coefficients
-    return _matched_route(coeffs, branch, ctrl)
+    return _matched_route(coeffs, branch, ctrl, arena)
 end
 
 # The complex-path reflection (below) is a correction of the IN and UP reflection amplitudes; a direct OUT or DOWN
 # route is returned as matched.
-function _matched_route(coefficients, branch, ctrl)
-    route = match_route(coefficients, branch; controls=ctrl)
+function _matched_route(coefficients, branch, ctrl, arena=nothing)
+    route = match_route(coefficients, branch; controls=ctrl, arena)
     return _normalized_route_branch(branch) in (:OUT, :DOWN) ? route : _complex_path_reflection(route)
 end
 

@@ -269,7 +269,8 @@ function _cached_inclined_sample!(cache::InclinedFluxCache, KG_master::Dict, K::
     end
 end
 
-function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, k::Int, K_interval::Int64, cache = nothing)
+function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, k::Int, K_interval::Int64, cache = nothing;
+        arena = nothing)
     Frequencies = KG_sample["Frequencies"]
     Γ = Frequencies["ϒt"]
     ϒθ = Frequencies["ϒθ"]
@@ -278,7 +279,7 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     ω = (m * ϒφ + k * ϒθ) / Γ
     KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
     Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
     Ydic = Dict(
         "params" => (s = s, l = l, m = m, a = a, omega = ω, lambda = SH.lambda),
@@ -412,11 +413,15 @@ end
 # ISEM Y radial function for the source integrals: IN branch for s = -2, UP branch for s = +2. With check_radii
 # (radii spanning the orbit) the Wronskian self-check runs first.
 # check_radii may be a function returning them: they are needed only for the small-frequency Wronskian check.
-@inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing, check_radii = nothing)
+# A fresh work arena of the closed-form series (one per mode walk of the sums).
+_series_arena() = ISEM.OrdinaryPointExpansion.SeriesArena()
+
+# `arena`: the caller's work arena of the closed-form series (ISEM.match_route), reused by the modes of one task.
+@inline function _isem_y_solution(s, l, m, a, omega; lambda = nothing, check_radii = nothing, arena = nothing)
     branch = s == -2 ? :IN : s == 2 ? :UP :
         error("ISEM Y interfaces currently support only s = -2 and s = 2.")
     route = ISEM.radial_route(s, l, m, a, omega, branch;
-        lambda = lambda,
+        lambda = lambda, arena = arena,
         small_frequency_expansion = _inhomogeneous_small_frequency_expansion_control(l, a, omega),
         large_frequency_expansion = :auto)
     route.controls.small_frequency_expansion &&
@@ -425,8 +430,8 @@ end
 end
 
 @inline function _generic_isem_y_solution(s, l, m, a, omega;
-        lambda = nothing, check_radii = nothing)
-    return _isem_y_solution(s, l, m, a, omega; lambda = lambda, check_radii = check_radii)
+        lambda = nothing, check_radii = nothing, arena = nothing)
+    return _isem_y_solution(s, l, m, a, omega; lambda = lambda, check_radii = check_radii, arena = arena)
 end
 
 function _generic_flux_from_sample(KG_samp::Dict, Y_samp::Dict, SH_samp::Dict, s::Int, l::Int, m::Int, n::Int, k::Int, a::Float64, ω::Float64, ϒθ::Float64)
@@ -1268,7 +1273,7 @@ end
 
 # Generic-orbit mode flux by nested trapezoidal refinement on subsamples of the dense master grid, doubling
 # N (and K when the polar band looks under-resolved) until the energy flux converges to sample_tol.
-function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false)
+function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_master::Dict, s::Int, l::Int, m::Int, n::Int, k::Int; N0::Int = 64, K0::Int = 16, Nmax::Int = 2^14, Kmax::Int = 2^12, sample_tol::Float64 = 1e-3, tol::Float64 = 1e-8, max_flux::Float64 = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, arena = nothing)
     _check_mode_geometry(cache, KG_master)
     if !(s == -2 || s == 2)
         error("Spin weight s must be either 2 or -2.")
@@ -1296,7 +1301,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master), arena)
 
     # Resolve the polar harmonic band independently of the radial grid.
     K_band = min(max(K0, nextpow(2, l + abs(k) + 1)), Kmax)
@@ -1436,7 +1441,8 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
         local_theta_intervals::Int = DEFAULT_ADAPTIVE_LEVIN_LOCAL_N,
         min_depth::Int = DEFAULT_ADAPTIVE_LEVIN_MIN_DEPTH,
         max_depth::Int = 8,
-        depth_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX)
+        depth_tol_max::Float64 = DEFAULT_ADAPTIVE_LEVIN_TOL_MAX,
+        arena = nothing)
     _check_mode_geometry(cache, KG_master)
     sample_tol = min(sample_tol, GENERIC_LEVIN_TOL_MULTIPLIER * sqrt(tol))
     if !(s == -2 || s == 2)
@@ -1468,7 +1474,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     effective_local_theta_intervals = _generic_adaptive_effective_theta_intervals(local_theta_intervals, k, l)
     nt = effective_local_theta_intervals + 1
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master))
+    Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master), arena)
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     sh_cache = Dict{NTuple{3, Int}, Any}()
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω; r_low = _orbit_periapsis(KG_master))
@@ -2809,7 +2815,8 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
         mode_abs_floor::Float64 = 1e-16,
         energy_abs_tol::Float64 = 0.0,
         threaded_sampling::Bool = false,
-        cache = nothing)
+        cache = nothing,
+        arena = nothing)
     _check_mode_geometry(cache, KG_sample)
     local_n >= 2 || throw(ArgumentError("local_n must be at least 2"))
     max_depth >= 0 || throw(ArgumentError("max_depth must be nonnegative"))
@@ -2835,7 +2842,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
     KG = haskey(KG_sample, "Energy") ? KG_sample : _kg_from_presampled_master(KG_sample)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω; r_low = _orbit_periapsis(KG_sample))
     two_wave === nothing || (two_wave = _two_wave_m2(two_wave, KG, Ysol, SH, a, ω, m, n))
     # s = +2: the fused kernel's mode constants travel in the same slot
@@ -2947,7 +2954,7 @@ end
 # Semi-latus rectum from which the eccentric trapezoid always refines to the phase-resolving grid (see below).
 const ALIAS_GUARD_P = 40.0
 
-function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing)
+function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, m, n, N_sample::Int64; Nmax::Int = 2^14, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing, arena = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(N_sample) || throw(ArgumentError("N_sample must be a power of 2"))
     ispow2(Nmax) || throw(ArgumentError("Nmax must be a power of 2"))
@@ -2965,7 +2972,7 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         return res
     end
     SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
-    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample))
+    Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
 
     N = N_sample
     KG_samp = cache isa EccentricFluxCache ? _cached_eccentric_sample!(cache, KG_sample, N) : subsample_eccentric_sample(KG_sample, N)
@@ -3058,7 +3065,7 @@ function convolution_integral_inclined_trapezoidal_isem(KG_sample::Dict, s, l, m
     end
 end
 
-function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing)
+function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::Int64; Kmax::Int = 2^12, tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, mode_abs_floor::Float64 = 1e-16, threaded_sampling::Bool = false, cache = nothing, arena = nothing)
     _check_mode_geometry(cache, KG_sample)
     ispow2(K_sample) || throw(ArgumentError("K_sample must be a power of 2"))
     ispow2(Kmax) || throw(ArgumentError("Kmax must be a power of 2"))
@@ -3082,7 +3089,7 @@ function _inclined_trapezoidal_isem_once(KG_sample::Dict, s, l, m, k, K_sample::
         return res
     end
     ctx = try
-        _inclined_trapezoidal_context(KG_sample, s, l, m, k, K_interval, cache)
+        _inclined_trapezoidal_context(KG_sample, s, l, m, k, K_interval, cache; arena)
     catch err
         _near_static_overflow(err, ω, Frequencies["ϒϕ"] / Γ) || rethrow()
         res = _zero_radiative_mode(ω, KG_sample; reason = "near_static_overflow")
