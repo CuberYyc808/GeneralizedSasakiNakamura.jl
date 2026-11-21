@@ -1445,21 +1445,13 @@ function _local_step!(scratch, coefficients, x, state1, state2, h, settings, shi
             representation == :ordinary_shift_fallback
         A, B = _ode_ab!(scratch, coefficients, x + h)
         score1, adjacent1, residual1 = _state_score_from_ab(
-            A,
-            B,
-            candidate.state1,
-            ComplexRationalState(
-                poly_pair(@view(scratch.coeffs1[1:(settings.reduced_order + 1)]), h)...,
-            ),
+            A, B, candidate.state1,
+            ComplexRationalState(poly_pair(@view(scratch.coeffs1[1:(settings.reduced_order + 1)]), h)...),
             poly_triple(scratch.coeffs1, h)[3],
         )
         score2, adjacent2, residual2 = _state_score_from_ab(
-            A,
-            B,
-            candidate.state2,
-            ComplexRationalState(
-                poly_pair(@view(scratch.coeffs2[1:(settings.reduced_order + 1)]), h)...,
-            ),
+            A, B, candidate.state2,
+            ComplexRationalState(poly_pair(@view(scratch.coeffs2[1:(settings.reduced_order + 1)]), h)...),
             poly_triple(scratch.coeffs2, h)[3],
         )
         return merge(candidate, (;
