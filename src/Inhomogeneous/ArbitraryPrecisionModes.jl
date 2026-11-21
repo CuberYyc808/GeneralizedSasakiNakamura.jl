@@ -11,12 +11,12 @@
 # written for a generic number type; the binary64 routes are not touched.
 module ArbitraryPrecisionModes
 
-using KerrGeodesics: kerr_geo_orbit, kerr_geo_mino_averages
+using KerrGeodesics: kerr_geo_orbit, kerr_geo_mino_averages, kerr_geo_orbit_phases, kerr_geo_radial_motion,
+    kerr_geo_polar_motion
 using SpinWeightedSpheroidalHarmonics: spin_weighted_spheroidal_harmonic, value_and_theta_derivative
 using ..Coordinates: rstar_from_r
 using ..ConversionFactors
 using ..ISEM: Y_radial, IN, UP
-using ..GridSampling: _phase_values, _radial_phase_rates, _polar_phase_rates, _theta_constants
 
 export arbitrary_precision_pointparticle_mode
 
@@ -30,6 +30,7 @@ struct APModeOrbit{T}
     e::T
     x::T
     KG::Dict
+    phases::Any                  # KerrGeodesics.kerr_geo_orbit_phases in T
     equatorial::Bool
     circular::Bool
     frequencies::NTuple{4,T}     # (ϒt, ϒr, ϒθ, ϒϕ)
@@ -42,7 +43,7 @@ function _ap_orbit(a::T, p::T, e::T, x::T) where {T}
     F = KG["Frequencies"]
     equatorial = abs(x) == 1
     circular = iszero(e)
-    return APModeOrbit{T}(a, p, e, x, KG, equatorial, circular,
+    return APModeOrbit{T}(a, p, e, x, KG, kerr_geo_orbit_phases(a, p, e, x), equatorial, circular,
         (T(F["ϒt"]), T(F["ϒr"]), T(F["ϒθ"]), T(F["ϒϕ"])), T(KG["Energy"]), T(KG["AngularMomentum"]))
 end
 
@@ -61,41 +62,27 @@ end
 
 # Radial samples: r, r*, Δt_r, Δφ_r, Σ u^r on the q_r grid (forward branch; the reverse branch is its negative).
 function _radial_samples(o::APModeOrbit{T}, qr) where {T}
-    KG = o.KG
-    _, qr0, _, _ = Tuple(T.(KG["InitialPhases"]))
-    ϒr = o.frequencies[2]
-    Δtr, _, Δφr, _ = _cross(KG)
     if o.circular
         n = length(qr)
         return fill(o.p, n), fill(rstar_from_r(o.a, o.p), n), zeros(T, n), zeros(T, n), zeros(T, n)
     end
-    _, r, θ, _ = KG["Trajectory"]
-    _, ur, _, _ = KG["FourVelocity"]
-    rv = T.(_phase_values(r, qr, qr0, ϒr))
-    theta = o.equatorial ? (λ -> T(pi) / 2) : θ
-    urv = T.(_radial_phase_rates(ur, theta, qr, rv, o.a, qr0, ϒr; constants = _theta_constants(KG)))
-    return rv, T[rstar_from_r(o.a, r) for r in rv], T.(map(Δtr, qr)), T.(map(Δφr, qr)), urv
+    m = kerr_geo_radial_motion(o.phases, qr)
+    rv = T.(m.r)
+    return rv, T[rstar_from_r(o.a, r) for r in rv], T.(m.delta_t), T.(m.delta_phi), T.(m.dr_dlambda)
 end
 
 # Polar samples: θ, Δt_θ, Δφ_θ, Σ u^θ on the q_θ grid (forward branch), computed on the first half of a full grid
 # and extended by the symmetries of the binary64 sampler (Δ odd, Σ u^θ even about q_θ = pi / 2).
 function _polar_samples(o::APModeOrbit{T}, qθ) where {T}
-    KG = o.KG
-    _, _, qθ0, _ = Tuple(T.(KG["InitialPhases"]))
-    ϒθ = o.frequencies[3]
     if o.equatorial
         n = length(qθ)
         return fill(T(pi) / 2, n), zeros(T, n), zeros(T, n), zeros(T, n)
     end
-    _, Δtθ, _, Δφθ = _cross(KG)
-    _, r, θ, _ = KG["Trajectory"]
-    _, _, uθ, _ = KG["FourVelocity"]
     n = length(qθ)
-    θv = T.(_phase_values(θ, qθ, qθ0, ϒθ))
+    θv = T.(kerr_geo_polar_motion(o.phases, qθ).theta)
     half = 1:div(n, 2)
-    Δt_half = T.(map(Δtθ, qθ[half]))
-    Δφ_half = T.(map(Δφθ, qθ[half]))
-    u_half = T.(_polar_phase_rates(uθ, r, qθ[half], θv[half], o.a, qθ0, ϒθ; constants = _theta_constants(KG)))
+    m = kerr_geo_polar_motion(o.phases, qθ[half])
+    Δt_half, Δφ_half, u_half = T.(m.delta_t), T.(m.delta_phi), T.(m.dtheta_dlambda)
     return θv, vcat(Δt_half, -reverse(Δt_half)), vcat(Δφ_half, -reverse(Δφ_half)), vcat(u_half, reverse(u_half))
 end
 

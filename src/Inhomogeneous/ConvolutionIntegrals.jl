@@ -253,6 +253,7 @@ function _kg_from_presampled_master(KG_sample::Dict)
     )
     haskey(KG_sample, "e") && (kg["e"] = KG_sample["e"])
     haskey(KG_sample, "x") && (kg["Cosθ_inc"] = KG_sample["x"])
+    haskey(KG_sample, "Phases") && (kg["Phases"] = KG_sample["Phases"])
     return kg
 end
 
@@ -679,27 +680,22 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
     KG = haskey(KG_in, "Energy") ? KG_in : _kg_from_presampled_master(KG_in)
     qr_lo, qr_hi, qθ_lo, qθ_hi = _generic_adaptive_segment_bounds(key)
     a = Float64(KG["a"])
-    _, r, θ, _ = KG["Trajectory"]
-    _, ur, uθ, _ = KG["FourVelocity"]
-    Δtr, Δtθ, Δφr, Δφθ = KG["CrossFunction"]
-    dtr, dtθ, dφr, dφθ = KG["DerivativesCrossFunction"]
     qt0, qr0, qθ0, qφ0 = KG["InitialPhases"]
     freqs = KG["Frequencies"]
-    ϒr = freqs["ϒr"]
-    ϒθ = freqs["ϒθ"]
     Γ = freqs["ϒt"]
 
     qr_vals = _generic_adaptive_cheby_nodes(nr, qr_lo, qr_hi)
     qθ_vals = _generic_adaptive_cheby_nodes(nt, qθ_lo, qθ_hi)
-    theta_odd(f, q) = q >= π / 2 ? f(q) : -f(π - q)
-    theta_odd_derivative(f, q) = q >= π / 2 ? f(q) : f(π - q)
-
-    r_vals = GridSampling._phase_values(r, qr_vals, qr0, ϒr)
-    θ_vals = GridSampling._polar_values(θ, qθ_vals, qθ0, ϒθ)
-    ur_fwd = GridSampling._radial_phase_rates(ur, θ, qr_vals, r_vals, a, qr0, ϒr; constants = GridSampling._theta_constants(KG_in))
-    qθ_rates = map(q -> q >= π / 2 ? q : π - q, qθ_vals)
-    θ_rates = GridSampling._polar_values(θ, qθ_rates, qθ0, ϒθ)
-    uθ_fwd = GridSampling._polar_phase_rates(uθ, r, qθ_rates, θ_rates, a, qθ0, ϒθ; constants = GridSampling._theta_constants(KG_in))
+    phases = GridSampling.orbit_phases(KG)
+    radial = kerr_geo_radial_motion(phases, qr_vals)
+    r_vals = radial.r
+    ur_fwd = radial.dr_dlambda
+    θ_vals = clamp.(kerr_geo_polar_motion(phases, qθ_vals).theta, GridSampling.POLE_EPS, π - GridSampling.POLE_EPS)
+    # The polar parts from the mirror phase pi - q below pi / 2: delta_t and delta_phi odd, their q derivatives and the
+    # polar velocity even about pi / 2.
+    mirror = kerr_geo_polar_motion(phases, map(q -> q >= π / 2 ? q : π - q, qθ_vals))
+    odd(values) = [q >= π / 2 ? v : -v for (q, v) in zip(qθ_vals, values)]
+    uθ_fwd = mirror.dtheta_dlambda
 
     return Dict{String, Any}(
         "qr" => qr_vals,
@@ -707,14 +703,14 @@ function _generic_adaptive_segment_sample_cheby(KG_in::Dict, key::GenericAdaptiv
         "r" => r_vals,
         "rs" => rstar_from_r.(a, r_vals),
         "θ" => θ_vals,
-        "Δtr" => map(Δtr, qr_vals),
-        "Δtθ" => [theta_odd(Δtθ, q) for q in qθ_vals],
-        "Δφr" => map(Δφr, qr_vals),
-        "Δφθ" => [theta_odd(Δφθ, q) for q in qθ_vals],
-        "dtr" => map(dtr, qr_vals),
-        "dtθ" => [theta_odd_derivative(dtθ, q) for q in qθ_vals],
-        "dφr" => map(dφr, qr_vals),
-        "dφθ" => [theta_odd_derivative(dφθ, q) for q in qθ_vals],
+        "Δtr" => radial.delta_t,
+        "Δtθ" => odd(mirror.delta_t),
+        "Δφr" => radial.delta_phi,
+        "Δφθ" => odd(mirror.delta_phi),
+        "dtr" => radial.ddelta_t_dq,
+        "dtθ" => mirror.ddelta_t_dq,
+        "dφr" => radial.ddelta_phi_dq,
+        "dφθ" => mirror.ddelta_phi_dq,
         "ur_fwd" => ur_fwd,
         "ur_rev" => -ur_fwd,
         "uθ_fwd" => uθ_fwd,
