@@ -77,10 +77,12 @@ end
     end
 end
 
-# Error estimates short by x1.12-x1.32 (two-ray step budget, ys tables, MST eps floor).
+# Error estimates against the references: within x2 everywhere; covering the error at three points (measured
+# actual/reported 0.69, 0.14, 0.26) and short by x1.27 and x1.53 at two (two-ray step budget, MST eps floor).
 @testset "under-reports stay within x2" begin
-    for (id, branch, j) in (("D_l2_a0.9_w2.0-0.1i", :UP, 1), ("Q_a07_m2_n10_at_f64", :UP, 2),
-                            ("Q_a0_n9_off_f64", :UP, 1), ("Q_a0_n20_off_f64", :UP, 1), ("Q_a09_m2_n0_off_f64", :IN, 1))
+    for (id, branch, j, covered) in (("D_l2_a0.9_w2.0-0.1i", :UP, 1, true), ("Q_a07_m2_n10_at_f64", :UP, 2, false),
+                                     ("Q_a0_n9_off_f64", :UP, 1, true), ("Q_a0_n20_off_f64", :UP, 1, false),
+                                     ("Q_a09_m2_n0_off_f64", :IN, 1, true))
         q = point(id)
         route = D.radial_route(q.s, q.l, q.m, q.a, q.omega, branch)
         values = teukolsky_ratios(D.teukolsky_radial_function(route))
@@ -88,7 +90,11 @@ end
         reported = D.Matching.amplitude_errors(route)[j]
         actual = relerr(values[j], refs[j])
         @test actual <= 2 * reported
-        @test_broken actual <= reported   # amplitude error estimate
+        if covered
+            @test actual <= reported
+        else
+            @test_broken actual <= reported   # amplitude error estimate
+        end
     end
 end
 
