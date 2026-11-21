@@ -3423,12 +3423,13 @@ function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 25
     if m == 0 && n == 0 && k == 0
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
-    if isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
+    shape = kerr_geo_orbit_shape(e, x)
+    if shape === :circular
         if n != 0 || k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         return convolution_integral_circular_equatorial_isem(a, p, s, l, m; x, trajectory=isequal(e, 0.0) ? KG : nothing)
-    elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
+    elseif shape === :inclined
         if n != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
@@ -3443,7 +3444,7 @@ function convolution_integral_trapezoidal_isem(a, p, e, x, s, l, m, n, k; N = 25
         master = route.master
         master === nothing && (master = kerr_geo_inclined_sample_dense(KG, x, Kmax))
         return convolution_integral_inclined_trapezoidal_isem(master, s, l, m, k, K; Kmax = Kmax, tol = tol, sample_tol = sample_tol, max_flux = max_flux, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, cache=route.cache)
-    elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
+    elseif shape === :eccentric
         if k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
@@ -3496,12 +3497,13 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
     if m == 0 && n == 0 && k == 0
         return Dict("Amplitude" => 0.0 + 0.0im, "omega" => 0.0, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
     end
-    if isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
+    shape = kerr_geo_orbit_shape(e, x)
+    if shape === :circular
         if n != 0 || k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
         return convolution_integral_circular_equatorial_isem(a, p, s, l, m; x, trajectory=isequal(e, 0.0) ? KG : nothing)
-    elseif isapprox(e, 0.0; atol=1e-12) && !isapprox(abs(x), 1.0; atol=1e-12)
+    elseif shape === :inclined
         if n != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end
@@ -3509,7 +3511,7 @@ function convolution_integral_levin_isem(a, p, e, x, s, l, m, n, k;
             return convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K)
         end
         return convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K; cache=route.cache, trajectory=KG, geometry_owner=geometry_owner)
-    elseif !isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
+    elseif shape === :eccentric
         if k != 0
             return Dict("Amplitude" => 0.0 + 0.0im, "omega" => nothing, "EnergyFlux" => 0.0, "AngularMomentumFlux" => 0.0, "CarterConstantFlux" => 0.0, "Trajectory" => KG, "YSolution" => nothing, "SWSH" => nothing)
         end

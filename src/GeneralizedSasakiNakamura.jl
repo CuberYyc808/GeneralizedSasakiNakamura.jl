@@ -1848,17 +1848,8 @@ function _small_x_flux(run, a, p, e, x)
         plus.cost + minus.cost, (plus = plus.result, minus = minus.result))
 end
 
-function _teukolsky_flux_orbit_type(e, x)
-    if e == 0.0 && (x == 1.0 || x == -1.0)
-        return :circular
-    elseif x == 1.0 || x == -1.0
-        return :eccentric
-    elseif e == 0.0
-        return :inclined
-    else
-        return :generic
-    end
-end
+# Orbit family with KerrGeodesics' own tolerance (1e-12 on e and on |x| - 1), the classification every route uses.
+_teukolsky_flux_orbit_type(e, x) = kerr_geo_orbit_shape(e, x)
 
 function _teukolsky_flux_geodesic_params(a, p, e, x)
     if x == -1.0
@@ -2163,16 +2154,8 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
     )
 end
 
-# Orbit family of the mode cache for a single-mode call: ISEM methods classify the
-# orbit with a 1e-12 tolerance on e and |x|, as their convolution routes do; the
-# legacy methods use the submission's family.
-function _pointparticle_cache_family(method, e, x, fallback::Symbol)
-    method in ("auto", "isem_trapezoidal", "isem_levin") || return fallback
-    radial_zero = isapprox(e, 0.0; atol = 1e-12)
-    equatorial = isapprox(abs(x), 1.0; atol = 1e-12)
-    return radial_zero ? (equatorial ? :circular : :inclined) :
-        (equatorial ? :eccentric : :generic)
-end
+# Orbit family of the mode cache for a single-mode call, as the convolution routes classify it.
+_pointparticle_cache_family(method, e, x, fallback::Symbol) = kerr_geo_orbit_shape(e, x)
 
 # For ISEM methods with 0 < |e| <= 1e-12 the convolution routes build their own
 # e = 0 orbit, so they must not share the submission geometry built for the raw e.

@@ -60,7 +60,7 @@ mutable struct PublicSubmission
     tasks_joined::Int
 end
 
-_public_family(e, x) = (x == 1 || x == -1) ? (e == 0 ? :circular : :eccentric) : (e == 0 ? :inclined : :generic)
+_public_family(e, x) = kerr_geo_orbit_shape(e, x)
 # the same context as a geometry owner's (precision, rounding, loaded KerrGeodesics), checked at every mode admission
 _public_context() = ConvolutionIntegrals._submission_geometry_context()
 

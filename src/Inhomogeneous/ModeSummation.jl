@@ -653,11 +653,7 @@ function _record_current_mode!(h5, record::Bool, boundary::AbstractString, n::In
 end
 
 # Classify the orbit as the public ISEM route does (1e-12 tolerance), before allocating a mode cache.
-function _mode_flux_cache_family(e, x)
-    equatorial = isapprox(abs(x), 1.0; atol = 1e-12)
-    circular = isapprox(e, 0.0; atol = 1e-12)
-    return circular ? (equatorial ? :circular : :inclined) : (equatorial ? :eccentric : :generic)
-end
+_mode_flux_cache_family(e, x) = kerr_geo_orbit_shape(e, x)
 
 # Snapshot the parent under its existing lock; invoke user code outside the lock.
 function _mode_flux_parent_stop_requested(scope)

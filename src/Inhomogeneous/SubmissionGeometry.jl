@@ -296,9 +296,7 @@ end
 # Classify (e, x) into an orbit family (1e-12 tolerance), check that the mode cache, trajectory and geometry
 # owner belong together, and return (KG, master, cache, family); master is nothing without a geometry owner.
 function _submission_public_route(a, p, e, x, cache, trajectory, geometry_owner)
-    circular = isapprox(e, 0.0; atol=1e-12) && isapprox(abs(x), 1.0; atol=1e-12)
-    family = circular ? :circular : isapprox(e, 0.0; atol=1e-12) ? :inclined :
-        isapprox(abs(x), 1.0; atol=1e-12) ? :eccentric : :generic
+    family = kerr_geo_orbit_shape(e, x)
     cache = _submission_public_cache(cache, geometry_owner, family)
     if trajectory === nothing && cache !== nothing && cache.geometry_owner !== nothing
         master = cache.geometry_owner.master
