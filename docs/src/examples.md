@@ -105,10 +105,11 @@ QuasiNormalMode(
     parameters = (a = 0.68, s = -2, l = 2, m = 2, n = 0)
     omega = 0.52397510429008398 - 0.081512623631199516im
     lambda = 1.6550030612535795 + 0.36026776076186151im
-    incidence_amplitude = -2.9652484956329296e-15 + 1.0066747053005698e-14im
-    reflection_amplitude = -0.80073261705109955 + 0.029136276807086189im
-    incidence_derivative = -2.143807932934116 + 6.7875557748638862im
-    excitation_factor = 0.01983394079017144 + 0.10427056860707475im
+    incidence_amplitude = -2.6963289242556499e-16 + 4.4112886181938795e-15im
+    reflection_amplitude = -0.80073261705110921 + 0.02913627680708113im
+    incidence_derivative = -2.1438079329341213 + 6.7875557748639803im
+    excitation_factor = 0.019833940790170371 + 0.10427056860707482im
+    status = accepted
     formalism = GSN)
 ```
 

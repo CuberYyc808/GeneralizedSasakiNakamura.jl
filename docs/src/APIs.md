@@ -425,7 +425,7 @@ GSN_pointparticle_mode
 ### `Teukolsky_pointparticle_flux`
 
 ```julia
-flux = Teukolsky_pointparticle_flux(a, p, e, x; tol = 1e-8, lmax = 30, nmax = 500, kmax = 20, truncation_floor = 1e-16)
+flux = Teukolsky_pointparticle_flux(a, p, e, x; tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, truncation_floor = 1e-16)
 ```
 
 Computes the total fluxes with a mode summation chosen by orbit type:
@@ -442,9 +442,9 @@ Keywords:
 | keyword | default | meaning |
 | :--- | :--- | :--- |
 | `tol` | `1e-8` | relative stopping threshold of the mode sums, which add modes in shells of one ℓ (circular orbits), one k (inclined) or one n (eccentric, generic); each mode is refined to a matching accuracy. It is not a guaranteed error bound: the flux error is typically a few `tol`, and 1–5 `tol` was measured for orbits very close to the separatrix or the ISSO and for very large `p` |
-| `lmax` | `30` | maximum $\ell$ index |
-| `nmax` | `500` | maximum radial shell index |
-| `kmax` | `20` | maximum polar shell index |
+| `lmax` | `:auto` | maximum $\ell$ index; `:auto` estimates it from the (ℓ, m = ℓ) fluxes of the equatorial circular orbit at radius p/(1+e) (the ℓ where the extrapolated tail drops below `tol`, plus 3, clamped to 30..150) and raises it by half, at most twice, when a sum reaches it; an integer keeps it fixed |
+| `nmax` | `:auto` | maximum radial shell index; `:auto` takes 0.75 (lmax + log(1/tol)) w_p/Ω_r (w_p the azimuthal rate at periapsis, Ω_r the radial frequency), clamped to 100..20000, raised like `lmax` |
+| `kmax` | `:auto` | maximum polar shell index; `:auto` takes the automatic `lmax`, raised like `lmax` |
 | `minimum_consecutive` | `nothing` (5 for circular equatorial orbits, 2 otherwise) | number of consecutive negligible terms that stops a sum over ℓ, m or (generic orbits) k; the outer `n` sum (eccentric, generic) and `k` sum (inclined) stop after `minimum_consecutive + 1` negligible shells. For eccentric equatorial orbits the `n` run is at least one period $\Upsilon_\phi/\Upsilon_r$ of the shells, which near the separatrix (zoom-whirl orbits) dip and rise again |
 | `N`, `N0` | `64` | initial radial grid interval count of the adaptive sampling (`N`, `K`, `Nmax` and `Kmax` must be powers of 2) |
 | `K`, `K0` | `16` | initial polar grid interval count of the adaptive sampling |
@@ -507,7 +507,7 @@ flux.horizon_energy_flux
 flux.reached.l_reached_inf
 ```
 
-A generic orbit such as `(0.9, 6.0, 0.7, 0.5)` sums about 1.5 million modes;
+A generic orbit such as `(0.9, 6.0, 0.7, 0.5)` computes about 0.76 million modes;
 the run shown on the Home page took about 27 minutes at `tol = 1e-8`.
 
 ```@docs

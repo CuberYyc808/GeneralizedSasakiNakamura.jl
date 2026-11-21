@@ -76,16 +76,16 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = IN,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = 6.536587661184236 - 4.941203897065118im,
-    reflection_amplitude = -0.1282466191290958 - 0.4404813349644446im,
+    incidence_amplitude = 6.536587661184241 - 4.941203897065112im,
+    reflection_amplitude = -0.12824661912909405 - 0.44048133496444325im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 ),
 TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.7, omega = 0.5, lambda = 1.6966094016353415),
     boundary_condition = UP,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = -1.1698840333865992 - 2.5455723340434875im,
-    reflection_amplitude = 2.5169908586317717 - 8.644964686261376im,
+    incidence_amplitude = -1.1698840333864824 - 2.545572334043588im,
+    reflection_amplitude = 2.516990858632385 - 8.64496468626141im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 ))
 ```
@@ -96,7 +96,7 @@ Rin(10)
 ```
 This should give
 ```
-77.57508416830544 - 429.4029095224015im
+77.57508416830636 - 429.4029095223997im
 ```
 
 A Teukolsky function is evaluated at the Boyer–Lindquist radius $r$. Passing a boundary condition (`IN`, `UP`, `OUT` or `DOWN`) as a sixth argument returns that single solution, e.g. `Rin = Teukolsky_radial(s, l, m, a, omega, IN)`. `Xin, Xup = GSN_radial(s, l, m, a, omega)` gives the GSN function $X$, which is evaluated at the tortoise coordinate: $X^{\rm in}$ at $r = 10M$ is `Xin(rstar_from_r(a, 10))`, while `Xin(10)` is $X^{\rm in}$ at $r_* = 10M$. `Y_radial(s, l, m, a, omega, bc)` returns the auxiliary function $Y(r)$ for $s = -2$ with `IN` and $s = +2$ with `UP`. See the [API Reference](@ref) for all call forms and keywords.
@@ -116,20 +116,22 @@ mirror_mode = qnm(0.68, -2, 2, 2, 0, mirror)
         parameters = (a = 0.68, s = -2, l = 2, m = 2, n = 0)
         omega = 0.52397510429008398 - 0.081512623631199516im
         lambda = 1.6550030612535795 + 0.36026776076186151im
-        incidence_amplitude = -2.9652484956329296e-15 + 1.0066747053005698e-14im
-        reflection_amplitude = -0.80073261705109955 + 0.029136276807086189im
-        incidence_derivative = -2.143807932934116 + 6.7875557748638862im
-        excitation_factor = 0.01983394079017144 + 0.10427056860707475im
+        incidence_amplitude = -2.6963289242556499e-16 + 4.4112886181938795e-15im
+        reflection_amplitude = -0.80073261705110921 + 0.02913627680708113im
+        incidence_derivative = -2.1438079329341213 + 6.7875557748639803im
+        excitation_factor = 0.019833940790170371 + 0.10427056860707482im
+        status = accepted
         formalism = GSN)
 
     QuasiNormalMode(
         parameters = (a = 0.68, s = -2, l = 2, m = 2, n = 0)
         omega = -0.31116285768546015 - 0.088754663319965579im
         lambda = 5.4219094861401045 + 0.40958044727148446im
-        incidence_amplitude = -5.1821813248855796e-15 + 4.7107003677217079e-15im
-        reflection_amplitude = -1.2675830722586212 + 0.57434916613852249im
-        incidence_derivative = 9.1832313896816231 - 11.990411121525646im
-        excitation_factor = 0.13913753384546915 + 0.030226487430463019im
+        incidence_amplitude = -5.9469826997719054e-14 - 2.323125444034887e-15im
+        reflection_amplitude = -1.2675830722584733 + 0.57434916613851184im
+        incidence_derivative = 9.1832313896809605 - 11.990411121524874im
+        excitation_factor = 0.13913753384546562 + 0.030226487430457402im
+        status = accepted
         formalism = GSN)
     ```
 
@@ -149,8 +151,8 @@ TeukolskyRadialFunction(
     mode = Mode(s = -2, l = 2, m = 2, a = 0.68, omega = 0.523975104290084 - 0.08151262363119952im, lambda = 1.6550030612535795 + 0.3602677607618615im),
     boundary_condition = UP,
     transmission_amplitude = 1.0 + 0.0im,
-    incidence_amplitude = -1.6277792171253123e-15 + 2.3406653193234936e-16im,
-    reflection_amplitude = 1.101161565720053 + 2.1300599921594445im,
+    incidence_amplitude = -3.34682291997764e-17 + 1.406708219456829e-15im,
+    reflection_amplitude = 1.1011615657200136 + 2.1300599921594485im,
     normalization_convention = UNIT_TEUKOLSKY_TRANS
 )
 ```
@@ -182,17 +184,17 @@ To have a glimpse of the output, one can do so with
 julia> mode_info
 TeukolskyPointParticleMode(
     mode = Mode(s = -2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = 3.606789012119982),
-    amplitude_inf = 0.00023429507956768906 - 6.558414441160938e-5im,
-    energy_flux_inf = 1.0917330113048546e-6,
-    angular_momentum_flux_inf = 3.324033375494718e-5,
-    Carter_const_flux_inf = 5.890504443058139e-5,
+    amplitude_inf = 0.00023429507956747937 - 6.558414441168935e-5im,
+    energy_flux_inf = 1.0917330113032362e-6,
+    angular_momentum_flux_inf = 3.32403337548979e-5,
+    Carter_const_flux_inf = 5.890504443049403e-5,
     method = (method = "isem_trapezoidal", radial_method = "ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at infinity
 ```julia
 julia> mode_info.amplitude
-0.00023429507956768906 - 6.558414441160938e-5im
+0.00023429507956747937 - 6.558414441168935e-5im
 ```
 which is the value for $Z^{\infty}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near infinity for that particular frequency.
 The suffix `_inf` (`_hor` for $s = +2$) appears only in the display; the fields are `amplitude`, `energy_flux`, `angular_momentum_flux` and `Carter_const_flux`.
@@ -208,24 +210,24 @@ The output should be
 julia> mode_info
 TeukolskyPointParticleMode(
     mode = Mode(s = 2, l = 2, m = 2, n = 0, k = 0, a = 0.9, omega = 0.06568724726732753, lambda = -0.39321098788001757),
-    amplitude_hor = 0.006089946888790668 - 0.0014130019665083518im,
-    energy_flux_hor = -2.843814878429853e-9,
-    angular_momentum_flux_hor = -8.658651402627282e-8,
-    Carter_const_flux_hor = -1.5343956812851395e-7,
+    amplitude_hor = 0.006089946888789515 - 0.0014130019665090988im,
+    energy_flux_hor = -2.843814878428984e-9,
+    angular_momentum_flux_hor = -8.658651402624637e-8,
+    Carter_const_flux_hor = -1.5343956812846697e-7,
     method = (method = "isem_trapezoidal", radial_method = "ISEM", radial_sfe = false, N = 256, K = 64, truncation_floor = 1.0e-16),
 )
 ```
 To access for example the amplitude at the horizon
 ```julia
 julia> mode_info.amplitude
-0.006089946888790668 - 0.0014130019665083518im
+0.006089946888789515 - 0.0014130019665090988im
 ```
 which is the value for $Z^{\mathrm{H}}_{\ell m n k}$, the amplitude of the inhomogeneous radial Teukolsky solution near the horizon for that particular frequency.
 Horizon fluxes are the rates absorbed by the black hole, so the energy flux is negative for superradiant modes, $\omega(\omega - m\Omega_H) < 0$, as in this example. At infinity and at the horizon, the angular-momentum flux of a mode is $m/\omega$ times its energy flux.
 
 #### Total fluxes
 
-`Teukolsky_pointparticle_flux(a, p, e, x)` sums the mode fluxes until the shells fall below the relative threshold `tol` (default `1e-8`). `tol` is a stopping threshold, not a guaranteed error bound: the flux error is typically a few `tol` (1–5 `tol` for orbits very close to the separatrix or the ISSO and for very large `p`). Where the last shells fall off geometrically, the remaining tail is extrapolated and added (the `n` sum of eccentric and generic orbits with `e >= 0.7`, the ℓ sum of circular orbits); see the [API Reference](@ref). It chooses the summation from the orbit: circular for $e = 0$, $|x| = 1$; eccentric for $|x| = 1$; inclined for $e = 0$; generic otherwise. For parameters that are neither a stable bound orbit nor a marginally stable bound circular orbit, it warns and returns `nothing`. Generic orbits need two-dimensional convolution integrals and many more modes: in the examples below, timed after an earlier call had compiled the code, the circular orbit took about 0.4 seconds and the generic orbit, with about 1.5 million modes, about 27 minutes; all four examples cost 0.4–1.1 ms per mode. The printed `convolution_integral` entry (`flux.reached.convolution_integral`) reports the quadrature used; "tail ISEM adaptive Levin enabled but not triggered" means that Levin quadrature was never selected.
+`Teukolsky_pointparticle_flux(a, p, e, x)` sums the mode fluxes until the shells fall below the relative threshold `tol` (default `1e-8`). `tol` is a stopping threshold, not a guaranteed error bound: the flux error is typically a few `tol` (1–5 `tol` for orbits very close to the separatrix or the ISSO and for very large `p`). Where the last shells fall off geometrically, the remaining tail is extrapolated and added (the `n` sum of eccentric and generic orbits with `e >= 0.7`, the ℓ sum of circular orbits); see the [API Reference](@ref). It chooses the summation from the orbit: circular for $e = 0$, $|x| = 1$; eccentric for $|x| = 1$; inclined for $e = 0$; generic otherwise. For parameters that are neither a stable bound orbit nor a marginally stable bound circular orbit, it warns and returns `nothing`. Generic orbits need two-dimensional convolution integrals and many more modes: in the examples below, timed after an earlier call had compiled the code, the circular orbit took about 0.35 seconds and the generic orbit, with about 0.76 million computed modes (`total_modes`), about 27 minutes; the four examples cost 0.9–2.1 ms per computed mode. The printed `convolution_integral` entry (`flux.reached.convolution_integral`) reports the quadrature used; "tail ISEM adaptive Levin enabled but not triggered" means that Levin quadrature was never selected.
 
 !!! details "Circular equatorial orbit"
     ```julia
@@ -233,20 +235,20 @@ Horizon fluxes are the rates absorbed by the black hole, so the energy flux is n
     TeukolskyPointParticleFlux(
         orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 1.0),
         orbit_type = circular,
-        infinity_energy_flux = 0.0005658659548623913,
-        infinity_angular_momentum_flux = 0.008825776472729972,
+        infinity_energy_flux = 0.0005658659548622482,
+        infinity_angular_momentum_flux = 0.008825776472727741,
         infinity_carter_constant_flux = 0.0,
-        horizon_energy_flux = -4.177363290666304e-6,
-        horizon_angular_momentum_flux = -6.515407815579627e-5,
+        horizon_energy_flux = -4.17736329066685e-6,
+        horizon_angular_momentum_flux = -6.515407815580479e-5,
         horizon_carter_constant_flux = 0.0,
         total_modes = 378,
         l_reached = (infinity = 19, horizon = 12),
         convolution_integral = (strategy = "no convolution integral is needed",),
         caps = (lmax = 30 (auto), kmax = nothing, raises = 0),
-        l_tail = (infinity = 5.253970621182757e-15, horizon = -1.4017943114045254e-21),
+        l_tail = (infinity = 5.253970621182945e-15, horizon = -1.4017943113963957e-21),
         tolerance = 1.0e-8,
         truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-        cost = 0.3824501037597656 seconds,
+        cost = 0.34523820877075195 seconds,
     )
     ```
 
@@ -256,13 +258,13 @@ Horizon fluxes are the rates absorbed by the black hole, so the energy flux is n
     TeukolskyPointParticleFlux(
         orbital_parameters(a = 0.9, p = 6.0, e = 0.0, x = 0.5),
         orbit_type = inclined,
-        infinity_energy_flux = 0.0006637621565193508,
-        infinity_angular_momentum_flux = 0.006018314942235656,
-        infinity_carter_constant_flux = 0.042944551892232063,
-        horizon_energy_flux = -3.0865749224013184e-6,
-        horizon_angular_momentum_flux = -0.00010495330048593455,
-        horizon_carter_constant_flux = 8.871154473202129e-5,
-        total_modes = 7418,
+        infinity_energy_flux = 0.0006637621565194577,
+        infinity_angular_momentum_flux = 0.006018314942234451,
+        infinity_carter_constant_flux = 0.04294455189224715,
+        horizon_energy_flux = -3.086574922402014e-6,
+        horizon_angular_momentum_flux = -0.00010495330048594527,
+        horizon_carter_constant_flux = 8.871154473199275e-5,
+        total_modes = 3709,
         l_reached = (infinity = 30, horizon = 28),
         k_reached = (infinity = 15, horizon = 13),
         lmax_hit = false,
@@ -272,7 +274,7 @@ Horizon fluxes are the rates absorbed by the black hole, so the energy flux is n
         caps = (lmax = 30 (auto), kmax = 30 (auto), raises = 0),
         tolerance = 1.0e-8,
         truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-        cost = 3.207998037338257 seconds,
+        cost = 3.682379961013794 seconds,
     )
     ```
 
@@ -282,21 +284,21 @@ Horizon fluxes are the rates absorbed by the black hole, so the energy flux is n
     TeukolskyPointParticleFlux(
         orbital_parameters(a = 0.9, p = 6.0, e = 0.7, x = 1.0),
         orbit_type = eccentric,
-        infinity_energy_flux = 0.0007457788297187446,
-        infinity_angular_momentum_flux = 0.006759517997626168,
+        infinity_energy_flux = 0.0007457788296836534,
+        infinity_angular_momentum_flux = 0.00675951799606562,
         infinity_carter_constant_flux = 0.0,
-        horizon_energy_flux = -8.777498677054309e-6,
-        horizon_angular_momentum_flux = -7.361786795281823e-5,
+        horizon_energy_flux = -8.777498677052096e-6,
+        horizon_angular_momentum_flux = -7.361786795275356e-5,
         horizon_carter_constant_flux = 0.0,
-        total_modes = 52502,
+        total_modes = 18836,
         n_reached = (infinity = 124, horizon = 59),
         lmax_hit = false, kmax_hit = false, nmax_hit = false,
         convolution_integral = (strategy = "ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered", tail_levin_nmin = 50, tail_levin_local_n = 16, tail_levin_max_depth = 8),
         caps = (lmax = 30 (auto), kmax = nothing, nmax = 283 (auto), raises = 0),
-        n_tail = (infinity = 4.083742005507349e-11, horizon = 0.0),
+        n_tail = (infinity = 4.083741404898023e-11, horizon = 0.0),
         tolerance = 1.0e-8,
         truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-        cost = 41.378994941711426 seconds,
+        cost = 25.509679794311523 seconds,
     )
     ```
 
@@ -306,22 +308,23 @@ Horizon fluxes are the rates absorbed by the black hole, so the energy flux is n
     TeukolskyPointParticleFlux(
         orbital_parameters(a = 0.9, p = 6.0, e = 0.7, x = 0.5),
         orbit_type = generic,
-        infinity_energy_flux = 0.0011469131572716107,
-        infinity_angular_momentum_flux = 0.006380280244063718,
-        infinity_carter_constant_flux = 0.04146329727076522,
-        horizon_energy_flux = -9.200412363562269e-6,
-        horizon_angular_momentum_flux = -0.00036272257031459134,
-        horizon_carter_constant_flux = 0.0009653818407622784,
-        total_modes = 1514854,
+        infinity_energy_flux = 0.001146913157271485,
+        infinity_angular_momentum_flux = 0.006380280244064921,
+        infinity_carter_constant_flux = 0.04146329727076585,
+        horizon_energy_flux = -9.20041236356196e-6,
+        horizon_angular_momentum_flux = -0.00036272257031459405,
+        horizon_carter_constant_flux = 0.000965381840762313,
+        total_modes = 757101,
         n_reached = (infinity = 145, horizon = 84),
         lmax_hit = false, kmax_hit = false, nmax_hit = false,
         convolution_integral = (strategy = "ISEM adaptive trapezoidal for all computed n; tail ISEM adaptive Levin enabled but not triggered", tail_levin_nmin = 50, tail_levin_local_n = 16, tail_levin_max_depth = 8),
         caps = (lmax = 30 (auto), kmax = 30 (auto), nmax = 203 (auto), raises = 0),
-        n_tail = (infinity = 7.972828714482288e-11, horizon = 0.0),
+        n_tail = (infinity = 7.97282805906913e-11, horizon = 0.0),
         tolerance = 1.0e-8,
         truncation_floor = (infinity = 1.0e-16, horizon = 1.0e-16),
-        cost = 1601.7076799869537 seconds,
+        cost = 1613.3050479888916 seconds,
     )
+                  ✗ FillArrays → FillArraysPDMatsExt
     ```
 
 ### Numerical solver path: linear/Riccati integration

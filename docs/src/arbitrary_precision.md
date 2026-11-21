@@ -13,7 +13,7 @@ Rin, Rup = Teukolsky_radial(-2, 2, 2, a, omega)             # unit Teukolsky tra
 Rin.incidence_amplitude                                       # Complex{BigFloat}, ~74 digits
 R, dRdr, d2Rdr2, err = Rin.Teukolsky_solution(BigFloat("3.5"))
 Xin = GSN_radial(-2, 2, 2, a, omega, IN)                     # unit GSN transmission
-Xin(BigFloat(10))                                            # (X, dX/dr*, 0) at r* = 10
+Xin(BigFloat(10))                                            # X at r* = 10
 Rc = Teukolsky_radial(-2, 2, 2, a, Complex{BigFloat}(BigFloat("0.5"), BigFloat("-0.3")), IN)
 ```
 
