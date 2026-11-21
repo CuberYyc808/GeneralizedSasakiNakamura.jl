@@ -1,7 +1,6 @@
 module Parameters
 
 using LinearAlgebra
-using LinearAlgebra.BLAS: @blasfunc, BlasInt
 using SpinWeightedSpheroidalHarmonics
 
 export GSNParameters, GSNControls, FrequencySelection
@@ -10,7 +9,6 @@ export gsn_parameters, gsn_controls
 export select_small_frequency_expansion_regime, select_large_frequency_expansion_regime, select_frequency_regime
 export select_spin_regime
 export horizon_tail
-export swsh_eigenvalue
 export supported_spin_weight
 
 const DEFAULT_HORIZON_ORDER = 24
@@ -32,12 +30,6 @@ const LARGE_FREQUENCY_EXPANSION_KAPPA_OMEGA_LIMIT = 0.1
 const NEAR_EXTREME_KAPPA_LIMIT = 0.02
 const NEAR_EXTREME_COMPRESSION_MIN = 512.0
 const SMALL_C_SWSH_LIMIT = 1e-6
-const SWSH_EIGENVALUE_ATOL = 5e-14
-const SWSH_EIGENVALUE_RTOL = 5e-15
-const SWSH_MIN_BUFFER = 10
-const SWSH_MAX_REFINEMENTS = 20
-const SWSH_LAPACK = LinearAlgebra.LAPACK.liblapack
-
 # Whether s is one of the tabulated spin weights -2..2.
 supported_spin_weight(s::Integer) = s in (-2, -1, 0, 1, 2)
 
@@ -167,170 +159,6 @@ function _checked_spin(s, l, m)
     return Int(s), Int(l), Int(m)
 end
 
-# Coupling coefficients of the spherical-harmonic expansion of the spin-weighted
-# spheroidal eigenproblem; the matrix below is pentadiagonal in l.
-@inline function _swsh_f(s::Int, l::Int, m::Int)
-    (l == -1 && iszero(m) && iszero(s)) && return 0.0
-    lp1 = l + 1
-    return sqrt(((lp1^2 - m^2) / ((2l + 3) * (2l + 1))) *
-        ((lp1^2 - s^2) / lp1^2))
-end
-
-@inline function _swsh_g(s::Int, l::Int, m::Int)
-    iszero(l) && return 0.0
-    return sqrt(((l^2 - m^2) / (4l^2 - 1)) * ((l^2 - s^2) / l^2))
-end
-
-@inline _swsh_h(s::Int, l::Int, m::Int) =
-    (iszero(l) || iszero(s)) ? 0.0 : -m * s / (l * (l + 1))
-
-# Second-order small-c expansion of lambda for |c| <= SMALL_C_SWSH_LIMIT.
-@inline function _small_c_swsh_eigenvalue(s::Int, l::Int, m::Int, c::Float64)
-    g_lower = _swsh_g(s, l, m)
-    g_upper = _swsh_g(s, l + 1, m)
-    h = _swsh_h(s, l, m)
-    b = g_lower^2 + g_upper^2 + h^2
-    lower_shift = iszero(l) ? 0.0 : g_lower^2 / l
-    lambda0 = Float64(l * (l + 1) - s * (s + 1))
-    lambda1 = 2s * h - 2m
-    lambda2 = 1 - b + 2s^2 * (lower_shift - g_upper^2 / (l + 1))
-    return muladd(c, muladd(c, lambda2, lambda1), lambda0)
-end
-
-# Band-matrix entries of the spheroidal operator in the spin-weighted spherical basis.
-@inline function _swsh_matrix_coefficient(c, s::Int, m::Int, l::Int, lprime::Int)
-    if lprime == l
-        f = _swsh_f(s, l, m)
-        g = _swsh_g(s, l, m)
-        h = _swsh_h(s, l, m)
-        b = f * _swsh_g(s, l + 1, m) + g * _swsh_f(s, l - 1, m) + h^2
-        return l * (l + 1) - s * (s + 1) - c^2 * b + 2c * s * h
-    elseif lprime == l + 1
-        e = _swsh_g(s, lprime, m) *
-            (_swsh_h(s, lprime - 1, m) + _swsh_h(s, lprime, m))
-        return -c^2 * e + 2c * s * _swsh_g(s, lprime, m)
-    elseif lprime == l + 2
-        return -c^2 * _swsh_g(s, lprime, m) * _swsh_g(s, lprime - 1, m)
-    end
-    return 0.0
-end
-
-# Matrix element whose eigenvalue is lambda directly (diagonal shifted by c^2 - 2 m c).
-@inline function _swsh_lambda_matrix_coefficient(c::Float64, s::Int, m::Int, l::Int, lprime::Int)
-    lprime == l || return _swsh_matrix_coefficient(c, s, m, l, lprime)
-    f = _swsh_f(s, l, m)
-    g = _swsh_g(s, l, m)
-    h = _swsh_h(s, l, m)
-    b = f * _swsh_g(s, l + 1, m) +
-        g * _swsh_f(s, l - 1, m) + h^2
-    spherical = Float64(l * (l + 1) - s * (s + 1))
-    return muladd(c^2, 1 - b, muladd(2c, s * h - m, spherical))
-end
-
-# The `index`-th smallest eigenvalue of a symmetric band matrix in LAPACK upper
-# band storage, via dsbevx (eigenvalues only).
-function _selected_banded_eigenvalue!(band::Matrix{Float64}, index::Int)
-    n = BlasInt(size(band, 2))
-    kd = BlasInt(size(band, 1) - 1)
-    leading_band = BlasInt(size(band, 1))
-    q = zeros(Float64, 1)
-    leading_q = BlasInt(1)
-    lower_value = 0.0
-    upper_value = 0.0
-    lower_index = BlasInt(index)
-    upper_index = BlasInt(index)
-    # LAPACK recommends twice the safe minimum for high relative accuracy.
-    absolute_tolerance = 2floatmin(Float64)
-    found = Ref{BlasInt}()
-    eigenvalues = zeros(Float64, Int(n))
-    eigenvectors = zeros(Float64, 1)
-    leading_eigenvectors = BlasInt(1)
-    work = zeros(Float64, 7 * Int(n))
-    integer_work = zeros(BlasInt, 5 * Int(n))
-    failed = zeros(BlasInt, Int(n))
-    info = Ref{BlasInt}()
-
-    ccall((@blasfunc(dsbevx_), SWSH_LAPACK), Cvoid,
-        (Ref{UInt8}, Ref{UInt8}, Ref{UInt8}, Ref{BlasInt}, Ref{BlasInt},
-            Ptr{Float64}, Ref{BlasInt}, Ptr{Float64}, Ref{BlasInt},
-            Ref{Float64}, Ref{Float64}, Ref{BlasInt}, Ref{BlasInt},
-            Ref{Float64}, Ptr{BlasInt}, Ptr{Float64}, Ptr{Float64},
-            Ref{BlasInt}, Ptr{Float64}, Ptr{BlasInt}, Ptr{BlasInt},
-            Ref{BlasInt}, Clong, Clong, Clong),
-        'N', 'I', 'U', n, kd, band, leading_band, q, leading_q,
-        lower_value, upper_value, lower_index, upper_index,
-        absolute_tolerance, found, eigenvalues, eigenvectors,
-        leading_eigenvectors, work, integer_work, failed, info, 1, 1, 1)
-
-    info[] == 0 || error("LAPACK dsbevx failed with info=$(info[]).")
-    found[] == 1 || error("LAPACK dsbevx returned $(found[]) eigenvalues.")
-    return eigenvalues[1]
-end
-
-# Eigenvalue for (s, l, m, c) from a spectral matrix truncated to `size` l-modes.
-function _swsh_eigenvalue_at_size(s::Int, l::Int, m::Int, c::Float64, size::Int)
-    lmin = max(abs(m), abs(s))
-    index = l - lmin + 1
-    size >= index || throw(ArgumentError("SWSH matrix does not contain l=$l."))
-    bandwidth = 2
-    band = zeros(Float64, bandwidth + 1, size)
-    @inbounds for row_l in lmin:(lmin + size - 1)
-        i = row_l - lmin + 1
-        for col_l in row_l:min(row_l + bandwidth, lmin + size - 1)
-            j = col_l - lmin + 1
-            band[bandwidth + 1 + i - j, j] =
-                _swsh_lambda_matrix_coefficient(c, s, m, row_l, col_l)
-        end
-    end
-    return _selected_banded_eigenvalue!(band, index)
-end
-
-# Spin-weighted spheroidal eigenvalue lambda for real c = a omega. Exact at c = 0,
-# series for tiny |c|, otherwise the banded spectral matrix is enlarged until the
-# eigenvalue converges. `diagnostics=true` returns the size and convergence data too.
-function swsh_eigenvalue(s::Int, l::Int, m::Int, c::Real; diagnostics::Bool=false)
-    c_float = Float64(c)
-    if iszero(c)
-        value = Float64(l * (l + 1) - s * (s + 1))
-        result = (value=value, size=0, refinement=0, delta=0.0,
-            method=:spherical)
-        return diagnostics ? result : result.value
-    end
-    if abs(c_float) <= SMALL_C_SWSH_LIMIT
-        value = _small_c_swsh_eigenvalue(s, l, m, c_float)
-        result = (value=value, size=0, refinement=0, delta=0.0,
-            method=:small_c)
-        return diagnostics ? result : result.value
-    end
-
-    lmin = max(abs(m), abs(s))
-    index = l - lmin + 1
-    size = max(index + SWSH_MIN_BUFFER,
-        index + ceil(Int, abs(c_float)) + 8)
-    step = max(8, ceil(Int, abs(c_float) / 8))
-    previous = _swsh_eigenvalue_at_size(s, l, m, c_float, size)
-
-    for refinement in 1:SWSH_MAX_REFINEMENTS
-        next_size = size + step
-        current = _swsh_eigenvalue_at_size(s, l, m, c_float, next_size)
-        delta = abs(current - previous)
-        threshold = SWSH_EIGENVALUE_ATOL +
-            SWSH_EIGENVALUE_RTOL * max(abs(previous), abs(current))
-        if delta <= threshold
-            result = (value=current, size=next_size, refinement=refinement,
-                delta=delta, method=:adaptive_spectral)
-            return diagnostics ? result : result.value
-        end
-        size = next_size
-        previous = current
-    end
-
-    throw(ErrorException("SWSH eigenvalue failed to converge after $(SWSH_MAX_REFINEMENTS) matrix refinements."))
-end
-
-_swsh_eigenvalue_float(s::Int, l::Int, m::Int, c::Float64) =
-    swsh_eigenvalue(s, l, m, c)
-
 # Validate inputs and build GSNParameters. lambda defaults to the
 # spheroidal eigenvalue (real omega) or the SpinWeightedSpheroidalHarmonics value
 # (complex omega); nu, if given, must satisfy sin(nu) = a.
@@ -362,7 +190,7 @@ function gsn_parameters(s::Integer, l::Integer, m::Integer, a, omega; lambda=not
     if iszero(imag(omega_complex))
         omega_float = Float64(real(omega_complex))
         lambda_float = if lambda === nothing
-            value = _swsh_eigenvalue_float(ss, ll, mm, a_float * omega_float)
+            value = SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(ss, ll, mm, a_float * omega_float)
             _real_float("lambda", value)
         else
             _real_float("lambda", lambda)

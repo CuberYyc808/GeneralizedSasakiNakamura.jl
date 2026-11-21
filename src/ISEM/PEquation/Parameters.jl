@@ -1,7 +1,6 @@
 module Parameters
 
 using SpinWeightedSpheroidalHarmonics
-using ....Parameters: swsh_eigenvalue
 
 export TeukolskyParameters, MSEParameters
 export RhoTeukolskyParameters, RhoISEMParameters, rho_parameters
@@ -52,15 +51,10 @@ function Base.show(io::IO, ::MIME"text/plain", para::ISEMParameters)
     println(io, "  lambda  = ", para.lambda,)
 end
 
-# Spheroidal eigenvalue lambda (the ISEM eigenvalue solver for real a*omega and |s| <= 2) and kappa = sqrt(1 - a^2).
+# Spheroidal eigenvalue lambda (SpinWeightedSpheroidalHarmonics) and kappa = sqrt(1 - a^2).
 @inline function _core_parameters(s, l, m, a, omega)
     c = a * omega
-    lambda = if c isa Real && s in (-2, -1, 0, 1, 2)
-        swsh_eigenvalue(s, l, m, c)
-    else
-        SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(
-            s, l, m, c)
-    end
+    lambda = SpinWeightedSpheroidalHarmonics.spin_weighted_spheroidal_eigenvalue(s, l, m, c)
     kappa = sqrt(1 - a^2)
     return lambda, kappa
 end

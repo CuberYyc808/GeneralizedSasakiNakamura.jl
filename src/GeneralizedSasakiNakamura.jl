@@ -230,12 +230,8 @@ function _warn_complex_solve_failures(method, solutions)
     end
 end
 
-function _swsh_eigenvalue(s::Int, l::Int, m::Int, c)
-    if c isa Real && s in (-2, -1, 0, 1, 2) && l >= abs(s) && abs(m) <= l
-        return ISEM.swsh_eigenvalue(s, l, m, c)
-    end
-    return spin_weighted_spheroidal_eigenvalue(s, l, m, c)
-end
+# The spheroidal eigenvalue from SpinWeightedSpheroidalHarmonics, in the precision of c.
+_swsh_eigenvalue(s::Int, l::Int, m::Int, c) = spin_weighted_spheroidal_eigenvalue(s, l, m, c)
 
 # Whether the mode parameters are binary64 (Float64 routes) or wider (arbitrary-precision ISEM).
 _binary64_inputs(a, omega) =

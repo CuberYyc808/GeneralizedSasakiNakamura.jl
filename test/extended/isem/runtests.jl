@@ -710,9 +710,6 @@ end
         lam = GSN._swsh_eigenvalue(p.s, p.l, p.m, c)
         tol = isreal(p.omega) ? 1e-13 : 1e-12
         @test abs(lam - p.lam) <= tol * max(1, abs(p.lam))
-        if isreal(p.omega)
-            @test isapprox(D.swsh_eigenvalue(p.s, p.l, p.m, p.a * real(p.omega)), p.lam; rtol=1e-13)
-        end
     end
 end
 
