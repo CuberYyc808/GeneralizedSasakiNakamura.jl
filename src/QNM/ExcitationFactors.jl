@@ -52,18 +52,51 @@ function _gsn_amplitude_sample(result::LeaverResult, omega;
     )
 end
 
-function _cached_gsn_amplitude_sample!(cache, request_count,
-        result::LeaverResult, omega, radial_solver)
+function _cached_gsn_amplitude_sample!(cache, request_count, sample, omega)
     request_count[] += 1
-    return get!(cache, omega) do
-        _gsn_amplitude_sample(result, omega; radial_solver)
-    end
+    return get!(() -> sample(omega), cache, omega)
 end
+
+# MST incidence and reflection amplitudes (GSN normalization) at omega, in the form of _gsn_amplitude_sample.
+function _mano_suzuki_takasugi_amplitude_sample(result, omega)
+    mode = result.mode
+    inputs = _radial_evaluation_inputs(result, omega)
+    a, w = inputs.a, inputs.omega
+    lambda = spin_weighted_spheroidal_eigenvalue(mode.s, mode.l, mode.m, a*w)
+    mst = ISEM.ManoSuzukiTakasugiInfinity
+    nu = mst.mano_suzuki_takasugi_nu_complex(mode.s, mode.l, mode.m, a, w, lambda)
+    amplitudes = mst.mano_suzuki_takasugi_negative_imaginary_axis_amplitudes(
+        mode.s, mode.l, mode.m, a, w, lambda, :IN; nu)
+    return (; omega, incidence=amplitudes.gsn[1], reflection=amplitudes.gsn[2], wronskian_drift=zero(real(w)),
+        incidence_backend=:mst_amplitudes, evaluation_policy=inputs.policy,
+        frequency_projection_drift=inputs.projection_drift)
+end
+
+# One amplitude backend for the whole stencil: the MST amplitudes where the default solver's centre takes them and
+# its incidence passes the gate (they are smooth in omega, so the differences stay above their rounding), otherwise the
+# radial solver. Returns the backend symbol.
+function _stencil_backend(result, radial_solver, incidence_tolerance)
+    radial_solver in (GSN_radial, _qnm_default_radial_solver) && abs(result.a) < 1 &&
+        _qnm_conditioned_radial_tolerance(result.a) === nothing && !_use_wronskian_incidence(result, result.omega) ||
+        return :radial_solver
+    inputs = _radial_evaluation_inputs(result)
+    centre = GSN_radial(result.mode.s, result.mode.l, result.mode.m, inputs.a, inputs.omega, IN)
+    numerical = centre.numerical_GSN_solution
+    scale = max(one(abs(centre.incidence_amplitude)), abs(centre.reflection_amplitude),
+        abs(centre.transmission_amplitude))
+    hasproperty(numerical, :amplitude_backend) && numerical.amplitude_backend === :complex_mst_analytic &&
+        abs(centre.incidence_amplitude) / scale <= incidence_tolerance || return :radial_solver
+    return :mst_amplitudes
+end
+
+_stencil_sampler(result, backend, radial_solver) = backend === :mst_amplitudes ?
+    (omega -> _mano_suzuki_takasugi_amplitude_sample(result, omega)) :
+    (omega -> _gsn_amplitude_sample(result, omega; radial_solver))
 
 # Three-point central differences of Ain at steps h, h/2, h/4 along real (direction = 1) or imaginary (direction = im)
 # frequency, Richardson-extrapolated.
 function _gsn_derivative_attempt(
-        result::LeaverResult, base_h, radial_solver, cache, request_count;
+        result::LeaverResult, base_h, sample, cache, request_count;
         normalization_pole=nothing, root_incidence=zero(result.omega), direction=1)
     C = typeof(result.omega)
     T = typeof(real(result.omega))
@@ -72,12 +105,8 @@ function _gsn_derivative_attempt(
     stencil = NamedTuple[]
     for step in steps
         dstep = direction * step
-        plus = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega + dstep,
-            radial_solver)
-        minus = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega - dstep,
-            radial_solver)
+        plus = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega + dstep)
+        minus = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega - dstep)
         derivative = if normalization_pole === nothing
             (plus.incidence - minus.incidence) / (2 * dstep)
         else
@@ -98,25 +127,17 @@ function _gsn_derivative_attempt(
 end
 
 function _gsn_five_point_real_derivative_attempt(
-        result::LeaverResult, base_h, radial_solver, cache, request_count)
+        result::LeaverResult, base_h, sample, cache, request_count)
     C = typeof(result.omega)
     T = typeof(real(result.omega))
     steps = T[base_h, base_h / 2, base_h / 4]
     derivatives = C[]
     stencil = NamedTuple[]
     for step in steps
-        minus2 = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega - 2step,
-            radial_solver)
-        minus1 = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega - step,
-            radial_solver)
-        plus1 = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega + step,
-            radial_solver)
-        plus2 = _cached_gsn_amplitude_sample!(
-            cache, request_count, result, result.omega + 2step,
-            radial_solver)
+        minus2 = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega - 2step)
+        minus1 = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega - step)
+        plus1 = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega + step)
+        plus2 = _cached_gsn_amplitude_sample!(cache, request_count, sample, result.omega + 2step)
         push!(derivatives,
             (minus2.incidence - 8minus1.incidence + 8plus1.incidence -
                 plus2.incidence) / (12step))
@@ -343,6 +364,8 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
     selected_score = T(Inf)
     sample_cache = Dict{C,Any}()
     sample_requests = Ref(0)
+    stencil_backend = complex_path ? :radial_solver : _stencil_backend(result, radial_solver, incidence_tolerance)
+    sample = _stencil_sampler(result, stencil_backend, radial_solver)
     validation_wronskian_drift = T(validation.metadata.wronskian_drift)
     stencils = [(factor=factor, five_point=conditioned_candidate || complex_path)
         for factor in step_factors]
@@ -355,10 +378,10 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
     for (factor, five_point) in stencils
         attempt = five_point ?
             _gsn_five_point_real_derivative_attempt(
-                result, base_h * factor, radial_solver, sample_cache,
+                result, base_h * factor, sample, sample_cache,
                 sample_requests) :
             _gsn_derivative_attempt(
-                result, base_h * factor, radial_solver, sample_cache,
+                result, base_h * factor, sample, sample_cache,
                 sample_requests; normalization_pole,
                 root_incidence=validation.incidence)
         richardson_attempt = attempt.richardson
@@ -439,6 +462,7 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
             normalization_pole=normalization_pole,
             derivative_stencil=selected.five_point ?
                 :five_point_fourth_order : :three_point_second_order,
+            stencil_backend,
             convention_gsn=:Aout_over_2omega_alpha,
             step_tolerance=T(step_tolerance),
             incidence_backend=validation.metadata.incidence_backend,
@@ -460,11 +484,12 @@ end
 Finite-difference route of `qnm_excitation_factor` and of `qnm(...)`, used when the direct route (the GSN equation
 integrated together with its frequency derivative at the root) is out of scope or fails its checks (except with
 `backend=:variational`), and always with `backend=:richardson`, an explicit `h` or `direction_tolerance`, or a custom
-radial solver. `alpha = dAin/domega` is the real-direction Richardson derivative of the compact route
-(`_qnm_richardson_excitation_factor`, which takes the other keywords); the Teukolsky values follow from the analytic
-conversion with the frequency tangent of the conversion factors, as on the direct route. The derivative is also
-taken along imaginary frequency at the selected step, and `direction_drift` is the relative mismatch with `alpha`; it
-must not exceed `direction_tolerance` (`nothing` skips this stencil). Returns an `ExcitationFactorResult`.
+radial solver. The derivative `dAin/domega` is the Richardson derivative of the compact route
+(`_qnm_richardson_excitation_factor`, which takes the other keywords and chooses the amplitude backend of the
+stencil), taken also along imaginary frequency at the selected step; `direction_drift` is the relative mismatch of the
+two directions and must not exceed `direction_tolerance` (`nothing` skips the imaginary stencil). On a three-point
+stencil `alpha` is the mean of the two directions. The Teukolsky values follow from the analytic conversion with the
+frequency tangent of the conversion factors, as on the direct route. Returns an `ExcitationFactorResult`.
 """
 function _qnm_richardson_full_excitation_factor(result::LeaverResult;
         direction_tolerance=1.0e-7, bridge_tolerance=nothing, kwargs...)
@@ -477,17 +502,21 @@ function _qnm_richardson_full_excitation_factor(result::LeaverResult;
             gsn.stop_reason, md)
     end
     lambda, dlambda = _qnm_lambda_tangent(result.mode, md.evaluation_a, md.evaluation_omega)
-    factor = _qnm_variational_teukolsky(result, merge(gsn, (metadata=merge(md, (; lambda, dlambda)),));
-        bridge_tolerance)
-    (direction_tolerance === nothing || iszero(md.selected_base_step)) && return factor
-    radial_solver = get(kwargs, :radial_solver, GSN_radial)
-    across = _gsn_derivative_attempt(result, md.selected_base_step, radial_solver, Dict{typeof(result.omega),Any}(),
-        Ref(0); normalization_pole=md.normalization_pole, root_incidence=md.validation.incidence, direction=im)
-    alpha = gsn.alpha
-    drift = T(abs(across.richardson.value - alpha) / max(one(T), abs(alpha), abs(across.richardson.value)))
+    teukolsky(gsn) = _qnm_variational_teukolsky(result,
+        merge(gsn, (metadata=merge(gsn.metadata, (; lambda, dlambda)),)); bridge_tolerance)
+    (direction_tolerance === nothing || iszero(md.selected_base_step)) && return teukolsky(gsn)
+    sample = _stencil_sampler(result, md.stencil_backend, get(kwargs, :radial_solver, GSN_radial))
+    across = _gsn_derivative_attempt(result, md.selected_base_step, sample, Dict{typeof(result.omega),Any}(), Ref(0);
+        normalization_pole=md.normalization_pole, root_incidence=md.validation.incidence, direction=im).richardson
+    drift = T(abs(across.value - gsn.alpha) / max(one(T), abs(gsn.alpha), abs(across.value)))
+    # On the three-point stencil the two directions carry opposite h^6 terms and independent rounding: their mean.
+    if md.derivative_stencil === :three_point_second_order
+        alpha = (gsn.alpha + across.value) / 2
+        gsn = merge(gsn, (; alpha, B_gsn=gsn.reflection / (2 * md.evaluation_omega * alpha)))
+    end
+    factor = teukolsky(gsn)
     gate = factor.status === :accepted && drift > T(direction_tolerance)
     return ISEM._with_fields(factor, (direction_drift=drift, status=gate ? :failed : factor.status,
         stop_reason=gate ? :derivative_direction_gate : factor.stop_reason,
-        metadata=merge(factor.metadata, (direction_tolerance=T(direction_tolerance), gsn_imaginary=across.richardson,
-            imaginary_stencil=across.stencil))))
+        metadata=merge(factor.metadata, (direction_tolerance=T(direction_tolerance), gsn_imaginary=across))))
 end
