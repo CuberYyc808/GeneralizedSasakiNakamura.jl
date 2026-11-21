@@ -1202,7 +1202,8 @@ function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, wor
     apparent = copy(work.apparent)
     while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
         step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, x, target_x, direction, ((value1, deriv1), (value2, deriv2)))
+        crossing = _apparent_crossing!(apparent, coefficients, x, target_x, direction,
+            ((value1, deriv1), (value2, deriv2)))
         if crossing.jumps !== nothing
             jump1, jump2 = crossing.jumps
             push!(patches1, Patch(jump1.center, x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
@@ -1288,7 +1289,8 @@ function _build_basis_series(
         append!(truncations, hybrid.truncations)
         return Basis(
             kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, current_value,
-            current_derivative, endpoint_coeffs, hybrid.patches, hybrid.match_X, hybrid.match_dXdx, hybrid.step_count, ComplexF64(endpoint_variable_scale), truncations,
+            current_derivative, endpoint_coeffs, hybrid.patches, hybrid.match_X, hybrid.match_dXdx, hybrid.step_count,
+            ComplexF64(endpoint_variable_scale), truncations,
         )
     end
     patches = Patch[]
@@ -1305,7 +1307,9 @@ function _build_basis_series(
     _, match_X, match_dXdx, step_count = march
     return Basis(
         kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, scale * raw_seed,
-        scale * raw_dseed, endpoint_coeffs, patches, match_X, match_dXdx, step_count, ComplexF64(endpoint_variable_scale), truncations,
+        scale * raw_dseed, endpoint_coeffs, patches, match_X, match_dXdx, step_count,
+        ComplexF64(endpoint_variable_scale),
+        truncations,
     )
 end
 
@@ -1349,8 +1353,8 @@ function _hybrid_state(
 
     if current_x != target_x && _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split(
-            coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
             large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
         )
@@ -1377,8 +1381,8 @@ function _hybrid_state(
             step_count = 1
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split(
-                    coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena,
-                    bvec=work.bvec, pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit,
+                    coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec,
+                    bvec=work.bvec, pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit,
                     check_limit=eikonal_limit,
                     terms=partial_eikonal ? EIKONAL_TERMS : _LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
                     large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
@@ -1402,15 +1406,16 @@ function _hybrid_state(
         (direction * (target_x - x) > 100eps(Float64) && ready && !eikonal_attempted) || return nothing
         eikonal_attempted = true
         return eikonal_split(
-            coefficients, x, X, dXdx, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            coefficients, x, X, dXdx, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
         )
     end
     _, current_value, current_derivative, step_count = _taylor_march!(patches, truncations, work,
         coefficients, kind, current_x, current_value, current_derivative, target_x, order, tol;
         failure="hybrid recurrence failed", after_step=try_eikonal, step_count)
-    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, current_value, current_derivative, step_count, truncations)
+    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, current_value, current_derivative, step_count,
+        truncations)
 end
 
 # Paired form of `_hybrid_state` with common steps for both solutions.
@@ -1464,8 +1469,8 @@ function _hybrid_pair(
     if current_x != target_x && work.large_frequency_expansion !== nothing &&
             _eikonal_ready(coefficients, current_x, work)
         suffix = eikonal_split_pair(
-            coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS, large_frequency_expansion=work.large_frequency_expansion,
         )
         if suffix !== nothing
@@ -1500,8 +1505,9 @@ function _hybrid_pair(
             step_count = 1
             if _eikonal_ready(coefficients, current_x, work)
                 suffix = eikonal_split_pair(
-                    coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-                    pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+                    coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, bvec=work.bvec,
+                    pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit,
+                    check_limit=eikonal_limit,
                     terms=_LARGE_FREQUENCY_EXPANSION_EIKONAL_TERMS,
                     large_frequency_expansion=work.large_frequency_expansion,
                 )
@@ -1527,8 +1533,8 @@ function _hybrid_pair(
         (direction * (target_x - x) > 100eps(Float64) && ready && !eikonal_attempted) || return nothing
         eikonal_attempted = true
         return eikonal_pair(
-            coefficients, x, v1, d1, v2, d2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            coefficients, x, v1, d1, v2, d2, target_x; avec=work.avec, bvec=work.bvec,
+            pq=work.pq, arena=work.arena, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
             large_frequency_expansion=work.large_frequency_expansion,
         )
     end
@@ -1932,7 +1938,8 @@ function _hybrid_horizon(
     append!(truncations, result.truncations)
     return Basis(
         kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
-        solution.coefficients, result.patches, result.match_X, result.match_dXdx, result.step_count, 1.0 + 0.0im, truncations,
+        solution.coefficients, result.patches, result.match_X, result.match_dXdx, result.step_count, 1.0 + 0.0im,
+        truncations,
     )
 end
 
@@ -1956,12 +1963,12 @@ function _eikonal_horizon(
     limit = _INFINITY_EIKONAL_LIMIT
     result = fast ? eikonal_path(
             coefficients, seed_x, seed_value, seed_derivative, match_x;
-            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, bvec=work.bvec, pq=work.pq, arena=work.arena,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion) :
         eikonal_split(
             coefficients, seed_x, seed_value, seed_derivative, match_x;
-            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, bvec=work.bvec, pq=work.pq, arena=work.arena,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion)
     result === nothing && return nothing
@@ -1970,7 +1977,8 @@ function _eikonal_horizon(
         solution.requested_order, solution.effective_order, solution.truncation_reason)
     return Basis(
         kind, scale, ComplexF64(solution.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value, seed_derivative,
-        solution.coefficients, result.patches, result.value, result.derivative, length(result.patches), 1.0 + 0.0im, truncations,
+        solution.coefficients, result.patches, result.value, result.derivative, length(result.patches), 1.0 + 0.0im,
+        truncations,
     )
 end
 
@@ -2008,11 +2016,13 @@ function _hybrid_horizon_pair(
     append!(truncations2, result2.truncations)
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
-        solution1.coefficients, result1.patches, result1.match_X, result1.match_dXdx, result1.step_count, 1.0 + 0.0im, truncations1,
+        solution1.coefficients, result1.patches, result1.match_X, result1.match_dXdx, result1.step_count, 1.0 + 0.0im,
+        truncations1,
     )
     basis2 = Basis(
         kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
-        solution2.coefficients, result2.patches, result2.match_X, result2.match_dXdx, result2.step_count, 1.0 + 0.0im, truncations2,
+        solution2.coefficients, result2.patches, result2.match_X, result2.match_dXdx, result2.step_count, 1.0 + 0.0im,
+        truncations2,
     )
     return basis1, basis2
 end
@@ -2041,13 +2051,13 @@ function _eikonal_horizon_pair(
     result = fast ? eikonal_pair(
             coefficients, seed_x, seed_value1, seed_derivative1,
             seed_value2, seed_derivative2, match_x;
-            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, bvec=work.bvec, pq=work.pq, arena=work.arena,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion) :
         eikonal_split_pair(
             coefficients, seed_x, seed_value1, seed_derivative1,
             seed_value2, seed_derivative2, match_x;
-            avec=work.avec, arena=work.arena, bvec=work.bvec, pq=work.pq,
+            avec=work.avec, bvec=work.bvec, pq=work.pq, arena=work.arena,
             scratch=work.eikonal, residual_limit=limit,
             check_limit=limit, large_frequency_expansion=work.large_frequency_expansion)
     result === nothing && return nothing
@@ -2059,11 +2069,13 @@ function _eikonal_horizon_pair(
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value1, seed_derivative1,
-        solution1.coefficients, result.patches1, result.value1, result.deriv1, length(result.patches1), 1.0 + 0.0im, truncations1,
+        solution1.coefficients, result.patches1, result.value1, result.deriv1, length(result.patches1), 1.0 + 0.0im,
+        truncations1,
     )
     basis2 = Basis(
         kind2, scale2, ComplexF64(solution2.exponent), 0.0 + 0.0im, seed_x, seed_x, seed_value2, seed_derivative2,
-        solution2.coefficients, result.patches2, result.value2, result.deriv2, length(result.patches2), 1.0 + 0.0im, truncations2,
+        solution2.coefficients, result.patches2, result.value2, result.deriv2, length(result.patches2), 1.0 + 0.0im,
+        truncations2,
     )
     return basis1, basis2
 end
