@@ -416,10 +416,11 @@ end
 # cancellation between them. The route belongs to the IN (OUT) or UP (DOWN) side, so its incidence and reflection are
 # the coefficients of (i_in, i_out) for OUT and of (h_out, h_in) for DOWN; OUT's incidence is the outgoing wave at
 # infinity and DOWN's the ingoing wave at the horizon (the definitions of the IN + UP combination), hence the swap.
-# Returns nothing where no direct route exists (complex frequency, small-frequency regime, the superradiant threshold)
-# or where its own amplitude error estimate exceeds the complex-path target.
+# Returns nothing where no direct route exists (small-frequency regime, the superradiant threshold, see also
+# _direct_complex_gsn) or where its own amplitude error estimate exceeds the complex-path target.
 function _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition; xm, N, tol, sfe, lfe)
-    isreal(omega) && !iszero(omega) && _binary64_inputs(a, omega) || return nothing
+    !iszero(omega) && _binary64_inputs(a, omega) || return nothing
+    isreal(omega) || return _direct_complex_gsn(s, l, m, a, omega, boundary_condition; xm, N, tol, sfe, lfe)
     # At the superradiant threshold the two horizon waves coincide: OUT and DOWN keep the IN + UP combination there.
     _is_horizon_superradiance_frequency(a, m, omega) && return nothing
     route = try
@@ -437,13 +438,35 @@ function _direct_gsn_from_isem(s, l, m, a, omega, boundary_condition; xm, N, tol
     # (s, l, m) = (-2, 2, +-2), a = 0 - 0.99: at omega = 0.3 and -0.7 both forms agree to 1e-12 and the route's own
     # estimate is below the target; at omega = 3 the direct reflection (|reflection| ~ 1e-14) was off by 100%.
     maximum(ISEM.Matching.amplitude_errors(route)) <= ISEM.Matching.COMPLEX_PATH_LOSS_TARGET || return nothing
-    side = ISEM.gsn_radial_function(route)
-    return GSNRadialFunction(
-        side.mode, boundary_condition, side.rsin, side.rsout, side.rsmp, side.horizon_expansion_order,
-        side.infinity_expansion_order, side.transmission_amplitude, side.reflection_amplitude, side.incidence_amplitude,
-        side.numerical_GSN_solution, side.numerical_Riccati_solution, side.GSN_solution, side.normalization_convention,
-        side.method,
-    )
+    return _direct_from_side(ISEM.gsn_radial_function(route), boundary_condition)
+end
+
+# The GSN function of a direct OUT (DOWN) route of the IN (UP) side: the incidence and reflection of the far pair
+# exchange places (see _direct_gsn_from_isem).
+_direct_from_side(side, boundary_condition) = GSNRadialFunction(
+    side.mode, boundary_condition, side.rsin, side.rsout, side.rsmp, side.horizon_expansion_order,
+    side.infinity_expansion_order, side.transmission_amplitude, side.reflection_amplitude, side.incidence_amplitude,
+    side.numerical_GSN_solution, side.numerical_Riccati_solution, side.GSN_solution, side.normalization_convention,
+    side.method,
+)
+
+# Direct DOWN and OUT at complex frequency on the two-ray rational route (ISEM.ComplexRational): the target is
+# propagated from its own end along its ray and matched to the pair of the other end, as at real frequency. Returns
+# nothing where IN and UP would not take that route (the principal-MST axis, an explicit small- or large-frequency
+# expansion), where the build fails, or where its own amplitude error estimate exceeds the complex-path target; the
+# IN + UP combination (with the consensus retries and fallbacks of the IN and UP routes) is used there.
+function _direct_complex_gsn(s, l, m, a, omega, boundary_condition; xm, N, tol, sfe, lfe)
+    sfe in (nothing, false) && lfe in (nothing, false) || return nothing
+    ISEM.ComplexFrequency._principal_small_frequency_expansion_axis(omega) && return nothing
+    route = try
+        ISEM.ComplexFrequency._complex_rational_route(s, l, m, a, omega, boundary_condition == OUT ? :OUT : :DOWN;
+            N, xm, tol)
+    catch err
+        absorbable(err) || rethrow()
+        return nothing
+    end
+    maximum(ISEM.ComplexFrequency.amplitude_errors(route)) <= ISEM.Matching.COMPLEX_PATH_LOSS_TARGET || return nothing
+    return _direct_from_side(ISEM.gsn_radial_function(route), boundary_condition)
 end
 
 function _gsn_from_isem(s, l, m, a, omega, boundary_condition; xm=nothing, N=nothing, tol=nothing, sfe=nothing, lfe=nothing)
@@ -600,7 +623,7 @@ the other for the direct matching (high frequency), they are constructed by line
 solutions.
 
 The solution method is determined by the keyword `method` (default: `"auto"`).
-The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it log a warning and fall back to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
+The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it fall back (with a debug log message) to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
 Explicit `method="ISEM"` never falls back. `"Riccati"` and `"linear"` select the ODE methods directly for `IN` and `UP`.
 For `OUT` and `DOWN` at real frequency and $|a| < 1$ these two methods also solve directly (`OUT` integrated outward from the horizon, `DOWN` inward from infinity); at complex frequency the `IN` and `UP` solutions that are combined are computed with `method="auto"` (ISEM first, the ODE methods only as its fallback), and a given `lambda` is not used for them.
 At $|a| = 1$ every `method` uses the exact-extremal solver. Otherwise, at the superradiant threshold $\omega = ma/(2r_+)$, with $r_+ = 1 + \sqrt{1 - a^2}$, the `UP` solution is always built with ISEM.

@@ -787,14 +787,17 @@ function _complex_mano_suzuki_takasugi_route(
 end
 
 # Two-ray rational route (default backend) wrapped as a ComplexRoute;
-# with `return_retry_cache=true` also returns the data reused by retries.
+# with `return_retry_cache=true` also returns the data reused by retries. `branch = :OUT` or `:DOWN` solves that
+# solution directly (from its own end, matched to the pair of the other end) and returns it as a route of its side
+# (IN, UP) whose amplitudes are the coefficients of the far pair, as `radial_route` does at real frequency.
 function _complex_rational_route(
     s::Int, l::Int, m::Int, a, omega, branch; controls::Union{Nothing,ComplexControls}=nothing, lambda=nothing,
     nu=nothing, xm=nothing, rhom=nothing, N=nothing, tol=nothing, small_frequency_expansion=nothing,
     large_frequency_expansion=nothing, return_retry_cache::Bool=false, defer_relaxed_rotation::Bool=false,
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
-    branch_symbol = _normalize_branch(branch)
+    target = branch in (:OUT, :DOWN) ? branch : _normalize_branch(branch)
+    branch_symbol = target === :OUT ? :IN : target === :DOWN ? :UP : target
     requested = _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion,
         large_frequency_expansion)
     requested.rhom === nothing || throw(ArgumentError(
@@ -810,7 +813,7 @@ function _complex_rational_route(
     rational_order = requested.N === nothing &&
         _principal_small_frequency_expansion_axis(omegac) ? 56 : requested.N
     build = complex_rational_build(
-        s, l, m, af, omegac, branch_symbol; lambda, nu, N=rational_order, tol=requested.tolerance, xm=requested.xm,
+        s, l, m, af, omegac, target; lambda, nu, N=rational_order, tol=requested.tolerance, xm=requested.xm,
         defer_relaxed_rotation,
     )
     deferred_error = build.deferred_rational_error

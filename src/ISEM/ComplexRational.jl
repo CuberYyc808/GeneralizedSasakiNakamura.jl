@@ -2194,7 +2194,7 @@ end
 @inline function _horizon_stokes_pretrigger(result, branch, params)
     result.amplitude_match_policy in (
         :scaled_infinity_endpoint, :scaled_horizon_endpoint) && return false
-    branch == :IN || return false
+    _side(branch) == :IN || return false
     params.kappa <= _HORIZON_STOKES_KAPPA_MAX || return false
     iszero(result.match_rstar) || return false
     result.horizon_seed.path.kind == :rotated || return false
@@ -2207,7 +2207,7 @@ function _solve_horizon_angle_at_match(coefficients, locals, selected, p, settin
     horizon_seed = nothing
     horizon_seed =
         _select_rotated_horizon_path(
-            coefficients, (locals.horizon_in,), (:horizon_in,), p, selected.match_x, settings, angle_offset,
+            coefficients, (_target(locals),), (locals.target,), p, selected.match_x, settings, angle_offset,
         )
     horizon = nothing
     horizon = _propagate_on_path(
@@ -2346,7 +2346,7 @@ end
     params.kappa <= _MATCH_CONSENSUS_KAPPA_MAX || return false
     imag_scale = abs(imag(params.omega))
     imag_scale > 100eps(Float64) * max(1.0, abs(params.omega)) || return false
-    if branch == :IN
+    if _side(branch) == :IN
         condition_trigger = result.coefficient2_cancellation >=
                    _MATCH_CONSENSUS_IN_CANCELLATION_MIN &&
             result.matching_condition >= _MATCH_CONSENSUS_IN_CONDITION_MIN
@@ -2386,7 +2386,7 @@ function _matching_consensus_retry(coefficients, locals, branch, selected, setti
         separation=0.0,
         candidate_records,
     )
-    direction = branch == :IN ? 1.0 : -1.0
+    direction = _side(branch) == :IN ? 1.0 : -1.0
     rstar_scale = log(25) / abs(imag(params.omega))
     candidates = typeof(selected)[]
     for fraction in (0.25, 0.5, 0.75)
@@ -2426,11 +2426,11 @@ function _matching_consensus_retry(coefficients, locals, branch, selected, setti
         end
     end
     separation = min(_amplitude_pair_distance(selected, best_first), _amplitude_pair_distance(selected, best_second))
-    condition_trigger = branch == :IN &&
+    condition_trigger = _side(branch) == :IN &&
         selected.coefficient2_cancellation >=
             _MATCH_CONSENSUS_IN_CANCELLATION_MIN &&
         selected.matching_condition >= _MATCH_CONSENSUS_IN_CONDITION_MIN
-    pole_only = branch == :IN && !condition_trigger
+    pole_only = _side(branch) == :IN && !condition_trigger
     agreement_max = pole_only ?
         _MATCH_CONSENSUS_IN_POLE_AGREEMENT_MAX :
         _MATCH_CONSENSUS_AGREEMENT_MAX
@@ -2475,14 +2475,14 @@ function complex_offpole_match_plateau_candidate(
         retry_cache.locals
     rstar_scale = log(25) / abs(imag(params.omega))
     candidates = Any[]
-    fractions = branch == :UP ? (0.0, -0.25, -0.5, -0.75) :
+    fractions = _side(branch) == :UP ? (0.0, -0.25, -0.5, -0.75) :
         (0.25, 0.5, 0.75, 1.0)
     reused_candidate_count = 0
     early_stability = Inf
     for fraction in fractions
         candidate = nothing
         if retry_cache !== nothing
-            if branch == :UP && iszero(fraction)
+            if _side(branch) == :UP && iszero(fraction)
                 candidate = retry_cache.initial
             else
                 magnitude = abs(fraction)
@@ -2505,7 +2505,7 @@ function complex_offpole_match_plateau_candidate(
         end
         if candidate !== nothing
             push!(candidates, candidate)
-            if branch == :UP && length(candidates) == 2 &&
+            if _side(branch) == :UP && length(candidates) == 2 &&
                     early_stability_max !== nothing
                 early_stability = _amplitude_pair_distance(
                     candidates[1], candidates[2])
@@ -2559,25 +2559,26 @@ function _match_rstar_from_x(params, match_x)
     return Float64(rstar_from_r(params.a, real(_compact_r(params, x))))
 end
 
+# The local solutions a match needs: the target of `branch` (`target` names it: h_in for IN, h_out for OUT, i_out for
+# UP, i_in for DOWN), propagated from its own end, and the pair of the other end (i_in, i_out for IN and OUT; h_in,
+# h_out for UP and DOWN). OUT and DOWN are matched as IN and UP (their `_side`) with the other target.
+_side(branch::Symbol) = branch === :OUT ? :IN : branch === :DOWN ? :UP : branch
+
+_target(locals) = getproperty(locals, locals.target)
+
 function _local_solutions(coefficients, branch::Symbol, order::Int)
-    if branch == :IN
-        return (;
-            horizon_in=_complex_horizon_solution(
-                coefficients, :in, _horizon_series_order(order)),
-            horizon_out=nothing,
-            infinity_in=_complex_infinity_solution(
-                coefficients, :in, order),
-            infinity_out=_complex_infinity_solution(coefficients, :out, order))
-    elseif branch == :UP
-        return (;
-            horizon_in=_complex_horizon_solution(
-                coefficients, :in, _horizon_series_order(order)),
-            horizon_out=_complex_horizon_solution(
-                coefficients, :out, _horizon_series_order(order)),
-            infinity_in=nothing,
-            infinity_out=_complex_infinity_solution(coefficients, :out, order))
-    end
-    throw(ArgumentError("complex rational branch must be :IN or :UP."))
+    horizon(kind) = _complex_horizon_solution(coefficients, kind, _horizon_series_order(order))
+    branch == :IN && return (; target=:horizon_in, horizon_in=horizon(:in), horizon_out=nothing,
+        infinity_in=_complex_infinity_solution(coefficients, :in, order),
+        infinity_out=_complex_infinity_solution(coefficients, :out, order))
+    branch == :OUT && return (; target=:horizon_out, horizon_in=nothing, horizon_out=horizon(:out),
+        infinity_in=_complex_infinity_solution(coefficients, :in, order),
+        infinity_out=_complex_infinity_solution(coefficients, :out, order))
+    branch == :UP && return (; target=:infinity_out, horizon_in=horizon(:in), horizon_out=horizon(:out),
+        infinity_in=nothing, infinity_out=_complex_infinity_solution(coefficients, :out, order))
+    branch == :DOWN && return (; target=:infinity_in, horizon_in=horizon(:in), horizon_out=horizon(:out),
+        infinity_in=_complex_infinity_solution(coefficients, :in, order), infinity_out=nothing)
+    throw(ArgumentError("complex rational branch must be :IN, :UP, :OUT or :DOWN."))
 end
 
 @inline function _horizon_representation(solution)
@@ -2605,9 +2606,9 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
     horizon_seed = nothing
     infinity_seed = nothing
     begin
-        if branch == :IN
+        if _side(branch) == :IN
             horizon_seed = _select_horizon_path(
-                coefficients, (locals.horizon_in,), (:horizon_in,), p,
+                coefficients, (_target(locals),), (locals.target,), p,
                 match_x, settings)
             infinity_seed = try
                 _select_infinity_path(
@@ -2628,13 +2629,13 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
             horizon_seed = _select_horizon_path(
                 coefficients, (locals.horizon_in, locals.horizon_out),
                 (:horizon_in, :horizon_out), p, match_x, settings;
-                pair_abel_target=isone(locals.infinity_out.variable_scale) ?
+                pair_abel_target=isone(_target(locals).variable_scale) ?
                     nothing : settings.infinity_target,
                 fallback_pair_abel_target=
-                    isone(locals.infinity_out.variable_scale) ?
+                    isone(_target(locals).variable_scale) ?
                     nothing : settings.horizon_target)
             infinity_seed = _select_infinity_path(
-                coefficients, (locals.infinity_out,), (:infinity_out,),
+                coefficients, (_target(locals),), (locals.target,),
                 params.omega, match_x, settings;
                 angle_offset=infinity_angle_offset)
         end
@@ -2645,7 +2646,7 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
     infinity_endpoint_match = nothing
     horizon_endpoint_match = nothing
     begin
-        if branch == :IN
+        if _side(branch) == :IN
             horizon = try
                 _propagate_on_path(
                     coefficients, horizon_seed.path,
@@ -2684,7 +2685,7 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
                 end
             end
         else
-            endpoint_match = !isone(locals.infinity_out.variable_scale) &&
+            endpoint_match = !isone(_target(locals).variable_scale) &&
                 infinity_seed.path.kind != :principal_mst
             if endpoint_match
                 horizon = _seed_bundle(horizon_seed)
@@ -2708,14 +2709,14 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
                         infinity_seed.checks[1].state,
                         infinity_seed.checks[1].state,
                         settings;
-                        variable_scale=locals.infinity_out.variable_scale)
+                        variable_scale=_target(locals).variable_scale)
                 else
                     _propagate_on_path(
                         coefficients, infinity_seed.path,
                         infinity_seed.checks[1].state,
                         infinity_seed.checks[1].state,
                         settings;
-                        variable_scale=locals.infinity_out.variable_scale)
+                        variable_scale=_target(locals).variable_scale)
                 end
             catch exception
                 absorbable(exception) || rethrow()
@@ -2748,8 +2749,9 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
     terms = (1.0, 1.0)
     infinity_horizon_winding = round(Int, imag(
         infinity_seed.path.logx - log(infinity_seed.path.x)) / (2pi))
+    # (for the IN side the monodromy of the target, h_in or h_out; for the UP side that of h_in in the pair)
     horizon_monodromy = exp(2pi * im * infinity_horizon_winding *
-        locals.horizon_in.exponent)
+        (_side(branch) == :IN ? _target(locals) : locals.horizon_in).exponent)
     # Winding is undone only when the ray encircles the horizon alone:
     # around any other singular point the monodromy mixes the horizon
     # solutions. Each turn also scales one horizon solution against the other
@@ -2773,7 +2775,7 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
                 "the horizon solutions separate by exp($(amplification)).")
     end
     begin
-        endpoint = branch == :IN ? :infinity : :horizon
+        endpoint = _side(branch) == :IN ? :infinity : :horizon
         denominator_x = infinity_endpoint_match !== nothing ?
             infinity_endpoint_match.x :
             (horizon_endpoint_match !== nothing ?
@@ -2783,7 +2785,7 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
         denominator_result.status == "OK" ||
             error("$(endpoint) Abel denominator failed: " *
                 "$(denominator_result.status).")
-        if branch == :IN
+        if _side(branch) == :IN
             basis1 = infinity_endpoint_match === nothing ?
                 infinity.state1 : infinity_seed.checks[1].state
             basis2 = infinity_endpoint_match === nothing ?
@@ -2831,8 +2833,8 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
             end
             match_state = horizon.state1
             endpoint_states = (;
-                horizon_in=target_state,
-                horizon_out=missing,
+                horizon_in=branch == :IN ? target_state : missing,
+                horizon_out=branch == :OUT ? target_state : missing,
                 infinity_in=basis1,
                 infinity_out=normalization.corrected,
             )
@@ -2903,8 +2905,8 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
             endpoint_states = (;
                 horizon_in=basis1,
                 horizon_out=normalization.corrected,
-                infinity_in=missing,
-                infinity_out=target_state,
+                infinity_in=branch == :DOWN ? target_state : missing,
+                infinity_out=branch == :UP ? target_state : missing,
             )
         end
     end
@@ -2917,7 +2919,7 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
     # when the basis is matched at its endpoint).
     leg_error(leg) = leg === nothing ? 0.0 :
         (hasproperty(leg, :local_error) ? leg.local_error : Inf)
-    target_error, basis_error = if branch == :IN
+    target_error, basis_error = if _side(branch) == :IN
         horizon_seed.score + leg_error(horizon) +
             leg_error(infinity_endpoint_match),
         infinity_seed.score + (infinity_endpoint_match === nothing ?
@@ -2928,13 +2930,13 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
         horizon_seed.score + (horizon_endpoint_match === nothing ?
             leg_error(horizon) : 0.0)
     end
-    pair_error = branch == :IN ? normalization.raw_error :
+    pair_error = _side(branch) == :IN ? normalization.raw_error :
         max(normalization.raw_error,
-            _infinity_target_error(coefficients, locals.infinity_out,
+            _infinity_target_error(coefficients, _target(locals), locals.target,
                 infinity_seed, infinity, settings))
     errors = _amplitude_errors(terms, target_error + basis_error,
         diagnostics, normalization.corrected_error, pair_error)
-    incidence_error, reflection_error = branch == :IN ?
+    incidence_error, reflection_error = _side(branch) == :IN ?
         errors : (errors[2], errors[1])
     return (;
         incidence,
@@ -2968,19 +2970,21 @@ function _solve_at_match(coefficients, locals, branch::Symbol, match_rstar, sett
     )
 end
 
-# UP's horizon matching pair does not check propagation from infinity.
-function _infinity_target_error(coefficients, outgoing, seed, target, settings)
+# The horizon matching pair of UP (DOWN) does not check the propagation from infinity: the target (i_out or i_in) is
+# compared with its companion (the other infinity solution) through their Abel ratio.
+function _infinity_target_error(coefficients, target_solution, target_kind, seed, target, settings)
     try
+        companion_kind = target_kind == :infinity_out ? :infinity_in : :infinity_out
         incoming = _complex_infinity_solution(
-            coefficients, :in, outgoing.requested_order)
+            coefficients, companion_kind == :infinity_in ? :in : :out, target_solution.requested_order)
         scratch = ComplexRationalScratch(coefficients, settings.order)
         A, B = _ode_ab!(scratch, coefficients, seed.path.x)
         check = _infinity_check_from_ab(A, B, coefficients, incoming,
-            :infinity_in, seed.path, settings)
+            companion_kind, seed.path, settings)
         companion_seed = if check.score <= settings.infinity_target
             (;path=seed.path,checks=(check,))
         else
-            _select_infinity_path(coefficients,(incoming,),(:infinity_in,),
+            _select_infinity_path(coefficients,(incoming,),(companion_kind,),
                 coefficients.params.omega,real(first(seed.path.nodes)),settings)
         end
         companion = _propagate_on_path(coefficients, companion_seed.path,
@@ -2989,8 +2993,10 @@ function _infinity_target_error(coefficients, outgoing, seed, target, settings)
         denominator = abel_denominator(
             coefficients, :infinity, companion.x)
         denominator.status == "OK" || return Inf
-        ratio = _scaled_abel_ratio(
-            companion.state1, target.state1, denominator.denominator)
+        # the infinity Abel denominator is W(i_in, i_out)
+        ratio = target_kind == :infinity_out ?
+            _scaled_abel_ratio(companion.state1, target.state1, denominator.denominator) :
+            _scaled_abel_ratio(target.state1, companion.state1, denominator.denominator)
         return abs(ratio - 1)
     catch exception
         exception isa ErrorException || rethrow()
@@ -3095,7 +3101,7 @@ end
 function _burial_profile(coefficients, locals, branch, result, settings)
     nodes = NTuple{3,Any}[]
     try
-        if branch == :IN
+        if _side(branch) == :IN
             seed = result.infinity_seed
             first_state, second_state = seed.checks[1].state, seed.checks[2].state
             push!(nodes, (seed.path.x, first_state, second_state))
@@ -3113,13 +3119,13 @@ function _burial_profile(coefficients, locals, branch, result, settings)
                 second_state, settings; nodes)
             _propagate_forward_on_path(coefficients, result.infinity_seed.path,
                 back.state1, back.state2, settings;
-                variable_scale=locals.infinity_out.variable_scale, nodes)
+                variable_scale=_target(locals).variable_scale, nodes)
         end
     catch exception
         exception isa ErrorException || rethrow()
         return (Inf, Inf)
     end
-    c1, c2 = branch == :IN ? (result.incidence, result.reflection) :
+    c1, c2 = _side(branch) == :IN ? (result.incidence, result.reflection) :
         (result.reflection, result.incidence)
     w1 = 1.0
     w2 = 1.0
@@ -3142,7 +3148,7 @@ function _profile_errors(branch, result, profile)
         result.abel_raw_error
     e1 = _finite_or_inf(e1)
     e2 = _finite_or_inf(e2)
-    return branch == :IN ? (e1, e2) : (e2, e1)
+    return _side(branch) == :IN ? (e1, e2) : (e2, e1)
 end
 
 # A term smaller than the other by q at the amplitude match loses eps/q of its
@@ -3163,7 +3169,7 @@ end
 function _balance_junction(coefficients, locals, branch, selected, settings,
         tolerance)
     params = coefficients.params
-    q = branch == :IN ? params.omega :
+    q = _side(branch) == :IN ? params.omega :
         params.omega - params.m * params.a / (2 * _rplus(params))
     rate = -2 * imag(q)
     burial = max(selected.burial_ratio, inv(selected.burial_ratio))
@@ -3179,7 +3185,7 @@ function _balance_junction(coefficients, locals, branch, selected, settings,
     predicted = selected.burial_ratio * exp(rate * (target - selected.match_rstar))
     eps(Float64) * max(predicted, inv(predicted)) <= tolerance || return base, 0
     # The ingoing term is the larger one when terms[2] / terms[1] < 1.
-    inc_larger = (branch == :IN) == (selected.burial_ratio < 1)
+    inc_larger = (_side(branch) == :IN) == (selected.burial_ratio < 1)
     base_error = inc_larger ? base.reflection_error : base.incidence_error
     # Error of the smaller coefficient re-solved at the junction a fraction f of
     # the way to the target; nothing when no match exists there; :unresolved
@@ -3258,8 +3264,8 @@ function complex_rational_build(
     s::Integer, l::Integer, m::Integer, a, omega, branch::Symbol; lambda=nothing, nu=nothing, N=nothing, tol=nothing,
     xm=nothing, defer_relaxed_rotation::Bool=false,
 )
-    branch in (:IN, :UP) ||
-        throw(ArgumentError("complex rational branch must be :IN or :UP."))
+    branch in (:IN, :UP, :OUT, :DOWN) ||
+        throw(ArgumentError("complex rational branch must be :IN, :UP, :OUT or :DOWN."))
     order = Int(N === nothing ? _DEFAULT_ORDER : N)
     tolerance = Float64(tol === nothing ? 1.0e-14 : tol)
     settings = ComplexRationalSettings(order, tolerance)
@@ -3335,7 +3341,7 @@ function complex_rational_build(
         junction_search ? :junction_search :
         xm !== nothing ? :explicit_x :
         auto_near_real_match ? :near_real_x07 : :rstar_zero
-    if xm === nothing && branch == :UP &&
+    if xm === nothing && _side(branch) == :UP &&
             params.kappa <= _MATCH_CONSENSUS_KAPPA_MAX &&
             initial.matching_condition > _MATCH_CONDITION_RETRY
         shifted_rstar = -log(25) / abs(imag(params.omega))
@@ -3402,15 +3408,16 @@ function complex_rational_build(
     evaluator = ComplexRationalEvaluator(
         params, coefficients, settings, selected.match_x,
         selected.match_state)
-    # IN is the horizon ingoing solution itself; UP is reflection h_in +
-    # incidence h_out in the same horizon basis.
-    evaluator.amplitudes[] = branch == :IN ?
-        (one(ComplexF64), zero(ComplexF64), 0.0, 0.0) :
+    # IN (OUT) is the horizon ingoing (outgoing) solution itself; UP and DOWN are reflection h_in + incidence h_out
+    # in the same horizon basis.
+    evaluator.amplitudes[] = branch == :IN ? (one(ComplexF64), zero(ComplexF64), 0.0, 0.0) :
+        branch == :OUT ? (zero(ComplexF64), one(ComplexF64), 0.0, 0.0) :
         (selected.reflection, selected.incidence,
             abs(selected.reflection) * selected.reflection_error,
             abs(selected.incidence) * selected.incidence_error)
     metadata = (;
         backend=:direct_gsn_two_ray_rational,
+        target=locals.target,
         horizon_in_representation=
             _horizon_representation(locals.horizon_in),
         horizon_out_representation=
