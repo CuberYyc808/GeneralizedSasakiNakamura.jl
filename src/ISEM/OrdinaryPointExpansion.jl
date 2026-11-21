@@ -436,8 +436,8 @@ function endpoint_ab_series!(
             copyto!(a_out, 1, laurent.a, 1, a_terms)
             copyto!(b_out, 1, laurent.b, 1, b_terms)
         else
-            # A longer request is computed again, never padded.
-            horizon_closed_form_ab_series!(a_out, b_out, laurent.params, 0.0, order)
+            # A longer request is computed again (with the same K+), never padded.
+            horizon_closed_form_ab_series!(a_out, b_out, laurent.params, 0.0, order; kplus=laurent.kplus)
         end
         return a_terms, b_terms
     end

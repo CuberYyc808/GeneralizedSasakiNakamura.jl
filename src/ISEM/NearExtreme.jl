@@ -170,12 +170,14 @@ end
 @inline finite_complex(value) =
     isfinite(real(value)) && isfinite(imag(value))
 
-# Closed-form horizon Laurent coefficients of A and B (horizon_closed_form_ab_series! at x = 0) to `order`.
+# Closed-form horizon Laurent coefficients of A and B (horizon_closed_form_ab_series! at x = 0) to `order`, with
+# `kplus` (horizon_kplus) when K is built from K+ (endpoint_ab_series! computes a longer request with it again).
 struct HorizonClosedFormLaurent{P}
     params::P
     order::Int
     a::Vector{ComplexF64}
     b::Vector{ComplexF64}
+    kplus::Union{Nothing,ComplexF64}
 end
 
 function HorizonClosedFormLaurent(params, order::Integer; kplus=nothing)
@@ -183,7 +185,7 @@ function HorizonClosedFormLaurent(params, order::Integer; kplus=nothing)
     a = Vector{ComplexF64}(undef, a_terms)
     b = Vector{ComplexF64}(undef, b_terms)
     horizon_closed_form_ab_series!(a, b, params, 0.0, order; kplus)
-    return HorizonClosedFormLaurent(params, Int(order), a, b)
+    return HorizonClosedFormLaurent(params, Int(order), a, b, kplus === nothing ? nothing : ComplexF64(kplus))
 end
 
 # Whether near_extreme_prepare substituted the fully compensated horizon

@@ -803,13 +803,15 @@ end
 # table is kept. The generic table holds K+
 # expanded, so where |K+| << |a m| its b_{-2} is off by eps (a m / |K+|)^2 (2.3e-10 at a = 0.9999 for the first
 # Matsubara frequency); with it the n = 2 resonance at (-2,2,2,0.9) did not certify its horizon path.
-function _complex_horizon_closed_form(coefficients)
+# The horizon series of the coefficient set with K = K+ + (r - r+)(r + r+) omega (horizon_kplus), at the order the
+# horizon solutions of a route of ordinary order `order` ask for (_horizon_series_order).
+function _complex_horizon_closed_form(coefficients, order::Integer)
     params = coefficients.params
     horizon = coefficients.horizon
     kplus = horizon_kplus(Float64(params.a), params.m, ComplexF64(params.omega))
     resonant = any(branch -> _horizon_resonant_order(_horizon_resonance_data(params, branch)) >= 1, (:in, :out))
     resonant || abs(kplus) < abs(params.a * params.m) / 4 || return coefficients
-    laurent = HorizonClosedFormLaurent(params, 80; kplus)
+    laurent = HorizonClosedFormLaurent(params, _horizon_series_order(order); kplus)
     all(value -> isfinite(real(value)) && isfinite(imag(value)), laurent.a) &&
         all(value -> isfinite(real(value)) && isfinite(imag(value)), laurent.b) || return coefficients
     return CoefficientSet(params, EndpointCoefficientSet(horizon.A, horizon.B, horizon.basis, laurent),
@@ -3288,7 +3290,7 @@ function complex_rational_build(
         small_frequency_expansion=false, large_frequency_expansion=false)
     coefficients = nothing
     coefficients = _complex_horizon_closed_form(gsn_coefficients(
-        params; controls=initial_controls))
+        params; controls=initial_controls), order)
     locals = nothing
     locals = _local_solutions(
         coefficients, branch, order)
