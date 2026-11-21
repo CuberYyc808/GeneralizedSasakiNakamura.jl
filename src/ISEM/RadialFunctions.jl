@@ -765,18 +765,25 @@ function _teukolsky_solution(route::Route, scale_value, pair_converter)
     return TeukolskySolution(tuple_value, pair_value, radial_value)
 end
 
-# Converter (r, X, dX/dx) -> (R, R'): closed forms for s = -2, 0, +2, otherwise
-# the generic GSN-to-Teukolsky conversion matrix.
+# Converter (r, X, dX/dx) -> (R, R'): the closed form for s = 0; for s = -2, +2 the expanded closed forms beyond
+# r - r_+ = 0.1 and the conversion matrix below (the expanded forms cancel near the horizon: R_in of s = -2 off by 1e-1
+# at r - r_+ = 1e-4, a = 0.999, where the matrix keeps 1e-5; the matrix loses 2e-8 at r = 1.6e8, omega = 1e-12, where
+# the closed form keeps 5e-15); the conversion matrix for the other s.
 function _teukolsky_converter(p)
-    if p.s == -2
-        return TeukolskySMinus2Converter(p.m, p.a, p.omega, p.lambda)
-    elseif p.s == 2
-        return TeukolskySPlus2Converter(p.m, p.a, p.omega, p.lambda)
-    elseif p.s == 0
-        return TeukolskySZeroConverter(p.a)
-    end
-    return TeukolskyGenericConverter(p)
+    p.s == 0 && return TeukolskySZeroConverter(p.a)
+    abs(p.s) == 2 || return TeukolskyGenericConverter(p)
+    closed = p.s == -2 ? TeukolskySMinus2Converter(p.m, p.a, p.omega, p.lambda) :
+        TeukolskySPlus2Converter(p.m, p.a, p.omega, p.lambda)
+    return TeukolskyZonedConverter(closed, TeukolskyGenericConverter(p), compact_r_plus(p))
 end
+
+struct TeukolskyZonedConverter{C,G,T}
+    closed::C
+    matrix::G
+    rplus::T
+end
+
+(c::TeukolskyZonedConverter)(r, X, dXdx) = real(r) - c.rplus < 0.1 ? c.matrix(r, X, dXdx) : c.closed(r, X, dXdx)
 
 struct TeukolskyGenericConverter{P}
     params::P
