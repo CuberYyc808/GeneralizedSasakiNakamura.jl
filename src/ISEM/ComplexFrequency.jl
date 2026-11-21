@@ -3088,8 +3088,8 @@ function _complex_route_impl(
         ":p_equation."))
 end
 
-# The step of `complex_route` after `_complex_route_impl` that post-processes the built route, with its method in
-# NegativeImaginaryAxisAmplitudes (included after this module). The call keeps its inference barrier.
+# The step of `complex_route` after `_complex_route_impl` that post-processes a route built with default controls,
+# with its method in NegativeImaginaryAxisAmplitudes (included after this module). The call keeps its inference barrier.
 function _post_route end
 
 """
@@ -3113,10 +3113,11 @@ function complex_route(
         s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
         large_frequency_expansion, pole_normalization,
     )
-    return Base.inferencebarrier(_post_route)(
-        route, s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-        large_frequency_expansion, pole_normalization,
-    )
+    # Route-fixing controls (a tolerance alone only sets accuracy targets) or the pole normalization: as built.
+    backend == :direct_rational && controls === nothing && !pole_normalization &&
+        all(isnothing, (lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion)) ||
+        return route
+    return Base.inferencebarrier(_post_route)(route)
 end
 
 # GSN state (X, dXdrstar, error) of a route at a real radius r > rplus.

@@ -708,21 +708,10 @@ function _analytic_result(route)
     return nothing
 end
 
-# Whether the analytic-amplitude comparison runs after a route was built:
-# default controls, Im(omega) < 0, and either omega near the negative imaginary
-# axis or a route whose amplitudes came from the complex-rational or
-# log-scaled MST backends.
-@inline function _offaxis_pretrigger(
-    route::ComplexRoute, ; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-    large_frequency_expansion, pole_normalization,
-)
-    backend == :direct_rational || return false
-    controls === nothing || return false
-    # A tolerance alone sets accuracy targets and does not fix the route.
-    all(value === nothing for value in (
-        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
-    )) || return false
-    pole_normalization && return false
+# Whether the analytic-amplitude comparison runs on a route built with default controls: Im(omega) < 0, and either
+# omega near the negative imaginary axis or a route whose amplitudes came from the complex-rational or log-scaled
+# MST backends.
+@inline function _offaxis_pretrigger(route::ComplexRoute)
     omega = ComplexF64(route.params.omega)
     imag(omega) < 0 || return false
     !iszero(real(omega)) || return false
@@ -741,17 +730,7 @@ end
     return !all(error -> isfinite(error) && error < 1e-2, errors)
 end
 
-@inline function _state_pretrigger(
-    route::ComplexRoute, ; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion,
-    large_frequency_expansion, pole_normalization,
-)
-    backend == :direct_rational || return false
-    controls === nothing || return false
-    # A tolerance alone sets accuracy targets and does not fix the route.
-    all(value === nothing for value in (
-        lambda, nu, xm, rhom, N, small_frequency_expansion, large_frequency_expansion,
-    )) || return false
-    pole_normalization && return false
+@inline function _state_pretrigger(route::ComplexRoute)
     route.branch == :UP || return false
     route.state_evaluator isa ComplexStateEvaluator || return false
     omega = ComplexF64(route.params.omega)
@@ -762,23 +741,13 @@ end
     return route_backend == :direct_gsn_p_build_fallback
 end
 
-# Post-route hook registered with ComplexFrequency: tries the fast
-# MST-anchor rescue, then (when triggered) compares the route amplitudes with
-# the analytic MST ones and re-anchors the UP/IN state. Returns the route
-# unchanged when nothing applies.
-@noinline function _post_overlay(
-    route::ComplexRoute, s, l, m, a, omega, branch; backend, controls, lambda, nu, xm, rhom, N, tol,
-    small_frequency_expansion, large_frequency_expansion, pole_normalization,
-)
+# Post-route hook registered with ComplexFrequency (routes built with default controls): when triggered, compares
+# the route amplitudes with the analytic MST ones and re-anchors the UP/IN state. Returns the route unchanged when
+# nothing applies.
+@noinline function _post_overlay(route::ComplexRoute)
     Base.@nospecialize route
-    amplitude_trigger = _offaxis_pretrigger(
-        route; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
-        pole_normalization,
-    )
-    state_trigger = _state_pretrigger(
-        route; backend, controls, lambda, nu, xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion,
-        pole_normalization,
-    )
+    amplitude_trigger = _offaxis_pretrigger(route)
+    state_trigger = _state_pretrigger(route)
     (amplitude_trigger || state_trigger) || return route
     # Function barrier: the triggered work is compiled only when it runs.
     return Base.inferencebarrier(_post_overlay_triggered)(
@@ -925,6 +894,6 @@ function _overlay_part(anchored_route, route, result, decision, anchor)
     return _with_amplitude_errors(overlaid, errors)
 end
 
-ComplexFrequency._post_route(route, args...; kwargs...) = _post_overlay(route, args...; kwargs...)
+ComplexFrequency._post_route(route) = _post_overlay(route)
 
 end
