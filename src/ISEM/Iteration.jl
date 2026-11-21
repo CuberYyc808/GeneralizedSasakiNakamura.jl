@@ -240,6 +240,15 @@ Basis(
     true,
 )
 
+# Basis of a march seeded by a state (X, dX/dx) at seed_x, without an endpoint series (unit scale, the seed value as
+# its only coefficient, endpoint_valid = false).
+_state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, max_step, min_step,
+        truncations) = Basis(
+    kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x),
+    ComplexF64(seed_X), ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count,
+    max_step, min_step, 1.0 + 0.0im, truncations, false,
+)
+
 # Chosen infinity endpoint: endpoint_y (y = 1 - x), the truncated :out and :in
 # series with their orders, the selection score, the variable scale of the
 # series variable y / variable_scale, the requested order and the truncation
@@ -1479,12 +1488,7 @@ function _hybrid_state(
     _, current_value, current_derivative, step_count, max_step, min_step = _taylor_march!(patches, truncations, work,
         coefficients, kind, current_x, current_value, current_derivative, target_x, order, tol;
         failure="hybrid recurrence failed", after_step=try_eikonal, step_count, max_step, min_step)
-    seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    return Basis(
-        kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
-        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value, current_derivative, step_count,
-        max_step, min_step, 1.0 + 0.0im, truncations, false,
-    )
+    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, current_value, current_derivative, step_count, max_step, min_step, truncations)
 end
 
 # Paired form of `_hybrid_state` with common steps for both solutions.
@@ -1621,17 +1625,8 @@ function _hybrid_pair(
     _, value1, deriv1, value2, deriv2, step_count, max_step, common_min = _taylor_pair_march!(patches1, patches2,
         truncations1, truncations2, work, coefficients, kind1, kind2, current_x, value1, deriv1, value2, deriv2,
         target_x, order, tol; failure="hybrid pair failed", after_step=try_eikonal, step_count, max_step, min_step)
-    seed_coord = _is_horizon(kind1) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    basis1 = Basis(
-        kind1, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im,
-        Float64(seed_x), seed_coord, ComplexF64(seed_X1), ComplexF64(seed_dXdx1),
-        ComplexF64[ComplexF64(seed_X1)], patches1, value1, deriv1,
-        step_count, max_step, common_min, 1.0 + 0.0im, truncations1, false)
-    basis2 = Basis(
-        kind2, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im,
-        Float64(seed_x), seed_coord, ComplexF64(seed_X2), ComplexF64(seed_dXdx2),
-        ComplexF64[ComplexF64(seed_X2)], patches2, value2, deriv2,
-        step_count, max_step, common_min, 1.0 + 0.0im, truncations2, false)
+    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, max_step, common_min, truncations1)
+    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, max_step, common_min, truncations2)
     return basis1, basis2
 end
 
@@ -1662,12 +1657,7 @@ function iterate_from_state(
     _, match_X, match_dXdx, step_count, max_step, min_step = _taylor_march!(patches, truncations, work, coefficients,
         kind, Float64(seed_x), ComplexF64(seed_X), ComplexF64(seed_dXdx), Float64(match_x), order,
         getproperty(controls, :tolerance); failure="state propagation failed")
-    seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    return Basis(
-        kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
-        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count,
-        max_step, min_step, 1.0 + 0.0im, truncations, false,
-    )
+    return _state_basis(kind, seed_x, seed_X, seed_dXdx, patches, match_X, match_dXdx, step_count, max_step, min_step, truncations)
 end
 
 @inline _scaled_finite(value) =
@@ -1921,17 +1911,8 @@ function iterate_pair_from_state(
         truncations1, truncations2, work, coefficients, kind1, kind2, Float64(seed_x), ComplexF64(seed_X1),
         ComplexF64(seed_dXdx1), ComplexF64(seed_X2), ComplexF64(seed_dXdx2), Float64(match_x), order,
         getproperty(controls, :tolerance); failure="paired state recurrence failed")
-    seed_coord = _is_horizon(kind1) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    basis1 = Basis(
-        kind1, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X1),
-        ComplexF64(seed_dXdx1), ComplexF64[ComplexF64(seed_X1)], patches1, value1, deriv1, step_count, max_step,
-        common_min_step, 1.0 + 0.0im, truncations1, false,
-    )
-    basis2 = Basis(
-        kind2, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X2),
-        ComplexF64(seed_dXdx2), ComplexF64[ComplexF64(seed_X2)], patches2, value2, deriv2, step_count, max_step,
-        common_min_step, 1.0 + 0.0im, truncations2, false,
-    )
+    basis1 = _state_basis(kind1, seed_x, seed_X1, seed_dXdx1, patches1, value1, deriv1, step_count, max_step, common_min_step, truncations1)
+    basis2 = _state_basis(kind2, seed_x, seed_X2, seed_dXdx2, patches2, value2, deriv2, step_count, max_step, common_min_step, truncations2)
     return basis1, basis2
 end
 
