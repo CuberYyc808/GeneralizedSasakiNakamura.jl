@@ -423,7 +423,9 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
             result, validation, alpha)
     end
     evaluation_omega = validation.metadata.evaluation_omega
-    reflection = validation.reflection
+    # With MST stencil amplitudes the root amplitudes come from the same evaluation.
+    root_sample = stencil_backend === :mst_amplitudes ? sample(result.omega) : validation
+    reflection = root_sample.reflection
     B_gsn = reflection / (2 * evaluation_omega * alpha)
     maximum_wronskian_drift = selected.maximum_wronskian_drift
     finite = isfinite(alpha) && isfinite(reflection) && isfinite(B_gsn)
@@ -463,6 +465,7 @@ function _qnm_richardson_excitation_factor(result::LeaverResult;
             derivative_stencil=selected.five_point ?
                 :five_point_fourth_order : :three_point_second_order,
             stencil_backend,
+            stencil_incidence=root_sample.incidence,
             convention_gsn=:Aout_over_2omega_alpha,
             step_tolerance=T(step_tolerance),
             incidence_backend=validation.metadata.incidence_backend,
@@ -502,8 +505,9 @@ function _qnm_richardson_full_excitation_factor(result::LeaverResult;
             gsn.stop_reason, md)
     end
     lambda, dlambda = _qnm_lambda_tangent(result.mode, md.evaluation_a, md.evaluation_omega)
+    incidence = get(md, :stencil_incidence, md.validation.incidence)
     teukolsky(gsn) = _qnm_variational_teukolsky(result,
-        merge(gsn, (metadata=merge(gsn.metadata, (; lambda, dlambda)),)); bridge_tolerance)
+        merge(gsn, (metadata=merge(gsn.metadata, (; lambda, dlambda)),)); bridge_tolerance, incidence)
     (direction_tolerance === nothing || iszero(md.selected_base_step)) && return teukolsky(gsn)
     sample = _stencil_sampler(result, md.stencil_backend, get(kwargs, :radial_solver, GSN_radial))
     across = _gsn_derivative_attempt(result, md.selected_base_step, sample, Dict{typeof(result.omega),Any}(), Ref(0);
