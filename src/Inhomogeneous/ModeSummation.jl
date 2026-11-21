@@ -2921,7 +2921,11 @@ function _generic_mode_summation_scoped(scope, a, p, e, x; N0 = 64, K0 = 16, Nma
             return triggered
         end
         # one tracker per boundary: the two branches may run on different tasks
-        cap_trackers = rs === nothing ? (CapTracker(lmax, kmax), CapTracker(lmax, kmax)) : rs.cap_trackers
+        # A replay with the same lmax (kmax raised) takes the walks of the earlier pass from its ledgers without solving
+        # them again: their modes near the caps come from that pass's trackers, so that its lmax hits are kept.
+        cap_trackers = rs !== nothing ? rs.cap_trackers :
+            rl !== nothing && rl.lmax == lmax ? map(t -> CapTracker(lmax, kmax, deepcopy(t.l_walks), copy(t.m_shells),
+                copy(t.k_shells)), rl.cap_trackers) : (CapTracker(lmax, kmax), CapTracker(lmax, kmax))
         failed_modes = rs === nothing ? [0, 0] : rs.failed_modes
         near_static_zero = rs === nothing ? [0, 0] : rs.near_static_zero
         # One mode from its parameters (max_flux, Levin choice, floors; levin_flux_scale is passed to the adaptive Levin
