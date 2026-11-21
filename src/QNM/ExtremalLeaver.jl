@@ -126,9 +126,9 @@ function extremal_qnm_root(mode::QNMMode, seed::Complex{T};
         maximum_iterations::Int=60,
         trust_radius=nothing) where {T<:AbstractFloat}
     rtol = root_tolerance === nothing ?
-        (T === Float64 ? T(1e-11) : T(1e-20)) : T(root_tolerance)
+        T(1e-11) : T(root_tolerance)
     ftol = residual_tolerance === nothing ?
-        (T === Float64 ? T(1e-11) : T(1e-25)) : T(residual_tolerance)
+        T(1e-11) : T(residual_tolerance)
     radius = trust_radius === nothing ? T(0.01) : T(trust_radius)
     depth = initial_depth
     previous = nothing

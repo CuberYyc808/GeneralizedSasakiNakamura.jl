@@ -707,15 +707,14 @@ _near_as_complete_scope(mode::QNMMode, near_as_role::Symbol) =
 
 function _near_as_mano_suzuki_takasugi_required(mode::QNMMode, a, ::Type{T},
         near_as_role::Symbol) where {T<:AbstractFloat}
-    return T === Float64 && _near_as_complete_scope(mode, near_as_role) &&
+    return _near_as_complete_scope(mode, near_as_role) &&
         !iszero(a) && abs(a) < T(_KERR_L2_M2_MANO_SUZUKI_TAKASUGI_SWITCH_SPIN)
 end
 
 function _near_as_mano_suzuki_takasugi_finalization_required(
         mode::QNMMode, a, ::Type{T}, near_as_role::Symbol) where {
         T<:AbstractFloat}
-    return T === Float64 &&
-        _near_as_complete_scope(mode, near_as_role) &&
+    return _near_as_complete_scope(mode, near_as_role) &&
         near_as_role == :algebraically_special &&
         abs(a) >= T(_KERR_L2_M2_MANO_SUZUKI_TAKASUGI_SWITCH_SPIN) &&
         abs(a) < T(_KERR_L2_M2_NEAR_AS_ANCHOR_SPIN)
@@ -1233,7 +1232,7 @@ _spin_seed_consistent(result, seed) = result.status == :accepted &&
 # and the ladder runs.
 function _tabulated_extremal_root(mode::QNMMode, a::T; guess, convention::Symbol,
         inversion_index, angular_order::Int, sheet_id::Symbol) where {T<:AbstractFloat}
-    (T === Float64 && a == one(T) && guess === nothing &&
+    (a == one(T) && guess === nothing &&
         mode.branch == :positive_real && convention == :overtone &&
         inversion_index === :auto) || return nothing
     entry = get(_EXTREMAL_ROOT_TABLE, (mode.s, mode.l, mode.m, mode.n), nothing)
@@ -2010,8 +2009,7 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         T(root_tolerance)
     tolerance_stability = stability_tolerance === nothing ? T(1.0e-10) :
         T(stability_tolerance)
-    continuation_root_tolerance = T === Float64 ?
-        max(tolerance_root, T(5.0e-10)) : tolerance_root
+    continuation_root_tolerance = max(tolerance_root, T(5.0e-10))
     radius = T(trust_radius)
     initial_step = T(initial_spin_step)
     maximum_step = T(maximum_spin_step)
@@ -2069,41 +2067,11 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
         convention=selected_convention,
         overtone_index,
         inversion_index=selected_inversion)
-
-    seed_mode = guess === nothing && selected_convention != :leaver &&
-        !ismissing(label_contract.schwarzschild_sequence_index) &&
-        label_contract.schwarzschild_sequence_index != mode.n ?
-        QNMMode(mode.s, mode.l, mode.m,
-            label_contract.schwarzschild_sequence_index, mode.branch) : mode
-    automatic_coordinate = Symbol(lowercase(String(
-        continuation_coordinate))) == :auto
-    seed_result = segment_seed !== nothing ? segment_seed :
-        automatic_coordinate && guess === nothing &&
-            selected_convention != :leaver &&
-            mode.n <= 4 && _near_extremal_zdm_seed_scope(mode, aT) ?
-        _near_extremal_zdm_seed(mode, aT, selected_inversion) :
-        guess === nothing &&
-            label_contract.algebraically_special_pair ?
-        _near_as_anchor_seed(mode, aT, near_as_role) :
-        guess === nothing && spin_seed !== nothing && segment == 0 &&
-            automatic_coordinate && selected_convention == :overtone &&
-            automatic_inversion && T === Float64 ? (
-                seed=complex(T(real(spin_seed.seed)), T(imag(spin_seed.seed))), seed_spin=aT, source=spin_seed.source,
-                seed_inversion_index=spin_seed.inversion, seed_predictor=spin_seed.predictor,
-                seed_duplicate_distance=T(Inf),
-        ) : guess === nothing ?
-        _schwarzschild_seed(
-            seed_mode, T; angular_order, sheet_id, cf_tolerance=tolerance_cf, cf_minimum_iterations,
-            cf_maximum_iterations=maximum_cf_iterations, root_tolerance=continuation_root_tolerance,
-            maximum_root_iterations, trust_radius=radius,
-        ) : (
-        seed=_complex_of_type(T, guess),
-        seed_spin=aT,
-        source=:explicit_guess,
-        seed_inversion_index=selected_inversion,
-        seed_predictor=:explicit,
-        seed_duplicate_distance=T(Inf),
-    )
+    seed_result = _labeled_seed(mode, aT, label_contract, (; angular_order, sheet_id, cf_tolerance=tolerance_cf,
+            cf_minimum_iterations, cf_maximum_iterations=maximum_cf_iterations,
+            root_tolerance=continuation_root_tolerance, maximum_root_iterations, trust_radius=radius);
+        guess, segment_seed, spin_seed, segment, convention=selected_convention, inversion=selected_inversion,
+        automatic_inversion, automatic_coordinate=Symbol(lowercase(String(continuation_coordinate))) == :auto)
     if automatic_inversion && selected_convention != :leaver &&
             guess === nothing
         selected_inversion = seed_result.seed_inversion_index
@@ -2114,458 +2082,506 @@ function _qnm_frequency_labeled(mode::QNMMode, a; guess=nothing,
                 :finite_spin_complete_spectrum_anchor :
                 :schwarzschild_seed_stability_selection) :
             :input_n_leaver_inversion) : :explicit
-    initial = seed_result.seed
-    guess_source = seed_result.source
-    _branch_consistent(mode, initial) || throw(ArgumentError(
+    _branch_consistent(mode, seed_result.seed) || throw(ArgumentError(
         "The supplied guess is inconsistent with mode.branch."))
-    current = initial
-    continuation_rows = NamedTuple[]
-    rejected_continuation_rows = NamedTuple[]
-    terminal_extrapolation_rows = NamedTuple[]
-    accepted_spins = T[]
-    accepted_coordinates = T[]
-    accepted_roots = Complex{T}[]
-    accepted_angular_A = Complex{T}[]
-    last_polish = nothing
-
     polish_options = (;
         angular_order, sheet_id, inversion_index=selected_inversion,
         cf_tolerance=tolerance_cf, cf_minimum_iterations,
         cf_maximum_iterations=maximum_cf_iterations,
         root_tolerance=continuation_root_tolerance,
         maximum_root_iterations, trust_radius=radius, near_as_role)
-
+    c = (; input_type=string(typeof(a)), guess, guess_source=seed_result.source, inversion_selection_policy,
+        selected_coordinate, selected_convention, overtone_index, selected_inversion, label_contract,
+        label_provenance, near_as_role, segment, angular_order, sheet_id, tolerance_cf, cf_minimum_iterations,
+        maximum_cf_iterations, tolerance_root, tolerance_stability, continuation_root_tolerance,
+        maximum_root_iterations, radius, initial_step, minimum_step, maximum_step, polish_options)
+    # The accepted path; `current` and `last_polish` are what the error branch below reports.
+    state = (; current=Ref{Any}(seed_result.seed), accepted_spins=T[], accepted_coordinates=T[],
+        accepted_roots=Complex{T}[], accepted_angular_A=Complex{T}[], continuation_rows=NamedTuple[],
+        rejected_continuation_rows=NamedTuple[], terminal_extrapolation_rows=NamedTuple[],
+        nia_restart_rows=NamedTuple[], last_polish=Ref{Any}(nothing))
     try
-        if guess === nothing
-            spin = seed_result.seed_spin
-            coordinate = selected_coordinate == :nu ? asin(spin) : spin
-            polished = _polish_frequency_root(mode, spin, current;
-                polish_options...)
-            append!(continuation_rows, [merge(row, (a=spin,
-                continuation_attempt=1, predictor=current))
-                for row in polished.history])
-            last_polish = polished
-            if !polished.converged
-                return failed_result(polished.omega,
-                    polished.stop_reason, (
-                        input_type=string(typeof(a)), guess_source=guess_source, spin_path=accepted_spins,
-                        continuation_rows=continuation_rows, rejected_continuation_rows=rejected_continuation_rows,
-                    ))
-            end
-            current = polished.omega
-            push!(accepted_spins, spin)
-            push!(accepted_coordinates, coordinate)
-            push!(accepted_roots, current)
-            push!(accepted_angular_A,
-                polished.evaluation.angular.angular_A)
+        failure = guess === nothing ? _labeled_track!(state, mode, aT, seed_result, c, failed_result) :
+            _labeled_polish_guess!(state, mode, aT, c, failed_result)
+        failure === nothing || return failure
+        return _labeled_gate(state, mode, aT, c, seed_result, _labeled_guard!(state, mode, aT, c), failed_result)
+    catch error
+        absorbable(error) || rethrow()
+        return failed_result(state.current[], :evaluation_error, (
+            input_type=c.input_type, spin_path=state.accepted_spins, continuation_rows=state.continuation_rows,
+            rejected_continuation_rows=state.rejected_continuation_rows, error=sprint(showerror, error),
+            last_polish=state.last_polish[],
+        ))
+    end
+end
 
-            target_coordinate = selected_coordinate == :nu ? asin(aT) : aT
-            sequence_anchor = _spin_sequence_anchor(mode, T)
-            # A two-end anchored seed is polished at the target itself.
-            sequence_target = selected_coordinate == :nu ||
-                guess_source == :packaged_two_end_anchor ?
-                target_coordinate : abs(aT) > sequence_anchor ?
-                copysign(sequence_anchor, aT) : aT
-            continuation_state = (; accepted_spins, accepted_coordinates,
-                accepted_roots, accepted_angular_A, continuation_rows,
+# The seed of the labeled solve: a segment seed, an explicit guess, the near-extremal ZDM asymptotic seed, the
+# near-algebraically-special anchor, the packaged spin-table seed, or the Schwarzschild seed.
+function _labeled_seed(mode::QNMMode, aT::T, label_contract, seed_options; guess, segment_seed, spin_seed, segment,
+        convention, inversion, automatic_inversion, automatic_coordinate) where {T}
+    seed_mode = guess === nothing && convention != :leaver &&
+        !ismissing(label_contract.schwarzschild_sequence_index) &&
+        label_contract.schwarzschild_sequence_index != mode.n ?
+        QNMMode(mode.s, mode.l, mode.m,
+            label_contract.schwarzschild_sequence_index, mode.branch) : mode
+    segment_seed === nothing || return segment_seed
+    guess === nothing || return (seed=_complex_of_type(T, guess), seed_spin=aT, source=:explicit_guess,
+        seed_inversion_index=inversion, seed_predictor=:explicit, seed_duplicate_distance=T(Inf))
+    automatic_coordinate && convention != :leaver && mode.n <= 4 && _near_extremal_zdm_seed_scope(mode, aT) &&
+        return _near_extremal_zdm_seed(mode, aT, inversion)
+    label_contract.algebraically_special_pair && return _near_as_anchor_seed(mode, aT, label_contract.near_as_role)
+    spin_seed !== nothing && segment == 0 && automatic_coordinate && convention == :overtone && automatic_inversion &&
+        return (seed=complex(T(real(spin_seed.seed)), T(imag(spin_seed.seed))), seed_spin=aT,
+            source=spin_seed.source, seed_inversion_index=spin_seed.inversion, seed_predictor=spin_seed.predictor,
+            seed_duplicate_distance=T(Inf))
+    return _schwarzschild_seed(seed_mode, T; seed_options...)
+end
+
+function _push_accepted!(state, spin, coordinate, polished)
+    push!(state.accepted_spins, spin)
+    push!(state.accepted_coordinates, coordinate)
+    push!(state.accepted_roots, polished.omega)
+    push!(state.accepted_angular_A, polished.evaluation.angular.angular_A)
+    return state
+end
+
+# An explicit guess: one polish at the target spin. Returns nothing once the root is in `state`, else the failure.
+function _labeled_polish_guess!(state, mode::QNMMode, aT::T, c, failed_result) where {T}
+    current = state.current[]
+    polished = _polish_frequency_root(mode, aT, current; c.polish_options...)
+    append!(state.continuation_rows, [merge(row, (a=aT,
+        continuation_attempt=1, predictor=current))
+        for row in polished.history])
+    state.last_polish[] = polished
+    if !polished.converged
+        classified = _classify_continuation_failure(mode,
+            polished.stop_reason, polished, aT, T[], Complex{T}[],
+            Complex{T}[], NamedTuple[(predictor=current,)];
+            sequence_segment=c.segment, after_birth=c.segment >= 1)
+        return failed_result(polished.omega,
+            classified.reason, merge((
+                input_type=c.input_type, guess_source=:explicit_guess, spin_path=T[aT],
+                continuation_rows=state.continuation_rows,
+                rejected_continuation_rows=state.rejected_continuation_rows,
+            ), classified.provenance))
+    end
+    state.current[] = polished.omega
+    _push_accepted!(state, aT, c.selected_coordinate == :nu ? asin(aT) : aT, polished)
+    return nothing
+end
+
+# Spin continuation from the seed to the target spin (with restarts across the negative imaginary axis), then the
+# terminal jump past the sequence anchor. Returns nothing once the root at aT is in `state`, else the failure.
+function _labeled_track!(state, mode::QNMMode, aT::T, seed_result, c, failed_result) where {T}
+    (; accepted_spins, accepted_coordinates, accepted_roots, accepted_angular_A, continuation_rows,
+        rejected_continuation_rows) = state
+    (; selected_coordinate, polish_options, segment, guess_source) = c
+    current = state.current[]
+    spin = seed_result.seed_spin
+    coordinate = selected_coordinate == :nu ? asin(spin) : spin
+    polished = _polish_frequency_root(mode, spin, current;
+        polish_options...)
+    append!(continuation_rows, [merge(row, (a=spin,
+        continuation_attempt=1, predictor=current))
+        for row in polished.history])
+    state.last_polish[] = polished
+    if !polished.converged
+        return failed_result(polished.omega,
+            polished.stop_reason, (
+                input_type=c.input_type, guess_source=guess_source, spin_path=accepted_spins,
+                continuation_rows=continuation_rows, rejected_continuation_rows=rejected_continuation_rows,
+            ))
+    end
+    state.current[] = polished.omega
+    _push_accepted!(state, spin, coordinate, polished)
+
+    target_coordinate = selected_coordinate == :nu ? asin(aT) : aT
+    sequence_anchor = _spin_sequence_anchor(mode, T)
+    # A two-end anchored seed is polished at the target itself.
+    sequence_target = selected_coordinate == :nu ||
+        guess_source == :packaged_two_end_anchor ?
+        target_coordinate : abs(aT) > sequence_anchor ?
+        copysign(sequence_anchor, aT) : aT
+    outcome = _continue_with_negative_imaginary_axis_restarts!(state, mode,
+        sequence_target; selected_coordinate, initial_step=c.initial_step,
+        minimum_step=c.minimum_step, maximum_step=c.maximum_step,
+        continuation_root_tolerance=c.continuation_root_tolerance,
+        polish_options, sequence_segment=segment)
+    state.current[] = accepted_roots[end]
+    if !outcome.completed
+        classified = _classify_continuation_failure(mode,
+            outcome.reason, outcome.polished, outcome.failed_spin,
+            accepted_spins, accepted_roots, accepted_angular_A,
+            rejected_continuation_rows; sequence_segment=segment,
+            after_birth=segment >= 1)
+        failure_provenance = merge((
+                input_type=c.input_type,
+                guess_source=guess_source,
+                spin_path=accepted_spins,
+                coordinate_path=accepted_coordinates,
+                continuation_coordinate=selected_coordinate,
+                continuation_rows=continuation_rows,
+                rejected_continuation_rows=
+                    rejected_continuation_rows,
+                failed_spin=outcome.failed_spin,
+                continuation_axis_touches=count(r -> r.accepted,
+                    state.nia_restart_rows),
+                nia_restart_rows=state.nia_restart_rows,
+                continuation_settings=(; polish_options,
+                    initial_step=c.initial_step, minimum_step=c.minimum_step, maximum_step=c.maximum_step,
+                    continuation_root_tolerance=c.continuation_root_tolerance),
+            ), classified.provenance)
+        return failed_result(outcome.polished.omega,
+            classified.reason, failure_provenance)
+    end
+    (selected_coordinate == :spin && sequence_target != aT) || return nothing
+    return _labeled_terminal!(state, mode, aT, sequence_target, c, failed_result)
+end
+
+# Past the sequence anchor in the spin coordinate: one cubic jump from the anchor to the target spin; when it does
+# not converge, continue in nu = asin(a) from the accepted path to the target in steps of 0.005 before the root is
+# certified or given up.
+function _labeled_terminal!(state, mode::QNMMode, aT::T, sequence_target, c, failed_result) where {T}
+    (; accepted_spins, accepted_coordinates, accepted_roots, accepted_angular_A, continuation_rows,
+        rejected_continuation_rows, terminal_extrapolation_rows) = state
+    (; selected_coordinate, polish_options, minimum_step, maximum_step, continuation_root_tolerance) = c
+    predictor = _terminal_extrapolation_predictor(
+        accepted_coordinates, accepted_roots, aT)
+    polished = _polish_frequency_root(mode, aT, predictor;
+        polish_options...)
+    append!(continuation_rows, [merge(row, (
+        a=aT, continuation_attempt=1,
+        predictor=predictor,
+        terminal_extrapolation=true))
+        for row in polished.history])
+    state.last_polish[] = polished
+    if !polished.converged
+        nu_state = (; accepted_spins=copy(accepted_spins),
+            accepted_coordinates=asin.(accepted_spins), accepted_roots=copy(accepted_roots),
+            accepted_angular_A=copy(accepted_angular_A), continuation_rows,
+            rejected_continuation_rows, last_polish=Ref{Any}(polished),
+            nia_restart_rows=NamedTuple[])
+        nu_outcome = _continue_in_spin!(nu_state, mode, asin(aT); selected_coordinate=:nu,
+            initial_step=T(0.005), minimum_step, maximum_step=T(0.005),
+            continuation_root_tolerance, polish_options)
+        if nu_outcome.completed && nu_state.last_polish[].converged
+            polished = nu_state.last_polish[]
+            predictor = polished.omega
+            state.last_polish[] = polished
+        end
+    end
+    if !polished.converged
+        terminal_provenance = (
+            input_type=c.input_type,
+            guess_source=:terminal_cubic_extrapolation,
+            spin_path=accepted_spins,
+            coordinate_path=accepted_coordinates,
+            continuation_coordinate=selected_coordinate,
+            continuation_rows=continuation_rows,
+            rejected_continuation_rows=
                 rejected_continuation_rows,
-                last_polish=Ref{Any}(last_polish),
-                nia_restart_rows=NamedTuple[])
-            outcome = _continue_with_negative_imaginary_axis_restarts!(continuation_state, mode,
-                sequence_target; selected_coordinate, initial_step,
-                minimum_step, maximum_step, continuation_root_tolerance,
-                polish_options, sequence_segment=segment)
-            last_polish = continuation_state.last_polish[]
-            current = accepted_roots[end]
-            if !outcome.completed
-                classified = _classify_continuation_failure(mode,
-                    outcome.reason, outcome.polished, outcome.failed_spin,
-                    accepted_spins, accepted_roots, accepted_angular_A,
-                    rejected_continuation_rows; sequence_segment=segment,
-                    after_birth=segment >= 1)
-                failure_provenance = merge((
-                        input_type=string(typeof(a)),
-                        guess_source=guess_source,
-                        spin_path=accepted_spins,
-                        coordinate_path=accepted_coordinates,
-                        continuation_coordinate=selected_coordinate,
-                        continuation_rows=continuation_rows,
-                        rejected_continuation_rows=
-                            rejected_continuation_rows,
-                        failed_spin=outcome.failed_spin,
-                        continuation_axis_touches=count(r -> r.accepted,
-                            continuation_state.nia_restart_rows),
-                        nia_restart_rows=continuation_state.nia_restart_rows,
-                        continuation_settings=(; polish_options,
-                            initial_step, minimum_step, maximum_step,
-                            continuation_root_tolerance),
-                    ), classified.provenance)
-                return failed_result(outcome.polished.omega,
-                    classified.reason, failure_provenance)
-            end
-
-            if selected_coordinate == :spin && sequence_target != aT
-                predictor = _terminal_extrapolation_predictor(
-                    accepted_coordinates, accepted_roots, aT)
-                polished = _polish_frequency_root(mode, aT, predictor;
-                    polish_options...)
-                append!(continuation_rows, [merge(row, (
-                    a=aT, continuation_attempt=1,
-                    predictor=predictor,
-                    terminal_extrapolation=true))
-                    for row in polished.history])
-                last_polish = polished
-                # Float64: instead of the one jump from the anchor, continue in nu = asin(a) from the accepted
-                # path to the target in steps of 0.005 before the root is certified or given up.
-                if !polished.converged && T === Float64
-                    nu_state = (; accepted_spins=copy(accepted_spins),
-                        accepted_coordinates=asin.(accepted_spins), accepted_roots=copy(accepted_roots),
-                        accepted_angular_A=copy(accepted_angular_A), continuation_rows,
-                        rejected_continuation_rows, last_polish=Ref{Any}(polished),
-                        nia_restart_rows=NamedTuple[])
-                    nu_outcome = _continue_in_spin!(nu_state, mode, asin(aT); selected_coordinate=:nu,
-                        initial_step=T(0.005), minimum_step, maximum_step=T(0.005),
-                        continuation_root_tolerance, polish_options)
-                    if nu_outcome.completed && nu_state.last_polish[].converged
-                        polished = nu_state.last_polish[]
-                        predictor = polished.omega
-                        last_polish = polished
-                    end
-                end
-                if !polished.converged
-                    terminal_provenance = (
-                        input_type=string(typeof(a)),
-                        guess_source=:terminal_cubic_extrapolation,
-                        spin_path=accepted_spins,
-                        coordinate_path=accepted_coordinates,
-                        continuation_coordinate=selected_coordinate,
-                        continuation_rows=continuation_rows,
-                        rejected_continuation_rows=
-                            rejected_continuation_rows,
-                        terminal_predictor=predictor,
-                        terminal_stop_reason=polished.stop_reason,
-                        continuation_axis_touches=count(r -> r.accepted,
-                            continuation_state.nia_restart_rows),
-                        nia_restart_rows=continuation_state.nia_restart_rows,
-                    )
-                    if T === Float64 && _root_equation(polished.evaluation) == :leaver_continued_fraction
-                        certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
-                            polished.omega, sheet_id, angular_order, selected_inversion, cf_minimum_iterations,
-                            maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
-                        certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
-                            mode, certificate, Float64(aT), selected_convention, overtone_index,
-                            selected_inversion, merge(label_provenance, terminal_provenance))::LeaverResult
-                        terminal_provenance = merge(terminal_provenance,
-                            (float64_certificate=_certificate_provenance(certificate),))
-                    end
-                    return failed_result(polished.omega,
-                        polished.stop_reason, terminal_provenance)
-                end
-                branch_guard = _continuation_branch_guard(
-                    accepted_coordinates, accepted_roots, aT, predictor,
-                    polished.omega, continuation_root_tolerance)
-                push!(terminal_extrapolation_rows, (
-                    a=aT, attempted_step=abs(aT - sequence_target), attempt=1, predictor=predictor,
-                    candidate=polished.omega, converged=polished.converged,
-                    stop_reason=:terminal_extrapolation_diagnostic, branch_discrepancy=branch_guard.discrepancy,
-                    branch_allowance=branch_guard.allowance,
-                ))
-                current = polished.omega
-                push!(accepted_spins, aT)
-                push!(accepted_coordinates, aT)
-                push!(accepted_roots, current)
-                push!(accepted_angular_A,
-                    polished.evaluation.angular.angular_A)
-            end
-        else
-            polished = _polish_frequency_root(mode, aT, current;
-                polish_options...)
-            append!(continuation_rows, [merge(row, (a=aT,
-                continuation_attempt=1, predictor=current))
-                for row in polished.history])
-            last_polish = polished
-            if !polished.converged
-                classified = _classify_continuation_failure(mode,
-                    polished.stop_reason, polished, aT, T[], Complex{T}[],
-                    Complex{T}[], NamedTuple[(predictor=current,)];
-                    sequence_segment=segment, after_birth=segment >= 1)
-                return failed_result(polished.omega,
-                    classified.reason, merge((
-                        input_type=string(typeof(a)), guess_source=:explicit_guess, spin_path=T[aT],
-                        continuation_rows=continuation_rows, rejected_continuation_rows=rejected_continuation_rows,
-                    ), classified.provenance))
-            end
-            current = polished.omega
-            push!(accepted_spins, aT)
-            push!(accepted_coordinates,
-                selected_coordinate == :nu ? asin(aT) : aT)
-            push!(accepted_roots, current)
-            push!(accepted_angular_A,
-                polished.evaluation.angular.angular_A)
+            terminal_predictor=predictor,
+            terminal_stop_reason=polished.stop_reason,
+            continuation_axis_touches=count(r -> r.accepted,
+                state.nia_restart_rows),
+            nia_restart_rows=state.nia_restart_rows,
+        )
+        if _root_equation(polished.evaluation) == :leaver_continued_fraction
+            certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
+                polished.omega, c.sheet_id, c.angular_order, c.selected_inversion, c.cf_minimum_iterations,
+                c.maximum_cf_iterations, c.tolerance_root, c.tolerance_stability, c.segment)
+            certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
+                mode, certificate, Float64(aT), c.selected_convention, c.overtone_index,
+                c.selected_inversion, merge(c.label_provenance, terminal_provenance))::LeaverResult
+            terminal_provenance = merge(terminal_provenance,
+                (float64_certificate=_certificate_provenance(certificate),))
         end
+        return failed_result(polished.omega,
+            polished.stop_reason, terminal_provenance)
+    end
+    branch_guard = _continuation_branch_guard(
+        accepted_coordinates, accepted_roots, aT, predictor,
+        polished.omega, continuation_root_tolerance)
+    push!(terminal_extrapolation_rows, (
+        a=aT, attempted_step=abs(aT - sequence_target), attempt=1, predictor=predictor,
+        candidate=polished.omega, converged=polished.converged,
+        stop_reason=:terminal_extrapolation_diagnostic, branch_discrepancy=branch_guard.discrepancy,
+        branch_allowance=branch_guard.allowance,
+    ))
+    state.current[] = polished.omega
+    _push_accepted!(state, aT, aT, polished)
+    return nothing
+end
 
-        mst_primary = nothing
-        final_primary = nothing
-        if _near_as_mano_suzuki_takasugi_finalization_required(
-                mode, aT, T, near_as_role)
-            mst_primary = _polish_mano_suzuki_takasugi_incidence_root(
-                mode, Float64(aT), ComplexF64(current); angular_order, sheet_id=Symbol(sheet_id, :_mst_final),
-                root_tolerance=Float64(max(tolerance_root, T(2.0e-11))), maximum_root_iterations,
-                trust_radius=Float64(radius),
-            )
-            guard = mst_primary.converged ? _polish_mano_suzuki_takasugi_incidence_root(
-                mode, Float64(aT), ComplexF64(mst_primary.omega); angular_order=angular_order + 8,
-                sheet_id=Symbol(sheet_id, :_mst_guard), root_tolerance=Float64(max(tolerance_root, T(2.0e-11))),
-                maximum_root_iterations, trust_radius=Float64(radius), derivative_step_scale=0.5,
-            ) : mst_primary
-            current = mst_primary.omega
-        else
-            # Continuation deliberately uses a looser Float64 tolerance so that
-            # an ill-conditioned high-overtone root can be tracked cheaply.
-            # Polish at the final tolerance before measuring the independent
-            # angular-order drift; otherwise ordinary Newton correction is
-            # misclassified as a branch jump.
-            final_primary = _polish_frequency_root(mode, aT, current;
-                polish_options...,
-                sheet_id=Symbol(sheet_id, :_final_primary),
-                root_tolerance=tolerance_root)
-            current = final_primary.omega
-            guard = final_primary.converged ? _polish_frequency_root(
-                mode, aT, current;
-                polish_options...,
-                angular_order=angular_order + 8,
-                sheet_id=Symbol(sheet_id, :_guard),
-                cf_minimum_iterations=cf_minimum_iterations + 100,
-                root_tolerance=tolerance_root,
-                derivative_step_scale=T(0.5)) : final_primary
+# The final polish at the final tolerance and the independent guard at a higher angular order (in the near
+# algebraically special window of l = 2, |m| = 2: the MST incidence root instead).
+function _labeled_guard!(state, mode::QNMMode, aT::T, c) where {T}
+    (; polish_options, angular_order, sheet_id, tolerance_root, maximum_root_iterations, radius) = c
+    current = state.current[]
+    if _near_as_mano_suzuki_takasugi_finalization_required(
+            mode, aT, T, c.near_as_role)
+        mst_primary = _polish_mano_suzuki_takasugi_incidence_root(
+            mode, Float64(aT), ComplexF64(current); angular_order, sheet_id=Symbol(sheet_id, :_mst_final),
+            root_tolerance=Float64(max(tolerance_root, T(2.0e-11))), maximum_root_iterations,
+            trust_radius=Float64(radius),
+        )
+        guard = mst_primary.converged ? _polish_mano_suzuki_takasugi_incidence_root(
+            mode, Float64(aT), ComplexF64(mst_primary.omega); angular_order=angular_order + 8,
+            sheet_id=Symbol(sheet_id, :_mst_guard), root_tolerance=Float64(max(tolerance_root, T(2.0e-11))),
+            maximum_root_iterations, trust_radius=Float64(radius), derivative_step_scale=0.5,
+        ) : mst_primary
+        state.current[] = mst_primary.omega
+        return (; mst_primary, final_primary=nothing, guard)
+    end
+    # Continuation deliberately uses a looser Float64 tolerance so that
+    # an ill-conditioned high-overtone root can be tracked cheaply.
+    # Polish at the final tolerance before measuring the independent
+    # angular-order drift; otherwise ordinary Newton correction is
+    # misclassified as a branch jump.
+    final_primary = _polish_frequency_root(mode, aT, current;
+        polish_options...,
+        sheet_id=Symbol(sheet_id, :_final_primary),
+        root_tolerance=tolerance_root)
+    current = final_primary.omega
+    state.current[] = current
+    guard = final_primary.converged ? _polish_frequency_root(
+        mode, aT, current;
+        polish_options...,
+        angular_order=angular_order + 8,
+        sheet_id=Symbol(sheet_id, :_guard),
+        cf_minimum_iterations=c.cf_minimum_iterations + 100,
+        root_tolerance=tolerance_root,
+        derivative_step_scale=T(0.5)) : final_primary
+    return (; mst_primary=nothing, final_primary, guard)
+end
+
+# The gates on the guarded root and the result; a Float64 root that fails them gets the second-layer certificate.
+function _labeled_gate(state, mode::QNMMode, aT::T, c, seed_result, finalized, failed_result) where {T}
+    (; mst_primary, final_primary, guard) = finalized
+    (; accepted_spins, accepted_coordinates, accepted_roots, continuation_rows, rejected_continuation_rows,
+        terminal_extrapolation_rows, nia_restart_rows) = state
+    (; input_type, guess, guess_source, inversion_selection_policy, selected_coordinate, selected_convention,
+        overtone_index, selected_inversion, label_contract, label_provenance, near_as_role, segment, angular_order,
+        sheet_id, tolerance_cf, cf_minimum_iterations, maximum_cf_iterations, tolerance_root, tolerance_stability,
+        minimum_step, maximum_step, polish_options) = c
+    initial_step = c.initial_step
+    current = state.current[]
+    axis_touches = count(r -> r.accepted, nia_restart_rows)
+    float64_provenance = (
+        input_type=input_type,
+        working_type=string(T),
+        guess_source=guess_source,
+        inversion_selection_policy,
+        seed_inversion_index=seed_result.seed_inversion_index,
+        seed_predictor=seed_result.seed_predictor,
+        seed_duplicate_distance=seed_result.seed_duplicate_distance,
+        spin_path=accepted_spins,
+        coordinate_path=accepted_coordinates,
+        continuation_coordinate=selected_coordinate,
+        spin_sequence_anchor=_spin_sequence_anchor(mode, T),
+        terminal_extrapolation=selected_coordinate == :spin &&
+            guess === nothing &&
+            abs(aT) > _spin_sequence_anchor(mode, T),
+        initial_spin_step=initial_step,
+        maximum_spin_step=maximum_step,
+        minimum_spin_step=minimum_step,
+        continuation_rows=continuation_rows,
+        rejected_continuation_rows=rejected_continuation_rows,
+        terminal_extrapolation_rows=terminal_extrapolation_rows,
+        continuation_axis_touches=axis_touches,
+        nia_restart_rows,
+        near_as_mst_finalization=mst_primary !== nothing,
+        mst_primary_rows=mst_primary === nothing ?
+            NamedTuple[] : mst_primary.history,
+        final_primary_rows=final_primary === nothing ?
+            NamedTuple[] : final_primary.history,
+        guard_rows=guard.history,
+    )
+    guard_root_equation = _root_equation(guard.evaluation)
+    if !guard.converged
+        guard_certificate = nothing
+        if guard_root_equation == :leaver_continued_fraction
+            guard_certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
+                guard.omega, Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion,
+                cf_minimum_iterations, maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
+            guard_certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
+                mode, guard_certificate, Float64(aT), selected_convention, overtone_index, selected_inversion,
+                merge(label_provenance, float64_provenance, (float64_stop_reason=guard.stop_reason,)))::LeaverResult
         end
-        float64_provenance = (
-            input_type=string(typeof(a)),
+        return failed_result(
+            guard.omega, guard.stop_reason, (
+            input_type=input_type, spin_path=accepted_spins,
+            coordinate_path=accepted_coordinates,
+            continuation_coordinate=selected_coordinate,
+            continuation_rows=continuation_rows,
+            rejected_continuation_rows=rejected_continuation_rows,
+            guard_rows=guard.history,
+            float64_certificate=guard_certificate === nothing ? nothing :
+                _certificate_provenance(guard_certificate),
+        ))
+    end
+    root_drift = T(abs(guard.omega - current) /
+        max(one(T), abs(guard.omega), abs(current)))
+    final = guard.evaluation
+    root_equation = _root_equation(final)
+    final_root_residual = T(_root_residual(final))
+    effective_root_tolerance = root_equation == :gsn_mst_incidence ?
+        max(tolerance_root, T(2.0e-11)) : tolerance_root
+    cf_tail_gate_passed = final.error <= tolerance_cf
+    near_as_cf_tail_ceiling = T(1.0e-8)
+    near_as_root_position_certificate =
+        root_equation == :leaver_continued_fraction &&
+        _near_as_complete_scope(mode, near_as_role) &&
+        near_as_role == :unconventional &&
+        zero(T) < abs(aT) < T(_KERR_L2_M2_NEAR_AS_ANCHOR_SPIN) &&
+        root_drift <= tolerance_stability &&
+        final_root_residual <= effective_root_tolerance &&
+        final.error <= near_as_cf_tail_ceiling
+    accepted = root_drift <= tolerance_stability &&
+        final_root_residual <= effective_root_tolerance &&
+        (cf_tail_gate_passed || near_as_root_position_certificate)
+    conditioned_root_limit = _conditioned_root_residual_limit(
+        mode, aT, tolerance_root)
+    conditioned_stability_limit = _conditioned_root_stability_limit(
+        mode, aT, tolerance_stability)
+    conditioned_root = root_equation == :leaver_continued_fraction &&
+        !accepted && root_drift <= conditioned_stability_limit &&
+        final_root_residual <= conditioned_root_limit &&
+        cf_tail_gate_passed &&
+        ((hasproperty(guard, :conditioned) && guard.conditioned) ||
+         (final_primary !== nothing &&
+          hasproperty(final_primary, :conditioned) &&
+          final_primary.conditioned))
+    terminal_label_uncertain = false
+    # Float64 root that failed the gates (an :estimated one keeps its status): second-layer certificate.
+    certificate = nothing
+    if !accepted && !conditioned_root &&
+            root_equation == :leaver_continued_fraction
+        certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT, guard.omega,
+            Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion, cf_minimum_iterations,
+            maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
+        certificate.status == :failed || return Base.inferencebarrier(_gate_certificate_result)(
+            mode, certificate, aT, selected_convention, overtone_index, selected_inversion,
+            terminal_extrapolation_rows, accepted_roots,
+            merge(label_provenance, float64_provenance, (float64_root_drift=root_drift,
+                float64_root_residual=final_root_residual, float64_cf_error=final.error)))::LeaverResult
+    end
+    # A cubic jump from the sequence anchor cannot resolve the overtone
+    # label once the predicted move exceeds a fraction of the local level
+    # spacing, which near extremality is set by the surface gravity.
+    if accepted && !isempty(terminal_extrapolation_rows)
+        terminal_row = last(terminal_extrapolation_rows)
+        kappa = sqrt(max(zero(T), one(T) - aT^2)) /
+            (2 * (one(T) + sqrt(max(zero(T), one(T) - aT^2))))
+        jump = abs(terminal_row.candidate - accepted_roots[end-1])
+        if jump > kappa / 4
+            accepted = false
+            conditioned_root = true
+            terminal_label_uncertain = true
+        end
+    end
+    # Next to the NIA cut the Float64 continued fraction is poorly
+    # conditioned. A re-emerged segment's Float64 root within 2h of the
+    # axis is kept only when the second-layer certificate at the deeper
+    # continued fraction verifies it (_near_axis_float64_check).
+    near_axis_check = nothing
+    if segment >= 1 && (accepted || conditioned_root) &&
+            root_equation == :leaver_continued_fraction &&
+            _branch_sign(mode) * real(guard.omega) <
+            2 * T(_root_derivative_step(T, guard.omega)) *
+                _near_extremal_derivative_scale(mode, aT)
+        near_axis_check = _near_axis_float64_check(
+            mode, aT, guard.omega, polish_options;
+            root_tolerance=tolerance_root,
+            stability_tolerance=tolerance_stability)
+        if !near_axis_check.verified
+            accepted = false
+            conditioned_root = get(near_axis_check, :estimated, false)
+        end
+    end
+    stop_reason = near_axis_check !== nothing &&
+        !near_axis_check.verified ? :near_axis_precision_unverified :
+        terminal_label_uncertain ?
+        :terminal_extrapolation_label_uncertain :
+        accepted ? :accepted : conditioned_root ?
+        :conditioned_near_extremal_cf_floor :
+        (root_drift > tolerance_stability ? :root_stability_gate :
+         final_root_residual > effective_root_tolerance ?
+            (root_equation == :gsn_mst_incidence ?
+                :mst_incidence_residual_gate : :raw_cf_residual_gate) :
+         root_equation == :gsn_mst_incidence ?
+            :mst_representation_error_gate : :lentz_error_gate)
+    output_inversion = root_equation == :gsn_mst_incidence ?
+        missing : selected_inversion
+    return LeaverResult(
+        mode, selected_convention, overtone_index,
+        output_inversion, aT, guard.omega,
+        final.angular.angular_A, final.angular.lambda,
+        final.angular.mixing, final.value, T(final.error),
+        final.iterations, final_root_residual,
+        T(final.angular.residual), _precision_bits(T),
+        accepted ? :accepted : conditioned_root ? :estimated : :failed,
+        stop_reason,
+        (
+            input_type=input_type,
             working_type=string(T),
             guess_source=guess_source,
             inversion_selection_policy,
             seed_inversion_index=seed_result.seed_inversion_index,
+            seed_spin=seed_result.seed_spin,
             seed_predictor=seed_result.seed_predictor,
             seed_duplicate_distance=seed_result.seed_duplicate_distance,
+            convention=selected_convention,
+            overtone_index=overtone_index,
+            inversion_index=selected_inversion,
+            label_convention=label_contract.label_convention,
+            branch_label=label_contract.branch_label,
+            endpoint_kind=label_contract.endpoint_kind,
+            near_as_role,
+            schwarzschild_sequence_index=
+                label_contract.schwarzschild_sequence_index,
+            schwarzschild_multiplicity=
+                label_contract.schwarzschild_multiplicity,
+            sequence_segment=segment,
+            near_axis_precision_check=near_axis_check,
+            continuation_axis_touches=axis_touches,
+            nia_restart_rows,
+            family=_near_extremal_family(mode, aT, guard.omega),
             spin_path=accepted_spins,
             coordinate_path=accepted_coordinates,
             continuation_coordinate=selected_coordinate,
-            spin_sequence_anchor=_spin_sequence_anchor(mode, T),
-            terminal_extrapolation=selected_coordinate == :spin &&
-                guess === nothing &&
-                abs(aT) > _spin_sequence_anchor(mode, T),
-            initial_spin_step=initial_step,
             maximum_spin_step=maximum_step,
             minimum_spin_step=minimum_step,
-            continuation_rows=continuation_rows,
-            rejected_continuation_rows=rejected_continuation_rows,
-            terminal_extrapolation_rows=terminal_extrapolation_rows,
-            continuation_axis_touches=guess === nothing ?
-                count(r -> r.accepted, continuation_state.nia_restart_rows) : 0,
-            nia_restart_rows=guess === nothing ?
-                continuation_state.nia_restart_rows : NamedTuple[],
+            angular_route=final.angular.metadata.route,
+            angular_sheet=final.angular.sheet_id,
+            angular_order=final.angular.truncation_order,
+            cf_minimum_iterations=cf_minimum_iterations + 100,
+            cf_maximum_iterations=maximum_cf_iterations,
+            cf_tolerance=tolerance_cf,
+            root_tolerance=tolerance_root,
+            effective_root_tolerance,
+            conditioned_root_limit,
+            conditioned_stability_limit,
+            conditioned_root,
+            stability_tolerance=tolerance_stability,
+            root_drift=root_drift,
+            root_equation,
+            acceptance_basis=near_as_root_position_certificate ?
+                :near_as_root_position_stability : root_equation,
+            cf_tail_gate_passed,
+            near_as_cf_tail_ceiling,
+            radial_cf_applicable=
+                root_equation == :leaver_continued_fraction,
             near_as_mst_finalization=mst_primary !== nothing,
             mst_primary_rows=mst_primary === nothing ?
                 NamedTuple[] : mst_primary.history,
             final_primary_rows=final_primary === nothing ?
                 NamedTuple[] : final_primary.history,
+            continuation_rows=continuation_rows,
+            rejected_continuation_rows=rejected_continuation_rows,
             guard_rows=guard.history,
-        )
-        guard_root_equation = _root_equation(guard.evaluation)
-        if !guard.converged
-            guard_certificate = nothing
-            if T === Float64 && guard_root_equation == :leaver_continued_fraction
-                guard_certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT,
-                    guard.omega, Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion,
-                    cf_minimum_iterations, maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
-                guard_certificate.status == :failed || return Base.inferencebarrier(_float64_certificate_result)(
-                    mode, guard_certificate, Float64(aT), selected_convention, overtone_index, selected_inversion,
-                    merge(label_provenance, float64_provenance, (float64_stop_reason=guard.stop_reason,)))::LeaverResult
-            end
-            return failed_result(
-                guard.omega, guard.stop_reason, (
-                input_type=string(typeof(a)), spin_path=accepted_spins,
-                coordinate_path=accepted_coordinates,
-                continuation_coordinate=selected_coordinate,
-                continuation_rows=continuation_rows,
-                rejected_continuation_rows=rejected_continuation_rows,
-                guard_rows=guard.history,
-                float64_certificate=guard_certificate === nothing ? nothing :
-                    _certificate_provenance(guard_certificate),
-            ))
-        end
-        root_drift = T(abs(guard.omega - current) /
-            max(one(T), abs(guard.omega), abs(current)))
-        final = guard.evaluation
-        root_equation = _root_equation(final)
-        final_root_residual = T(_root_residual(final))
-        effective_root_tolerance = root_equation == :gsn_mst_incidence ?
-            max(tolerance_root, T(2.0e-11)) : tolerance_root
-        cf_tail_gate_passed = final.error <= tolerance_cf
-        near_as_cf_tail_ceiling = T(1.0e-8)
-        near_as_root_position_certificate =
-            root_equation == :leaver_continued_fraction &&
-            _near_as_complete_scope(mode, near_as_role) &&
-            near_as_role == :unconventional &&
-            zero(T) < abs(aT) < T(_KERR_L2_M2_NEAR_AS_ANCHOR_SPIN) &&
-            root_drift <= tolerance_stability &&
-            final_root_residual <= effective_root_tolerance &&
-            final.error <= near_as_cf_tail_ceiling
-        accepted = root_drift <= tolerance_stability &&
-            final_root_residual <= effective_root_tolerance &&
-            (cf_tail_gate_passed || near_as_root_position_certificate)
-        conditioned_root_limit = _conditioned_root_residual_limit(
-            mode, aT, tolerance_root)
-        conditioned_stability_limit = _conditioned_root_stability_limit(
-            mode, aT, tolerance_stability)
-        conditioned_root = root_equation == :leaver_continued_fraction &&
-            !accepted && root_drift <= conditioned_stability_limit &&
-            final_root_residual <= conditioned_root_limit &&
-            cf_tail_gate_passed &&
-            ((hasproperty(guard, :conditioned) && guard.conditioned) ||
-             (final_primary !== nothing &&
-              hasproperty(final_primary, :conditioned) &&
-              final_primary.conditioned))
-        terminal_label_uncertain = false
-        # Float64 root that failed the gates (an :estimated one keeps its status): second-layer certificate.
-        certificate = nothing
-        if !accepted && !conditioned_root && T === Float64 &&
-                root_equation == :leaver_continued_fraction
-            certificate = Base.inferencebarrier(_site_float64_certificate)(mode, aT, guard.omega,
-                Symbol(sheet_id, :_guard), angular_order + 8, selected_inversion, cf_minimum_iterations,
-                maximum_cf_iterations, tolerance_root, tolerance_stability, segment)
-            certificate.status == :failed || return Base.inferencebarrier(_gate_certificate_result)(
-                mode, certificate, aT, selected_convention, overtone_index, selected_inversion,
-                terminal_extrapolation_rows, accepted_roots,
-                merge(label_provenance, float64_provenance, (float64_root_drift=root_drift,
-                    float64_root_residual=final_root_residual, float64_cf_error=final.error)))::LeaverResult
-        end
-        # A cubic jump from the sequence anchor cannot resolve the overtone
-        # label once the predicted move exceeds a fraction of the local level
-        # spacing, which near extremality is set by the surface gravity.
-        if accepted && !isempty(terminal_extrapolation_rows)
-            terminal_row = last(terminal_extrapolation_rows)
-            kappa = sqrt(max(zero(T), one(T) - aT^2)) /
-                (2 * (one(T) + sqrt(max(zero(T), one(T) - aT^2))))
-            jump = abs(terminal_row.candidate - accepted_roots[end-1])
-            if jump > kappa / 4
-                accepted = false
-                conditioned_root = true
-                terminal_label_uncertain = true
-            end
-        end
-        # Next to the NIA cut the Float64 continued fraction is poorly
-        # conditioned. A re-emerged segment's Float64 root within 2h of the
-        # axis is kept only when the second-layer certificate at the deeper
-        # continued fraction verifies it (_near_axis_float64_check).
-        near_axis_check = nothing
-        if segment >= 1 && T === Float64 && (accepted || conditioned_root) &&
-                root_equation == :leaver_continued_fraction &&
-                _branch_sign(mode) * real(guard.omega) <
-                2 * T(_root_derivative_step(T, guard.omega)) *
-                    _near_extremal_derivative_scale(mode, aT)
-            near_axis_check = _near_axis_float64_check(
-                mode, aT, guard.omega, polish_options;
-                root_tolerance=tolerance_root,
-                stability_tolerance=tolerance_stability)
-            if !near_axis_check.verified
-                accepted = false
-                conditioned_root = get(near_axis_check, :estimated, false)
-            end
-        end
-        stop_reason = near_axis_check !== nothing &&
-            !near_axis_check.verified ? :near_axis_precision_unverified :
-            terminal_label_uncertain ?
-            :terminal_extrapolation_label_uncertain :
-            accepted ? :accepted : conditioned_root ?
-            :conditioned_near_extremal_cf_floor :
-            (root_drift > tolerance_stability ? :root_stability_gate :
-             final_root_residual > effective_root_tolerance ?
-                (root_equation == :gsn_mst_incidence ?
-                    :mst_incidence_residual_gate : :raw_cf_residual_gate) :
-             root_equation == :gsn_mst_incidence ?
-                :mst_representation_error_gate : :lentz_error_gate)
-        output_inversion = root_equation == :gsn_mst_incidence ?
-            missing : selected_inversion
-        return LeaverResult(
-            mode, selected_convention, overtone_index,
-            output_inversion, aT, guard.omega,
-            final.angular.angular_A, final.angular.lambda,
-            final.angular.mixing, final.value, T(final.error),
-            final.iterations, final_root_residual,
-            T(final.angular.residual), _precision_bits(T),
-            accepted ? :accepted : conditioned_root ? :estimated : :failed,
-            stop_reason,
-            (
-                input_type=string(typeof(a)),
-                working_type=string(T),
-                guess_source=guess_source,
-                inversion_selection_policy,
-                seed_inversion_index=seed_result.seed_inversion_index,
-                seed_spin=seed_result.seed_spin,
-                seed_predictor=seed_result.seed_predictor,
-                seed_duplicate_distance=seed_result.seed_duplicate_distance,
-                convention=selected_convention,
-                overtone_index=overtone_index,
-                inversion_index=selected_inversion,
-                label_convention=label_contract.label_convention,
-                branch_label=label_contract.branch_label,
-                endpoint_kind=label_contract.endpoint_kind,
-                near_as_role,
-                schwarzschild_sequence_index=
-                    label_contract.schwarzschild_sequence_index,
-                schwarzschild_multiplicity=
-                    label_contract.schwarzschild_multiplicity,
-                sequence_segment=segment,
-                near_axis_precision_check=near_axis_check,
-                continuation_axis_touches=guess === nothing ?
-                    count(r -> r.accepted, continuation_state.nia_restart_rows) : 0,
-                nia_restart_rows=guess === nothing ?
-                    continuation_state.nia_restart_rows : NamedTuple[],
-                family=_near_extremal_family(mode, aT, guard.omega),
-                spin_path=accepted_spins,
-                coordinate_path=accepted_coordinates,
-                continuation_coordinate=selected_coordinate,
-                maximum_spin_step=maximum_step,
-                minimum_spin_step=minimum_step,
-                angular_route=final.angular.metadata.route,
-                angular_sheet=final.angular.sheet_id,
-                angular_order=final.angular.truncation_order,
-                cf_minimum_iterations=cf_minimum_iterations + 100,
-                cf_maximum_iterations=maximum_cf_iterations,
-                cf_tolerance=tolerance_cf,
-                root_tolerance=tolerance_root,
-                effective_root_tolerance,
-                conditioned_root_limit,
-                conditioned_stability_limit,
-                conditioned_root,
-                stability_tolerance=tolerance_stability,
-                root_drift=root_drift,
-                root_equation,
-                acceptance_basis=near_as_root_position_certificate ?
-                    :near_as_root_position_stability : root_equation,
-                cf_tail_gate_passed,
-                near_as_cf_tail_ceiling,
-                radial_cf_applicable=
-                    root_equation == :leaver_continued_fraction,
-                near_as_mst_finalization=mst_primary !== nothing,
-                mst_primary_rows=mst_primary === nothing ?
-                    NamedTuple[] : mst_primary.history,
-                final_primary_rows=final_primary === nothing ?
-                    NamedTuple[] : final_primary.history,
-                continuation_rows=continuation_rows,
-                rejected_continuation_rows=rejected_continuation_rows,
-                guard_rows=guard.history,
-                upstream_qnm_commit=
-                    "f3abd18e59828e7e7d75d07f20c7cbc87925edfa",
-            ),
-        )
-    catch error
-        absorbable(error) || rethrow()
-        return failed_result(current, :evaluation_error, (
-            input_type=string(typeof(a)), spin_path=accepted_spins, continuation_rows=continuation_rows,
-            rejected_continuation_rows=rejected_continuation_rows, error=sprint(showerror, error),
-            last_polish=last_polish,
-        ))
-    end
+            upstream_qnm_commit=
+                "f3abd18e59828e7e7d75d07f20c7cbc87925edfa",
+        ),
+    )
 end
