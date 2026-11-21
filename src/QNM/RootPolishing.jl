@@ -1,3 +1,7 @@
+# `result` with the given fields replaced.
+_with(result::LeaverResult; kwargs...) =
+    LeaverResult((haskey(kwargs, f) ? kwargs[f] : getfield(result, f) for f in fieldnames(LeaverResult))...)
+
 const _SCHWARZSCHILD_SEEDS = Dict{NTuple{3,Int},ComplexF64}(
     (-2, 2, 0) => 0.37367168441804185 - 0.08896231568893566im,
     (-2, 2, 1) => 0.34671099687916350 - 0.27391487529123500im,
@@ -1238,14 +1242,7 @@ function _tabulated_extremal_root(mode::QNMMode, a::T; guess, convention::Symbol
     if family == :ZDM
         endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
             sheet_id, convention, requested_inversion_index=inversion_index)
-        return LeaverResult(endpoint.mode, endpoint.convention,
-            endpoint.overtone_index, endpoint.inversion_index, endpoint.a,
-            endpoint.omega, endpoint.angular_A, endpoint.lambda,
-            endpoint.mixing, endpoint.cf_value, endpoint.cf_error,
-            endpoint.cf_iterations, endpoint.root_residual,
-            endpoint.angular_residual, endpoint.precision_bits,
-            endpoint.status, endpoint.stop_reason,
-            merge(endpoint.provenance, (family_classification=:ZDM,
+        return _with(endpoint; provenance=merge(endpoint.provenance, (family_classification=:ZDM,
                 extremal_seed_source=:packaged_table)))
     end
     exact = extremal_qnm_root(mode, complex(T(real(seed)), T(imag(seed)));
@@ -1431,15 +1428,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
             endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
                 sheet_id, convention,
                 requested_inversion_index=inversion_index)
-            return LeaverResult(endpoint.mode, endpoint.convention,
-                endpoint.overtone_index, endpoint.inversion_index,
-                endpoint.a, endpoint.omega, endpoint.angular_A,
-                endpoint.lambda, endpoint.mixing, endpoint.cf_value,
-                endpoint.cf_error, endpoint.cf_iterations,
-                endpoint.root_residual, endpoint.angular_residual,
-                endpoint.precision_bits, :estimated,
-                :extremal_family_unverified,
-                merge(endpoint.provenance, (
+            return _with(endpoint; status=:estimated, stop_reason=:extremal_family_unverified, provenance=merge(endpoint.provenance, (
                     family_classification=:unverified_source_failure, failed_spin=spin,
                     failed_source_reason=result.stop_reason, source_rows=rows,
                 )))
@@ -1518,14 +1507,7 @@ function _extremal_damped_limit_result(mode::QNMMode, a::T;
         endpoint = _extremal_zdm_endpoint_result(mode, a; angular_order,
             sheet_id, convention,
             requested_inversion_index=inversion_index)
-        return LeaverResult(endpoint.mode, endpoint.convention,
-            endpoint.overtone_index, endpoint.inversion_index, endpoint.a,
-            endpoint.omega, endpoint.angular_A, endpoint.lambda,
-            endpoint.mixing, endpoint.cf_value, endpoint.cf_error,
-            endpoint.cf_iterations, endpoint.root_residual,
-            endpoint.angular_residual, endpoint.precision_bits,
-            endpoint.status, endpoint.stop_reason,
-            merge(endpoint.provenance, ladder))
+        return _with(endpoint; provenance=merge(endpoint.provenance, ladder))
     end
 
     # Damped family: solve the exact-extremal condition at a = 1, seeded by
@@ -1618,13 +1600,7 @@ function _spin_reflected_result(
     # A failed source root (NaN frequency, e.g. an exact-extremal ladder whose rungs failed) has no
     # angular data to recompute; the failure is mapped as it is.
     if !isfinite(source.omega)
-        return LeaverResult(
-            requested_mode, source.convention, source.overtone_index,
-            source.inversion_index, mapped_a, source.omega, source.angular_A,
-            source.lambda, source.mixing, source.cf_value, source.cf_error,
-            source.cf_iterations, source.root_residual, source.angular_residual,
-            source.precision_bits, source.status, source.stop_reason,
-            merge(source.provenance, (
+        return _with(source; mode=requested_mode, a=mapped_a, provenance=merge(source.provenance, (
                 spin_reflection=:nonfinite_source_root_mapped_unchanged,)))
     end
     angular = angular_branch(
@@ -1829,13 +1805,7 @@ _with_sequence_segment(result, segment::Int) = result
 
 function _with_provenance(result::LeaverResult, extra::NamedTuple;
         status=result.status, stop_reason=result.stop_reason)
-    return LeaverResult(result.mode, result.convention,
-        result.overtone_index, result.inversion_index, result.a,
-        result.omega, result.angular_A, result.lambda, result.mixing,
-        result.cf_value, result.cf_error, result.cf_iterations,
-        result.root_residual, result.angular_residual,
-        result.precision_bits, status, stop_reason,
-        merge(result.provenance, extra))
+    return _with(result; status, stop_reason, provenance=merge(result.provenance, extra))
 end
 
 # Public overtone label -> label of the internal complete-spectrum ordering. Only
@@ -1859,12 +1829,7 @@ function _relabel_result(result::LeaverResult, mode::QNMMode)
             get(result.provenance, :sequence_segment, 0))
     provenance = hasproperty(result.provenance, :branch_label) ?
         merge(result.provenance, (branch_label=label,)) : result.provenance
-    return LeaverResult(mode, result.convention,
-        ismissing(result.overtone_index) ? missing : mode.n,
-        result.inversion_index, result.a, result.omega, result.angular_A,
-        result.lambda, result.mixing, result.cf_value, result.cf_error,
-        result.cf_iterations, result.root_residual, result.angular_residual,
-        result.precision_bits, result.status, result.stop_reason, provenance)
+    return _with(result; mode, overtone_index=ismissing(result.overtone_index) ? missing : mode.n, provenance)
 end
 _relabel_result(result, mode::QNMMode) = result
 
