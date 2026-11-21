@@ -15,17 +15,12 @@ _tangent_component(x::ForwardDiff.Dual) = ForwardDiff.partials(x)[1]
 _tangent(z::Complex) = complex(_tangent_component(real(z)),_tangent_component(imag(z)))
 _tangent(z::Real) = _tangent_component(z)
 
-# The angular spectral matrix is quadratic in c. Its symmetric (not Hermitian)
-# eigenpair therefore gives an analytic derivative on the selected simple branch.
+# lambda and d lambda / d omega = a d lambda / dc on the branch of angular_branch (Hellmann-Feynman on the eigenvector,
+# SpinWeightedSpheroidalHarmonics.angular_eigenvalue_derivative).
 function _qnm_lambda_tangent(mode, a, omega)
-    pair=angular_branch(mode,a,omega)
-    v=pair.mixing
-    c=a*omega
-    n=length(v)
-    Mplus=_big_angular_spectral_matrix(c+1,mode.s,mode.m,n)
-    Mminus=_big_angular_spectral_matrix(c-1,mode.s,mode.m,n)
-    dA=sum(v.*((Mplus-Mminus)*v))/(2sum(v.*v))
-    return pair.lambda,a*dA+2a*c-2mode.m*a
+    pair = SpinWeightedSpheroidalHarmonics.continue_angular_mode(mode.s, mode.l, mode.m, ComplexF64(a * omega);
+        sheet_id = :qnm_straight_from_spherical, truncation_order = 32, cache = nothing)
+    return pair.lambda, a * SpinWeightedSpheroidalHarmonics.angular_eigenvalue_derivative(pair)
 end
 
 function _qnm_complex_rstar(a,r)
