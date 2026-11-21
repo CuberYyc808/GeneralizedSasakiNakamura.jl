@@ -571,15 +571,10 @@ function _small_frequency_expansion_state_anchor(route, evaluator; nu=nothing, r
     anchor = _mano_suzuki_takasugi_out_anchor(coefficients; nu)
     source = anchor.source
     !_anchor_accepted(anchor, coefficients.params.omega, require_certificate) && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:uncertified,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
-            mst_state_anchor_projective_error=Inf,
-            mst_state_anchor_scale=ComplexF64(NaN, NaN),
+        evaluator, metadata=(; mst_state_anchor_status=:uncertified, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf, mst_state_anchor_projective_error=Inf,
+        mst_state_anchor_scale=ComplexF64(NaN, NaN),
         ),
     )
     anchor.estimated_relerr <= _STATE_ANCHOR_MAX_ERROR || return (
@@ -649,13 +644,9 @@ function _state_anchor(route; nu=nothing, require_certificate::Bool=false)
     relaxed_sum = hasproperty(anchor, :relaxed_sum) &&
         anchor.relaxed_sum
     !_anchor_accepted(anchor, evaluator.coefficients.params.omega, require_certificate) && return (
-        evaluator,
-        metadata=(;
-            mst_state_anchor_status=:uncertified,
-            mst_state_anchor_source=source,
-            mst_state_anchor_x=_STATE_ANCHOR_X,
-            mst_state_anchor_error=anchor.estimated_relerr,
-            mst_state_anchor_disagreement=Inf,
+        evaluator, metadata=(; mst_state_anchor_status=:uncertified, mst_state_anchor_source=source,
+        mst_state_anchor_x=_STATE_ANCHOR_X, mst_state_anchor_error=anchor.estimated_relerr,
+        mst_state_anchor_disagreement=Inf,
         ),
     )
     anchor_error_limit = relaxed_sum ?

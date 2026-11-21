@@ -90,14 +90,8 @@ _view_range(values::AbstractVector, start::Int, len::Int) = @view values[start:(
 function _split_endpoint(values::AbstractVector, s::Integer, group::Symbol, basis::Symbol)
     layout = _layout_for(s, group)
     ap, aq, bp, bq = _split_starts(layout)
-    A = RationalCoefficients(
-        _view_range(values, ap, layout.ap_len),
-        _view_range(values, aq, layout.aq_len),
-    )
-    B = RationalCoefficients(
-        _view_range(values, bp, layout.bp_len),
-        _view_range(values, bq, layout.bq_len),
-    )
+    A = RationalCoefficients(_view_range(values, ap, layout.ap_len), _view_range(values, aq, layout.aq_len))
+    B = RationalCoefficients(_view_range(values, bp, layout.bp_len), _view_range(values, bq, layout.bq_len))
     return EndpointCoefficientSet(A, B, basis)
 end
 
@@ -165,10 +159,8 @@ function _ordinary_coefficients_and_eval(s::Integer, basis::Symbol, lambda, m, n
     value_count = _generated_function(:ordinary_value_count, table)
     lambda_t, m_t, nu_t, omega_t, CT = _table_arguments(lambda, m, nu, omega)
     return (
-        construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT},
-        value_count()::Int,
-        _generated_function(:eval_gsn_basis!, table),
-        _generated_function(:eval_gsn_basis_variable!, table),
+        construct(lambda_t, m_t, nu_t, omega_t)::Vector{CT}, value_count()::Int,
+        _generated_function(:eval_gsn_basis!, table), _generated_function(:eval_gsn_basis_variable!, table),
     )
 end
 
@@ -220,11 +212,7 @@ function _construct_coefficients_loaded(params, s::Integer, lambda, m, nu, omega
         requires_latest_world=requires_latest_world,
     )
     return CoefficientSet(
-        params,
-        _split_endpoint(h_values, s, :H, :hc),
-        _split_endpoint(i_values, s, :I, :ic),
-        ordinary,
-        metadata,
+        params, _split_endpoint(h_values, s, :H, :hc), _split_endpoint(i_values, s, :I, :ic), ordinary, metadata,
     )
 end
 
@@ -232,13 +220,7 @@ end
 # from `controls.ordinary_basis` (see `_ordinary_basis`).
 function CoefficientTables.gsn_coefficients(params::GSNParameters; controls=nothing)
     return _construct_coefficients(
-        params,
-        params.s,
-        params.lambda,
-        params.m,
-        params.nu,
-        params.omega;
-        controls=controls,
+        params, params.s, params.lambda, params.m, params.nu, params.omega; controls=controls,
     )
 end
 

@@ -3600,8 +3600,7 @@ amplitude ratios (`teuk`, `gsn`), the transmission log and the certificate diagn
     first_check = _amp_check(base, shared, first, branch)
     second_check = _amp_check(base, shared, second, branch)
     selected, other, selected_check = (first_check.distance, first.max_condition,) <= (
-        second_check.distance,
-        second.max_condition,
+        second_check.distance, second.max_condition,
     ) ? (first, second, first_check) : (second, first, second_check)
     truncation_agreement = selected_check.distance
     accepted =
@@ -3829,9 +3828,7 @@ function _negative_imaginary_axis_branch_strength(
             "nonfinite MST NIA branch strength.",
         ))
     return (
-        nu=ComplexF64(nu),
-        amplitude_ratio=ratio,
-        branch_strength=strength,
+        nu=ComplexF64(nu), amplitude_ratio=ratio, branch_strength=strength,
         estimated_relerr=max(fsum.estimated_relerr, aminus.estimated_relerr),
         coefficient_range=(min(fsum.nmin, aminus.nmin), max(fsum.nmax, aminus.nmax),),
     )
@@ -4015,17 +4012,13 @@ function mano_suzuki_takasugi_negative_imaginary_axis_jump(
         wronskian_plus_scaled
     else
         correction_scaled = multiply(
-            positive_scale,
-            multiply((phase=ComplexF64(-I), logabs=0.0), multiply(logpolar(q), logpolar(reflection))),
+            positive_scale, multiply((phase=ComplexF64(-I), logabs=0.0), multiply(logpolar(q), logpolar(reflection))),
         )
         add_logpolar(wronskian_plus_scaled, correction_scaled)
     end
     wronskian_product_scaled = multiply(
         wronskian_plus_scaled, wronskian_minus_scaled)
-    numerator_scaled = multiply(
-        positive_scale,
-        multiply((phase=ComplexF64(-I), logabs=0.0), logpolar(q)),
-    )
+    numerator_scaled = multiply(positive_scale, multiply((phase=ComplexF64(-I), logabs=0.0), logpolar(q)))
     green_scaled = (
         phase=ComplexF64(
             numerator_scaled.phase /
@@ -4704,15 +4697,9 @@ The fields of a `build_mano_suzuki_takasugi_plan` result needed for evaluation, 
 a log-scaling flag, and `handoff_x` replacing the seed point.
 """
 build_mano_suzuki_takasugi_eval_plan(plan; pin_scale=nothing, out_scale=nothing, logscaled=false, handoff_x=nothing) = (
-    data=plan.data,
-    seed_x=handoff_x === nothing ? Float64(plan.seed_x) : Float64(handoff_x),
-    converter=plan.converter,
-    pin_norm=plan.pin_norm,
-    pin_scale=pin_scale,
-    in_factor=plan.in_factor,
-    out_factor=plan.out_factor,
-    out_scale=out_scale,
-    logscaled=Bool(logscaled),
+    data=plan.data, seed_x=handoff_x === nothing ? Float64(plan.seed_x) : Float64(handoff_x), converter=plan.converter,
+    pin_norm=plan.pin_norm, pin_scale=pin_scale, in_factor=plan.in_factor, out_factor=plan.out_factor,
+    out_scale=out_scale, logscaled=Bool(logscaled),
 )
 
 @inline function _normalized_mano_suzuki_takasugi_branch(branch::Symbol)
@@ -4946,17 +4933,11 @@ function mano_suzuki_takasugi_physical_state(plan::ManoSuzukiTakasugiPhysicalPla
         "physical-UP MST state is nonfinite.",
     ))
     return (
-        X=ComplexF64(X),
-        dXdx=ComplexF64(dXdx),
+        X=ComplexF64(X), dXdx=ComplexF64(dXdx),
         estimated_relerr=Float64(max(estimated_relerr, residual.residual, residual.tail)),
-        residual=Float64(residual.residual),
-        truncation=Float64(residual.tail),
-        tail=Float64(residual.tail),
-        condition=Float64(check.budget.condition),
-        representation=:type2_u,
-        amplitude_representation=plan.representation,
-        nmin=Int(residual.nmin),
-        nmax=Int(residual.nmax),
+        residual=Float64(residual.residual), truncation=Float64(residual.tail), tail=Float64(residual.tail),
+        condition=Float64(check.budget.condition), representation=:type2_u,
+        amplitude_representation=plan.representation, nmin=Int(residual.nmin), nmax=Int(residual.nmax),
         budget_status=check.budget.status,
     )
 end
