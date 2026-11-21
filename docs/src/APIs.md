@@ -305,7 +305,7 @@ the conversion factor times it.
 ```@docs
 Y_radial
 Y_rstar
-YRadialFunction
+GeneralizedSasakiNakamura.ISEM.YRadialFunction
 ```
 
 ### Accuracy
