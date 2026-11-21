@@ -1177,13 +1177,13 @@ end
 # local series at each point (`_local_ab!`), its credible order and radius, and the step `_single_step` chooses;
 # patches and truncation records are appended. `failure` names the march in the error of a failed recurrence. With
 # `certified_steps`, a step below second order or above `tol`, and with `step_budget`, more steps than that, return
-# nothing. Returns (x, X, dXdx, step_count, max_step, min_step).
+# nothing. `after_step(a_coeffs, b_coeffs, x, X, dXdx)` (optional) runs after each Taylor step and may return a march
+# of another kind from there (fields patches, x, value, derivative, max_step, min_step), which is appended. The counts
+# continue from `step_count`, `max_step`, `min_step`. Returns (x, X, dXdx, step_count, max_step, min_step).
 function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dXdx, target_x, order, tol;
-        failure::String, certified_steps::Bool=false, step_budget=nothing)
+        failure::String, certified_steps::Bool=false, step_budget=nothing, after_step=nothing, step_count::Int=0,
+        max_step::Float64=0.0, min_step::Float64=Inf)
     direction = target_x >= x ? 1.0 : -1.0
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
     apparent = copy(work.apparent)
     while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
         step_count += 1
@@ -1225,21 +1225,29 @@ function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dX
         dXdx = state_scale * best.derivative
         max_step = max(max_step, abs(best.h))
         min_step = min(min_step, abs(best.h))
+        after_step === nothing && continue
+        suffix = after_step(a_coeffs, b_coeffs, x, X, dXdx)
+        suffix === nothing && continue
+        append!(patches, suffix.patches)
+        x, X, dXdx = suffix.x, suffix.value, suffix.derivative
+        step_count += length(suffix.patches)
+        max_step = max(max_step, suffix.max_step)
+        min_step = min(min_step, suffix.min_step)
+        direction * (target_x - x) <= 100eps(Float64) * max(1.0, abs(x)) && break
     end
     return (x, X, dXdx, step_count, max_step, isempty(patches) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
 end
 
 # The pair form of _taylor_march!: two solutions on one step sequence (`_pair_step`), each with its own patches,
-# truncation records and failure message ("<failure> for first/second solution"). Returns
-# (x, X1, dX1dx, X2, dX2dx, step_count, max_step, min_step).
+# truncation records and failure message ("<failure> for first/second solution"). `after_step(a_coeffs, b_coeffs, x,
+# X1, dX1dx, X2, dX2dx)` (optional) may return a march to the end (fields patches1, patches2, value1, deriv1, value2,
+# deriv2, max_step, min_step), which is appended. Returns (x, X1, dX1dx, X2, dX2dx, step_count, max_step, min_step).
 function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, work, coefficients, kind1, kind2, x,
-        value1, deriv1, value2, deriv2, target_x, order, tol; failure::String)
+        value1, deriv1, value2, deriv2, target_x, order, tol; failure::String, after_step=nothing, step_count::Int=0,
+        max_step::Float64=0.0, min_step::Float64=Inf)
     direction = target_x >= x ? 1.0 : -1.0
     local1 = work.local_coeffs
     local2 = work.local_coeffs2
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
     apparent = copy(work.apparent)
     while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
         step_count += 1
@@ -1293,6 +1301,17 @@ function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, wor
         deriv2 = state_scale2 * best.deriv2
         max_step = max(max_step, abs(best.h))
         min_step = min(min_step, abs(best.h))
+        after_step === nothing && continue
+        suffix = after_step(a_coeffs, b_coeffs, x, value1, deriv1, value2, deriv2)
+        suffix === nothing && continue
+        append!(patches1, suffix.patches1)
+        append!(patches2, suffix.patches2)
+        value1, deriv1, value2, deriv2 = suffix.value1, suffix.deriv1, suffix.value2, suffix.deriv2
+        x = target_x
+        step_count += length(suffix.patches1)
+        max_step = max(max_step, suffix.max_step)
+        min_step = min(min_step, suffix.min_step)
+        break
     end
     return (x, value1, deriv1, value2, deriv2, step_count, max_step,
         isempty(patches1) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
@@ -1445,83 +1464,26 @@ function _hybrid_state(
         end
     end
 
-    apparent = copy(work.apparent)
-    while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
-        step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
-            ((current_value, current_derivative),))
-        if crossing.jumps !== nothing
-            jump = crossing.jumps[1]
-            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        eikonal_ready = work.eikonal !== nothing &&
-            _eikonal_indicator(a_coeffs, b_coeffs) <=
-                _EIKONAL_SLOW_VARIATION
-        state_scale = _state_scale(current_value, current_derivative)
-        local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
-            work.denom_inv,
+    # Taylor steps; one eikonal split (if none was tried above) from the first step where the coefficients vary
+    # slowly enough.
+    try_eikonal = (a_coeffs, b_coeffs, x, X, dXdx) -> begin
+        ready = work.eikonal !== nothing && _eikonal_indicator(a_coeffs, b_coeffs) <= _EIKONAL_SLOW_VARIATION
+        (direction * (target_x - x) > 100eps(Float64) && ready && !eikonal_attempted) || return nothing
+        eikonal_attempted = true
+        return eikonal_split(
+            coefficients, x, X, dXdx, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
+            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
         )
-        effective_order, reason = _credible_solution_order(local_coeffs, order)
-        effective_order >= 1 || error(
-            "ISEM GSN hybrid recurrence failed at x=$(current_x): reason=$(reason)")
-        _record_truncation!(truncations, :ordinary, kind, order, effective_order, reason)
-        finite_coeffs = @view local_coeffs[1:(effective_order + 1)]
-        remaining = abs(target_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        local_radius = min(radius_cap,
-            _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
-        min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap,
-            max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _single_step(
-            finite_coeffs, direction, h_abs, min_abs_step, tol, effective_order)
-        next_x = current_x + best.h
-        push!(patches,
-            Patch(current_x, next_x, copy(finite_coeffs), state_scale))
-        current_x = next_x
-        current_value = state_scale * best.value
-        current_derivative = state_scale * best.derivative
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-
-        remaining_after = direction * (target_x - current_x)
-        remaining_after > 100eps(Float64) || continue
-        if eikonal_ready && !eikonal_attempted
-            eikonal_attempted = true
-            suffix = eikonal_split(
-                coefficients, current_x, current_value, current_derivative, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-                pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
-                large_frequency_expansion=work.large_frequency_expansion, allow_partial=partial_eikonal,
-            )
-            if suffix !== nothing
-                append!(patches, suffix.patches)
-                current_value = suffix.value
-                current_derivative = suffix.derivative
-                current_x = suffix.x
-                step_count += length(suffix.patches)
-                max_step = max(max_step, suffix.max_step)
-                min_step = min(min_step, suffix.min_step)
-                direction * (target_x - current_x) <=
-                    100eps(Float64) * max(1.0, abs(current_x)) && break
-            end
-        end
     end
-    isempty(patches) && (min_step = 0.0)
+    _, current_value, current_derivative, step_count, max_step, min_step = _taylor_march!(patches, truncations, work,
+        coefficients, kind, current_x, current_value, current_derivative, target_x, order, tol;
+        failure="hybrid recurrence failed", after_step=try_eikonal, step_count, max_step, min_step)
     seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
     return Basis(
         kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
         ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value, current_derivative, step_count,
-        max_step, isfinite(min_step) ? min_step : 0.0, 1.0 + 0.0im, truncations, false,
+        max_step, min_step, 1.0 + 0.0im, truncations, false,
     )
 end
 
@@ -1543,8 +1505,6 @@ function _hybrid_pair(
     patches2 = Union{Patch,EikonalPatch,InfinityLargeFrequencyExpansionPatch}[]
     sizehint!(patches1, 48)
     sizehint!(patches2, 48)
-    local1 = work.local_coeffs
-    local2 = work.local_coeffs2
     step_count = 0
     max_step = 0.0
     min_step = Inf
@@ -1646,92 +1606,22 @@ function _hybrid_pair(
         end
     end
 
-    apparent = copy(work.apparent)
-    while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
-        step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
-            ((value1, deriv1), (value2, deriv2)))
-        if crossing.jumps !== nothing
-            jump1, jump2 = crossing.jumps
-            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
-            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x = crossing.x_b
-            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        eikonal_ready = work.eikonal !== nothing &&
-            _eikonal_indicator(a_coeffs, b_coeffs) <=
-                _EIKONAL_SLOW_VARIATION
-        scale1 = _state_scale(value1, deriv1)
-        scale2 = _state_scale(value2, deriv2)
-        _ordinary_point_pair!(local1, local2, a_coeffs, b_coeffs,
-            value1 / scale1, deriv1 / scale1,
-            value2 / scale2, deriv2 / scale2, order, work.denom_inv)
-        eff1, reason1 = _credible_solution_order(local1, order)
-        eff2, reason2 = _credible_solution_order(local2, order)
-        eff1 >= 1 || error(
-            "ISEM GSN hybrid pair failed for first solution at x=$(current_x)")
-        eff2 >= 1 || error(
-            "ISEM GSN hybrid pair failed for second solution at x=$(current_x)")
-        _record_truncation!(truncations1, :ordinary, kind1, order, eff1, reason1)
-        _record_truncation!(truncations2, :ordinary, kind2, order, eff2, reason2)
-        coeffs1 = @view local1[1:(eff1 + 1)]
-        coeffs2 = @view local2[1:(eff2 + 1)]
-        remaining = abs(target_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        r1 = _endpoint_effective_radius!(work.radius_buffer, coeffs1, radius_cap)
-        r2 = _endpoint_effective_radius!(work.radius_buffer2, coeffs2, radius_cap)
-        local_radius = min(radius_cap, r1, r2)
-        min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap,
-            max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _pair_step(coeffs1, coeffs2, direction, h_abs,
-            min_abs_step, tol, eff1, eff2)
-        next_x = current_x + best.h
-        push!(patches1, Patch(current_x, next_x, copy(coeffs1), scale1))
-        push!(patches2, Patch(current_x, next_x, copy(coeffs2), scale2))
-        current_x = next_x
-        value1 = scale1 * best.value1
-        deriv1 = scale1 * best.deriv1
-        value2 = scale2 * best.value2
-        deriv2 = scale2 * best.deriv2
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-
-        remaining_after = direction * (target_x - current_x)
-        remaining_after > 100eps(Float64) || continue
-        if eikonal_ready && !eikonal_attempted
-            eikonal_attempted = true
-            suffix = eikonal_pair(
-                coefficients, current_x, value1, deriv1, value2, deriv2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
-                pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
-                large_frequency_expansion=work.large_frequency_expansion,
-            )
-            if suffix !== nothing
-                append!(patches1, suffix.patches1)
-                append!(patches2, suffix.patches2)
-                value1 = suffix.value1
-                deriv1 = suffix.deriv1
-                value2 = suffix.value2
-                deriv2 = suffix.deriv2
-                current_x = target_x
-                step_count += length(suffix.patches1)
-                max_step = max(max_step, suffix.max_step)
-                min_step = min(min_step, suffix.min_step)
-                break
-            end
-        end
+    # Taylor steps; one eikonal pair march to the end (if none was tried above) from the first step where the
+    # coefficients vary slowly enough.
+    try_eikonal = (a_coeffs, b_coeffs, x, v1, d1, v2, d2) -> begin
+        ready = work.eikonal !== nothing && _eikonal_indicator(a_coeffs, b_coeffs) <= _EIKONAL_SLOW_VARIATION
+        (direction * (target_x - x) > 100eps(Float64) && ready && !eikonal_attempted) || return nothing
+        eikonal_attempted = true
+        return eikonal_pair(
+            coefficients, x, v1, d1, v2, d2, target_x; avec=work.avec, arena=work.arena, bvec=work.bvec,
+            pq=work.pq, scratch=work.eikonal, residual_limit=eikonal_limit, check_limit=eikonal_limit,
+            large_frequency_expansion=work.large_frequency_expansion,
+        )
     end
-    isempty(patches1) && (min_step = 0.0)
+    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min = _taylor_pair_march!(patches1, patches2,
+        truncations1, truncations2, work, coefficients, kind1, kind2, current_x, value1, deriv1, value2, deriv2,
+        target_x, order, tol; failure="hybrid pair failed", after_step=try_eikonal, step_count, max_step, min_step)
     seed_coord = _is_horizon(kind1) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    common_min = isfinite(min_step) ? min_step : 0.0
     basis1 = Basis(
         kind1, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im,
         Float64(seed_x), seed_coord, ComplexF64(seed_X1), ComplexF64(seed_dXdx1),
