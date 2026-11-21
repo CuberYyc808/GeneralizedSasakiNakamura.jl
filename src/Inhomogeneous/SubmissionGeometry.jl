@@ -60,7 +60,6 @@ mutable struct GenericGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    stats::Dict{String, Int}
     observer::Union{Nothing, Function}
     closed::Bool
 end
@@ -73,7 +72,6 @@ mutable struct InclinedGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    stats::Dict{String, Int}
     observer::Union{Nothing, Function}
     closed::Bool
 end
@@ -86,7 +84,6 @@ mutable struct EccentricGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    stats::Dict{String, Int}
     observer::Union{Nothing, Function}
     closed::Bool
 end
@@ -115,13 +112,13 @@ end
 GenericGeometryOwner(master::Dict; observer = nothing) = GenericGeometryOwner(master,
     Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Dict}(),
     Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), Dict{String, Int}(), observer, false)
+    _submission_geometry_context(), observer, false)
 InclinedGeometryOwner(master::Dict; observer = nothing) = InclinedGeometryOwner(master, Dict{Int, Dict}(),
     Dict{Int, Dict}(), Dict{Int, Dict}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), Dict{String, Int}(), observer, false)
+    _submission_geometry_context(), observer, false)
 EccentricGeometryOwner(master::Dict; observer = nothing) = EccentricGeometryOwner(master, Dict{Int, Dict}(),
     Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), Dict{String, Int}(), observer, false)
+    _submission_geometry_context(), observer, false)
 
 function _check_submission_geometry_unlocked(owner::AbstractSubmissionGeometryOwner, master)
     owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
@@ -137,18 +134,6 @@ function check_submission_geometry(owner::AbstractSubmissionGeometryOwner, maste
     end
 end
 
-function _submission_geometry_increment!(owner, key::String)
-    owner.stats[key] = get(owner.stats, key, 0) + 1
-    return nothing
-end
-
-# "<field>_lookups", "_hits", "_misses", "_builds" of the memo fields, built once (the lookups run under the owner lock)
-const _GEOMETRY_STAT_KEYS = Dict{Symbol, NTuple{4, String}}(f => (string(f) * "_lookups", string(f) * "_hits",
-    string(f) * "_misses", string(f) * "_builds") for f in (:samples, :cheby_samples, :trap_samples, :levin_trap_samples,
-    :adaptive_segments, :adaptive_weights, :geometries))
-_geometry_stat_keys(field::Symbol) = get(_GEOMETRY_STAT_KEYS, field, (string(field) * "_lookups",
-    string(field) * "_hits", string(field) * "_misses", string(field) * "_builds"))
-
 function _submission_geometry_lookup!(build::Function, owner::AbstractSubmissionGeometryOwner,
         field::Symbol, key, master)
     # The lookup, the miss and the publication share one lock; the construction runs outside it (the builds of
@@ -159,22 +144,18 @@ function _submission_geometry_lookup!(build::Function, owner::AbstractSubmission
     # It may notify/gate, but must not retain science keys or reenter owner APIs.
     observer = owner.observer
     observer === nothing || Base.invokelatest(observer, :lookup_requested, field, key)
-    stat_lookups, stat_hits, stat_misses, stat_builds = _geometry_stat_keys(field)
     while true
         pending = nothing
         found = false
         value = lock(owner.lock) do
             _check_submission_geometry_unlocked(owner, master)
             memo = getfield(owner, field)
-            _submission_geometry_increment!(owner, stat_lookups)
             if haskey(memo, key)
-                _submission_geometry_increment!(owner, stat_hits)
                 found = true
                 return memo[key]
             end
             pending = get(owner.pending, (field, key), nothing)
             if pending === nothing
-                _submission_geometry_increment!(owner, stat_misses)
                 owner.pending[(field, key)] = _PendingBuild()
             end
             return nothing
@@ -193,7 +174,6 @@ function _submission_geometry_lookup!(build::Function, owner::AbstractSubmission
             lock(owner.lock) do
                 memo = getfield(owner, field)
                 memo[key] = value
-                _submission_geometry_increment!(owner, stat_builds)
                 mine = pop!(owner.pending, (field, key))
             end
             mine.value = value
@@ -221,7 +201,7 @@ function _release_submission_geometry!(owner::AbstractSubmissionGeometryOwner)
     lock(owner.lock) do
         owner.closed = true
         for field in fieldnames(typeof(owner))
-            field in (:stats, :master) && continue
+            field === :master && continue
             value = getfield(owner, field)
             value isa AbstractDict && empty!(value)
         end

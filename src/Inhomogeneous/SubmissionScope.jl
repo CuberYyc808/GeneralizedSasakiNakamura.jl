@@ -54,10 +54,6 @@ mutable struct PublicSubmission
     releasing::Bool
     releasing_task::Union{Nothing, Task}
     released::Bool
-    modes_admitted::Int
-    modes_cleared::Int
-    tasks_admitted::Int
-    tasks_joined::Int
 end
 
 _public_family(e, x) = kerr_geo_orbit_shape(e, x)
@@ -73,7 +69,7 @@ function create_public_submission(a, p, e, x; Nmax::Int = 2^14, Kmax::Int = 2^12
     return PublicSubmission((a, p, e, x), _public_family(e, x), Nmax, Kmax,
         _public_context(), nothing, nothing, nothing, Dict{Symbol, Any}(), Dict{Symbol, Any}(), guard, Threads.Condition(guard),
         false, false, "closed", 0, 0, IdDict{Task, Int}(), IdDict{Task, Int}(), IdDict{Task, Bool}(), Task[], Any[],
-        stop_requested, lifecycle_observer, geometry_observer, false, nothing, false, 0, 0, 0, 0)
+        stop_requested, lifecycle_observer, geometry_observer, false, nothing, false)
 end
 
 function _public_check_context(scope::PublicSubmission)
@@ -314,7 +310,6 @@ function with_submission_mode(f, scope::PublicSubmission; mode = nothing, family
         _public_admission_allowed(scope, task) || throw(PublicSubmissionCancelled(scope.cancel_reason))
         scope.active_modes += 1
         scope.active_by_task[task] = get(scope.active_by_task, task, 0) + 1
-        scope.modes_admitted += 1
     end
     owner = PublicModeOwner(nothing, mode, false)
     succeeded = false
@@ -353,7 +348,6 @@ function with_submission_mode(f, scope::PublicSubmission; mode = nothing, family
                 scope.active_modes -= 1
                 count = scope.active_by_task[task] - 1
                 count == 0 ? delete!(scope.active_by_task, task) : (scope.active_by_task[task] = count)
-                owner.closed && (scope.modes_cleared += 1)
                 notify(scope.condition; all = true)
             end
         end
@@ -396,7 +390,6 @@ function spawn_submission_task!(f, scope::PublicSubmission)
         push!(scope.registered_tasks, task)
         scope.accepted_tasks[task] = true
         scope.active_operations += 1
-        scope.tasks_admitted += 1
         task
     end
     # Registration is committed before notification. If the observer throws,
@@ -506,7 +499,6 @@ function release_public_submission!(scope::PublicSubmission)
                 _public_drain_task!(task, errors)
             finally
                 lock(scope.lock) do
-                    scope.tasks_joined += 1
                 end
                 try
                     _public_observe(scope, :task_joined)
