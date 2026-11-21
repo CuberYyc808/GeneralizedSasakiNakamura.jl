@@ -186,11 +186,12 @@ fallback).
 
 Only `omega == 0` exactly returns the closed-form static solutions (incidence
 and reflection amplitudes `missing`); small nonzero frequencies keep the
-finite-frequency boundary conditions. For $|a| < 1$ at exactly
-$\omega = m\Omega_H$, the `UP` solution is built with ISEM for every `method`;
-it is logarithmic at the horizon, so its `incidence_amplitude` and
-`reflection_amplitude` are coefficients of that logarithmic basis, not
-comparable with plane-wave amplitudes.
+finite-frequency boundary conditions. For $|a| < 1$ at $\omega = m\Omega_H$
+(to 8 ulp of $2r_+\omega$ against $ma$), the `UP` solution is built with ISEM
+for every `method`; it is logarithmic at the horizon, so its
+`incidence_amplitude` and `reflection_amplitude` are coefficients of that
+logarithmic basis, not comparable with plane-wave amplitudes, which grow like
+$1/p$ next to that window.
 
 Returned objects are `TeukolskyRadialFunction`s, callable at the
 Boyer–Lindquist $r$:

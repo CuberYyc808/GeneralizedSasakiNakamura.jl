@@ -192,8 +192,10 @@ _is_auto_method(method) = method == "auto"
 _is_isem_method(method) = method == "ISEM"
 _use_isem_method(method) = method == "auto" || _is_isem_method(method)
 _is_static_frequency(omega) = iszero(omega)
-_is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) &&
-    !iszero(omega) && omega == m * Kerr.omega_horizon(a)
+# The superradiant threshold omega = m Omega_H with the window of ISEM's own test (2 r_+ omega against a m to 8 ulp of the
+# larger), so that every method treats the same frequencies as threshold frequencies.
+_is_horizon_superradiance_frequency(a, m, omega) = isreal(omega) && !iszero(omega) && abs(a) <= 1 &&
+    ISEM.LocalSolutionAtZero.is_horizon_threshold((; a, m, omega=real(omega), kappa=sqrt((1 - a) * (1 + a))))
 
 # Numerical boundaries for the exact-extremal solver. For real omega the inner start is where the
 # asymptotic horizon expansion is used inside its region of use, h = r - 1 =
@@ -605,7 +607,7 @@ The solution method is determined by the keyword `method` (default: `"auto"`).
 The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it fall back (with a debug log message) to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
 Explicit `method="ISEM"` never falls back. `"Riccati"` and `"linear"` select the ODE methods directly for `IN` and `UP`.
 For `OUT` and `DOWN` at real frequency and $|a| < 1$ these two methods also solve directly (`OUT` integrated outward from the horizon, `DOWN` inward from infinity); at complex frequency the `IN` and `UP` solutions that are combined are computed with `method="auto"` (ISEM first, the ODE methods only as its fallback), and a given `lambda` is not used for them.
-At $|a| = 1$ every `method` uses the exact-extremal solver. Otherwise, at the superradiant threshold $\omega = ma/(2r_+)$, with $r_+ = 1 + \sqrt{1 - a^2}$, the `UP` solution is always built with ISEM.
+At $|a| = 1$ every `method` uses the exact-extremal solver. Otherwise, at the superradiant threshold $\omega = ma/(2r_+)$, with $r_+ = 1 + \sqrt{1 - a^2}$ (to 8 ulp of $2r_+\omega$ against $ma$), the `UP` solution is always built with ISEM; its horizon amplitudes are then coefficients of the logarithmic horizon basis, while next to that window the plane-wave amplitudes grow like $1/p$.
 
 `tol` (or its alias `tolerance`; `tol` takes precedence) is the tolerance of ISEM, and the absolute and relative tolerance of the ODE solver (default: `1e-12`) for the ODE methods.
 `xm` is the ISEM matching point in the compact coordinate $x = (r - r_+)/(r - r_-)$ and must lie in (0, 1). Omit `xm` for automatic matching; an explicit `xm` can introduce a cancellation error in the incidence amplitude that the matching tolerance does not bound.
