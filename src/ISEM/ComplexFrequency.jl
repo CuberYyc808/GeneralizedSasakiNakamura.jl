@@ -7,6 +7,7 @@ import Logging
 using ...Coordinates: r_from_rstar, rstar_from_r
 using ...ConversionFactors
 using ...Solutions: Teukolsky_radial_function_from_Sasaki_Nakamura_function_conversion_matrix
+import ..Parameters: _with
 using ..Parameters:
     _binary64_compatible,
     _require_binary64_input,

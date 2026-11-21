@@ -45,6 +45,7 @@ using ..ManoSuzukiTakasugiInfinity: mano_suzuki_takasugi_logscaled_seed, mano_su
 using ..ManoSuzukiTakasugiInfinity: mano_suzuki_takasugi_scaled_state
 using ..ManoSuzukiTakasugiInfinity: _pin_unit_scale
 using ..Parameters:
+    _with,
     GSNControls,
     GSNParameters,
     SMALL_FREQUENCY_EXPANSION_FREQUENCY_LIMIT,
@@ -232,11 +233,7 @@ function _with_low_frequency_defaults(ctrl::GSNControls, params, route_branch::S
     if omega > SMALL_FREQUENCY_EXPANSION_FREQUENCY_LIMIT
         route_branch == :IN || return ctrl
         getproperty(ctrl, :source) == :default || return ctrl
-        return GSNControls(
-            ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, LOW_FREQUENCY_MATCH_X, ctrl.tolerance,
-            ctrl.basis, ctrl.endpoint_basis, ctrl.ordinary_basis, ctrl.small_frequency_expansion,
-            ctrl.large_frequency_expansion, ctrl.frequency_selection, :small_frequency_expansion_transition_match,
-        )
+        return _with(ctrl; match_x=LOW_FREQUENCY_MATCH_X, source=:small_frequency_expansion_transition_match)
     end
     match_x = if getproperty(ctrl, :source) == :default
         spin = select_spin_regime(params)
@@ -248,12 +245,7 @@ function _with_low_frequency_defaults(ctrl::GSNControls, params, route_branch::S
     0 < match_x < 1 || return ctrl
     horizon_order = horizon_tail(params) ?
         LOW_FREQUENCY_TAIL_HORIZON_ORDER : LOW_FREQUENCY_MIN_ORDER
-    return GSNControls(
-        max(ctrl.horizon_order, horizon_order), max(ctrl.ordinary_order, LOW_FREQUENCY_MIN_ORDER), ctrl.infinity_order,
-        match_x, ctrl.tolerance, :low_frequency_scaled_y, ctrl.endpoint_basis, ctrl.ordinary_basis,
-        ctrl.small_frequency_expansion, ctrl.large_frequency_expansion, ctrl.frequency_selection,
-        :low_frequency_default,
-    )
+    return _with(ctrl; horizon_order=max(ctrl.horizon_order, horizon_order), ordinary_order=max(ctrl.ordinary_order, LOW_FREQUENCY_MIN_ORDER), match_x, basis=:low_frequency_scaled_y, source=:low_frequency_default)
 end
 
 # Default controls at an ordinary real frequency: match at ORDINARY_IN_MATCH_X
@@ -264,11 +256,7 @@ function _with_ordinary_defaults(ctrl::GSNControls, params, route_branch::Symbol
     isreal(getproperty(params, :omega)) || return ctrl
     match_x = route_branch == :IN ?
         ORDINARY_IN_MATCH_X : ORDINARY_UP_MATCH_X
-    return GSNControls(
-        ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, match_x, ctrl.tolerance, ctrl.basis,
-        ctrl.endpoint_basis, ctrl.ordinary_basis, ctrl.small_frequency_expansion, ctrl.large_frequency_expansion,
-        ctrl.frequency_selection, :ordinary_branch_match,
-    )
+    return _with(ctrl; match_x, source=:ordinary_branch_match)
 end
 
 @inline _finite_complex(value) =

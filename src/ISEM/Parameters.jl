@@ -98,6 +98,10 @@ struct GSNControls
     source::Symbol
 end
 
+# `ctrl` with the given fields replaced. (ComplexFrequency adds the methods for routes and plans.)
+_with(ctrl::GSNControls; kwargs...) =
+    GSNControls((haskey(kwargs, f) ? kwargs[f] : getfield(ctrl, f) for f in fieldnames(GSNControls))...)
+
 function Base.show(io::IO, ::MIME"text/plain", p::GSNParameters)
     println(io, "GSNParameters:")
     println(io, "  s      = ", p.s)
@@ -451,10 +455,7 @@ function _ordinary_fallback(ctrl::GSNControls, reason::Symbol)
         selection.omega_abs, selection.kappa_omega_abs, selection.tau_abs, selection.horizon_wavenumber_abs,
         selection.m_ratio, selection.a_abs, true,
     )
-    return GSNControls(
-        ctrl.horizon_order, ctrl.ordinary_order, ctrl.infinity_order, ctrl.match_x, ctrl.tolerance, ctrl.basis,
-        ctrl.endpoint_basis, ctrl.ordinary_basis, false, false, fallback, ctrl.source,
-    )
+    return _with(ctrl; small_frequency_expansion=false, large_frequency_expansion=false, frequency_selection=fallback)
 end
 
 # Solver controls: series orders, matching point xm in (0, 1), tolerance, bases
