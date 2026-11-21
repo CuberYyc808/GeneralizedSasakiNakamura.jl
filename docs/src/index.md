@@ -29,7 +29,7 @@ using Pkg
 Pkg.add("GeneralizedSasakiNakamura")
 ```
 
-*Note: the dependencies [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) (v1.4 or later in the 1.x series) and KerrGeodesics.jl (v0.5) are installed automatically. To call SpinWeightedSpheroidalHarmonics directly with `using SpinWeightedSpheroidalHarmonics`, also run `Pkg.add("SpinWeightedSpheroidalHarmonics")`.*
+*Note: the dependencies [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) (v1.5 or later in the 1.x series) and KerrGeodesics.jl (v0.5.2 or later) are installed automatically. To call SpinWeightedSpheroidalHarmonics directly with `using SpinWeightedSpheroidalHarmonics`, also run `Pkg.add("SpinWeightedSpheroidalHarmonics")`.*
 
 ## Conventions
 

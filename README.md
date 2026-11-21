@@ -40,7 +40,7 @@ Pkg.add("GeneralizedSasakiNakamura")
 
 *Note: There is no need to install [SpinWeightedSpheroidalHarmonics.jl](https://github.com/ricokaloklo/SpinWeightedSpheroidalHarmonics.jl) separately as it should be automatically installed by the package manager.*
 
-Version 0.10 requires KerrGeodesics v0.5 and SpinWeightedSpheroidalHarmonics v1.4, both available from the General registry.
+Version 0.10 requires KerrGeodesics v0.5.2 and SpinWeightedSpheroidalHarmonics v1.5, both available from the General registry.
 
 ## Homogeneous solvers
 
