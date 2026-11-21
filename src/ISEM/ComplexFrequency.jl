@@ -414,6 +414,15 @@ end
 
 (evaluator::ComplexManoSuzukiTakasugiEvaluator)(rstars::AbstractVector{<:Real}) = _state_vectors(evaluator, rstars)
 
+# The controls of a complex route: `controls` or the individual control keywords, not both.
+function _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)
+    controls === nothing && return complex_controls(; xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion)
+    any(value !== nothing for value in (xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)) &&
+        throw(ArgumentError("pass either controls or individual complex-route control keywords, not both."))
+    return controls
+end
+
 # Route from the P-equation builder (backend=:p_equation); the state is
 # normalized to unit GSN transmission.
 function _complex_p_route(
@@ -422,13 +431,8 @@ function _complex_p_route(
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
     branch_symbol = _normalize_branch(branch)
-    requested = controls === nothing ? complex_controls(
-        xm=xm, rhom=rhom, N=N, tol=tol, small_frequency_expansion=small_frequency_expansion,
-        large_frequency_expansion=large_frequency_expansion,
-    ) : controls
-    controls !== nothing && any(value !== nothing for value in
-        (xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)) &&
-        throw(ArgumentError("pass either controls or individual complex-route control keywords, not both."))
+    requested = _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion)
 
     requested.small_frequency_expansion === true && throw(ArgumentError(
         "small_frequency_expansion=true is not available for backend=:p_equation."))
@@ -646,14 +650,8 @@ function _complex_mano_suzuki_takasugi_route(
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
     branch_symbol = _normalize_branch(branch)
-    requested = controls === nothing ? complex_controls(
-        xm=xm, rhom=rhom, N=N, tol=tol, small_frequency_expansion=small_frequency_expansion,
-        large_frequency_expansion=large_frequency_expansion,
-    ) : controls
-    controls !== nothing && any(value !== nothing for value in
-        (xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)) && throw(ArgumentError(
-            "pass either controls or individual complex-route control " *
-            "keywords, not both."))
+    requested = _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion)
     requested.xm === nothing || throw(ArgumentError(
         "xm is not used by backend=:mst."))
     requested.rhom === nothing || throw(ArgumentError(
@@ -797,14 +795,8 @@ function _complex_rational_route(
 )
     af, omegac = _validate_mode(s, l, m, a, omega)
     branch_symbol = _normalize_branch(branch)
-    requested = controls === nothing ? complex_controls(
-        xm=xm, rhom=rhom, N=N, tol=tol, small_frequency_expansion=small_frequency_expansion,
-        large_frequency_expansion=large_frequency_expansion,
-    ) : controls
-    controls !== nothing && any(value !== nothing for value in
-        (xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)) &&
-        throw(ArgumentError(
-            "pass either controls or individual complex-route control keywords, not both."))
+    requested = _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion,
+        large_frequency_expansion)
     requested.rhom === nothing || throw(ArgumentError(
         "rhom is specific to backend=:p_equation; the rational backend " *
         "selects both physical-ray endpoints adaptively."))
@@ -2970,15 +2962,8 @@ function _complex_route_impl(
         principal_requested = controls === nothing ?
             small_frequency_expansion !== false : controls.small_frequency_expansion !== false
         if _principal_small_frequency_expansion_axis(omegac) && principal_requested
-            requested = controls === nothing ? complex_controls(
-                xm=xm, rhom=rhom, N=N, tol=tol, small_frequency_expansion=small_frequency_expansion,
-                large_frequency_expansion=large_frequency_expansion,
-            ) : controls
-            controls !== nothing && any(value !== nothing for value in
-                (xm, rhom, N, tol, small_frequency_expansion, large_frequency_expansion)) &&
-                throw(ArgumentError(
-                    "pass either controls or individual complex-route " *
-                    "control keywords, not both."))
+            requested = _requested_controls(controls; xm, rhom, N, tol, small_frequency_expansion,
+                large_frequency_expansion)
             requested.rhom === nothing || throw(ArgumentError(
                 "rhom is not used by the principal-MST complex route."))
             requested.large_frequency_expansion === true && throw(ArgumentError(
