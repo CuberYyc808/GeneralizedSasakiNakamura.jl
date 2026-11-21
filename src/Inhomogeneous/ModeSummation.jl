@@ -315,7 +315,7 @@ function _ledger_entry(prior, modes, state, tail::Float64)
 end
 
 # Sums of a walk's earlier modes (its ledger entry; zeros without one): energy, angular momentum, Carter, 2 x modes.
-_prior_sums(prior) = prior === nothing ? (0.0, 0.0, 0.0, 0) : (prior.energy, prior.angular, prior.carter, 2 * Int(prior.count))
+_prior_sums(prior) = prior === nothing ? (0.0, 0.0, 0.0, 0) : (prior.energy, prior.angular, prior.carter, Int(prior.count))
 
 # The ledger entry of walk `key` from an earlier pass with lmax `lmax_prior`, or nothing when the walk must be solved
 # from its start (no entry, or its shape depended on the earlier lmax).
@@ -576,7 +576,7 @@ _result_nmax_hit(result) = get(result, :nmax_hit_inf, false) || get(result, :nma
 #     previous lmax of the walks that ran off it, and the walks that pass did not reach. The m, k and n stop rules are
 #     applied to the combined sums. The result agrees with a sum from the start within the stop tolerance (a walk
 #     stopped below the previous lmax is not walked again under the new pass's slightly different cutoffs).
-# modes_solved: the modes evaluated over all passes (2 per mode, as total_modes).
+# modes_solved: the (mode, boundary) amplitudes computed over all passes (as total_modes).
 function _with_auto_caps(run, caps)
     L, Kc, Nc = caps.lmax, caps.kmax, caps.nmax
     auto = caps.auto_l || caps.auto_k || caps.auto_n
@@ -949,7 +949,7 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
             shell_m_energy += 2 * mode["EnergyFlux"]
             shell_m_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
         end
 
         shell_n_energy += shell_m_energy
@@ -977,7 +977,7 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
                 shell_m_energy += 2 * mode["EnergyFlux"]
                 shell_m_angular += 2 * mode["AngularMomentumFlux"]
                 shell_m_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
                 if abs(mode["EnergyFlux"]) > Max_flux
                     Max_flux = abs(mode["EnergyFlux"])
                     Max_m = m
@@ -1017,7 +1017,7 @@ function _eccentric_branch_shells!(s::Int, ctx, prefetch)
                 shell_m_energy += 2 * mode["EnergyFlux"]
                 shell_m_angular += 2 * mode["AngularMomentumFlux"]
                 shell_m_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
                 if abs(mode["EnergyFlux"]) > Max_flux_neg
                     Max_flux_neg = abs(mode["EnergyFlux"])
                     Max_m_neg = abs(m)
@@ -1290,7 +1290,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_m_infinity_energy += 2 * mode["EnergyFlux"]
             shell_m_infinity_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_infinity_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_infinity_energy), _adaptive_branch_mode_floor(shell_n_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
             below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
             if below_count_l >= minimum_consecutive
@@ -1327,7 +1327,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e; x=1.0, N = 64, N0 = N,
             shell_m_horizon_energy += 2 * mode["EnergyFlux"]
             shell_m_horizon_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_horizon_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
             layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_horizon_energy), _adaptive_branch_mode_floor(shell_n_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
             below_count_l = abs(mode["EnergyFlux"]) <= layer_threshold ? below_count_l + 1 : 0
             if below_count_l >= minimum_consecutive
@@ -1710,7 +1710,7 @@ function _inclined_branch_shells!(s::Int, ctx, prefetch)
             shell_m_energy += 2 * mode["EnergyFlux"]
             shell_m_angular += 2 * mode["AngularMomentumFlux"]
             shell_m_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
             track_max && abs(mode["EnergyFlux"]) > Max_flux && (Max_flux = abs(mode["EnergyFlux"]))
         end
         lmax_hit = lmax_hit || _tail_hit(walk.tail, tol, total_energy + shell_k_energy + shell_m_energy)
@@ -1962,7 +1962,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     shell_m_infinity_energy += 2 * mode_inf["EnergyFlux"]
                     shell_m_infinity_angular += 2 * mode_inf["AngularMomentumFlux"]
                     shell_m_infinity_carter += 2 * mode_inf["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                     l_reached_inf = max(l_reached_inf, l)
                     _push_trail!(l_trail, mode_inf["EnergyFlux"])
                     layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_infinity_energy), _adaptive_branch_mode_floor(shell_k_infinity_energy + shell_m_infinity_energy, tol, mode_abs_floor))
@@ -1995,7 +1995,7 @@ function _inclined_mode_summation_scoped(scope, a, p, x; K = 16, K0 = K, Kmax = 
                     shell_m_horizon_energy += 2 * mode_hor["EnergyFlux"]
                     shell_m_horizon_angular += 2 * mode_hor["AngularMomentumFlux"]
                     shell_m_horizon_carter += 2 * mode_hor["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                     l_reached_hor = max(l_reached_hor, l)
                     _push_trail!(l_trail, mode_hor["EnergyFlux"])
                     layer_threshold = _mode_cutoff_threshold(tol * abs(shell_m_horizon_energy), _adaptive_branch_mode_floor(shell_k_horizon_energy + shell_m_horizon_energy, tol, mode_abs_floor))
@@ -2295,7 +2295,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             shell_n += 2 * mode["EnergyFlux"]
             shell_n_angular += 2 * mode["AngularMomentumFlux"]
             shell_n_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
             below_count_l = abs(mode["EnergyFlux"]) <= tol * abs(shell_n) ? below_count_l + 1 : 0
             floor_ref[] = _adaptive_branch_mode_floor(shell_n, tol, mode_abs_floor)
             if below_count_l >= minimum_consecutive
@@ -2352,7 +2352,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             shell_n += 2 * mode["EnergyFlux"]
             shell_n_angular += 2 * mode["AngularMomentumFlux"]
             shell_n_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
         end
         shell_k += shell_m
         shell_k_angular += shell_m_angular
@@ -2385,7 +2385,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             if abs(shell_m) > Max_flux
                 Max_flux = abs(shell_m)
@@ -2428,7 +2428,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             shell_k += shell_m
             shell_k_angular += shell_m_angular
@@ -2517,7 +2517,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             shell_n += 2 * mode["EnergyFlux"]
             shell_n_angular += 2 * mode["AngularMomentumFlux"]
             shell_n_carter += 2 * mode["CarterConstantFlux"]
-            total_modes += 2
+            total_modes += 1
         end
 
         shell_k += shell_m
@@ -2552,7 +2552,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             if abs(shell_m) > Max_flux
                 Max_flux = abs(shell_m)
@@ -2596,7 +2596,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             shell_k += shell_m
             shell_k_angular += shell_m_angular
@@ -2645,7 +2645,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             shell_k += shell_m
             shell_k_angular += shell_m_angular
@@ -2678,7 +2678,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                     shell_n += 2 * mode["EnergyFlux"]
                     shell_n_angular += 2 * mode["AngularMomentumFlux"]
                     shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                 end
                 if abs(shell_m) > Max_flux
                     Max_flux = abs(shell_m)
@@ -2721,7 +2721,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                     shell_n += 2 * mode["EnergyFlux"]
                     shell_n_angular += 2 * mode["AngularMomentumFlux"]
                     shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                 end
                 shell_k += shell_m
                 shell_k_angular += shell_m_angular
@@ -2776,7 +2776,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 shell_n += 2 * mode["EnergyFlux"]
                 shell_n_angular += 2 * mode["AngularMomentumFlux"]
                 shell_n_carter += 2 * mode["CarterConstantFlux"]
-                total_modes += 2
+                total_modes += 1
             end
             shell_k += shell_m
             shell_k_angular += shell_m_angular
@@ -2809,7 +2809,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                     shell_n += 2 * mode["EnergyFlux"]
                     shell_n_angular += 2 * mode["AngularMomentumFlux"]
                     shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                 end
                 if abs(shell_m) > Max_flux
                     Max_flux = abs(shell_m)
@@ -2852,7 +2852,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                     shell_n += 2 * mode["EnergyFlux"]
                     shell_n_angular += 2 * mode["AngularMomentumFlux"]
                     shell_n_carter += 2 * mode["CarterConstantFlux"]
-                    total_modes += 2
+                    total_modes += 1
                 end
                 shell_k += shell_m
                 shell_k_angular += shell_m_angular

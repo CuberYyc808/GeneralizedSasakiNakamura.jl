@@ -490,7 +490,7 @@ It returns a `TeukolskyPointParticleFlux`:
 | `horizon_energy_flux` | total energy flux at the horizon |
 | `horizon_angular_momentum_flux` | total angular-momentum flux at the horizon |
 | `horizon_carter_constant_flux` | total Carter-constant flux at the horizon |
-| `total_modes` | number of single modes evaluated |
+| `total_modes` | number of (mode, boundary) amplitudes computed (a mode and its symmetric partner count once) |
 | `tolerance` | the `tol` used; when a sum stopped at `nmax`, the display adds the last shell's relative energy and a larger `nmax` to try |
 | `truncation_floor` | final absolute truncation floors, as `(infinity = …, horizon = …)` |
 | `reached` | highest shell indices reached: `l_reached_inf`, `l_reached_hor` and their maximum `l_reached` (circular), `k_reached_inf`, `k_reached_hor` (inclined), or `n_reached_inf`, `n_reached_hor` (eccentric, generic); `nothing` in a `k_reached_*` or `n_reached_*` entry means the sum reached `kmax` or `nmax` before converging. The display groups the `l` and `n` entries as `l_reached = (infinity = …, horizon = …)` and `n_reached = (…)` |
