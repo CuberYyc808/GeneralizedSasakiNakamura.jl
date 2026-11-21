@@ -1173,6 +1173,131 @@ end
 # Basis seeded from an endpoint series at seed_coord, scaled by
 # `endpoint_seed_scale` and propagated to match_x. With certified_steps it
 # returns nothing when a step misses the tolerance; step_budget caps the steps.
+# One Taylor march of a single solution (X, dX/dx) from x to target_x (in [0, 1]): apparent-point crossings, the
+# local series at each point (`_local_ab!`), its credible order and radius, and the step `_single_step` chooses;
+# patches and truncation records are appended. `failure` names the march in the error of a failed recurrence. With
+# `certified_steps`, a step below second order or above `tol`, and with `step_budget`, more steps than that, return
+# nothing. Returns (x, X, dXdx, step_count, max_step, min_step).
+function _taylor_march!(patches, truncations, work, coefficients, kind, x, X, dXdx, target_x, order, tol;
+        failure::String, certified_steps::Bool=false, step_budget=nothing)
+    direction = target_x >= x ? 1.0 : -1.0
+    step_count = 0
+    max_step = 0.0
+    min_step = Inf
+    apparent = copy(work.apparent)
+    while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
+        step_count += 1
+        step_budget !== nothing && step_count > step_budget && return nothing
+        crossing = _apparent_crossing!(apparent, coefficients, x, target_x, direction, ((X, dXdx),))
+        if crossing.jumps !== nothing
+            jump = crossing.jumps[1]
+            push!(patches, Patch(jump.center, x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - x))
+            min_step = min(min_step, abs(crossing.x_b - x))
+            x, X, dXdx = crossing.x_b, jump.X, jump.dXdx
+            continue
+        end
+        a_terms, b_terms = _local_ab!(work, coefficients, x, order)
+        a_coeffs = @view work.avec[1:a_terms]
+        b_coeffs = @view work.bvec[1:b_terms]
+        state_scale = _state_scale(X, dXdx)
+        local_coeffs = _ordinary_point_coeffs!(
+            work.local_coeffs, a_coeffs, b_coeffs, X / state_scale, dXdx / state_scale, order, work.denom_inv)
+        effective_order, reason = _credible_solution_order(local_coeffs, order)
+        certified_steps && effective_order < 2 && return nothing
+        effective_order >= 1 || error(
+            "ISEM GSN $failure at x=$(x): reason=$(reason), state_scale=$(max(abs(X), abs(dXdx))), " *
+            "c0=$(local_coeffs[1]), c1=$(local_coeffs[2])",
+        )
+        _record_truncation!(truncations, :ordinary, kind, order, effective_order, reason)
+        finite_coeffs = @view local_coeffs[1:(effective_order + 1)]
+        remaining = abs(target_x - x)
+        radius_cap = min(0.20, min(abs(x), abs(1.0 - x)))
+        local_radius = min(radius_cap, _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
+        min_abs_step = 100eps(Float64) * max(1.0, abs(x))
+        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        best = _single_step(finite_coeffs, direction, h_abs, min_abs_step, tol, effective_order)
+        certified_steps && !(best.score <= tol) && return nothing
+        next_x = x + best.h
+        push!(patches, Patch(x, next_x, copy(finite_coeffs), state_scale))
+        x = next_x
+        X = state_scale * best.value
+        dXdx = state_scale * best.derivative
+        max_step = max(max_step, abs(best.h))
+        min_step = min(min_step, abs(best.h))
+    end
+    return (x, X, dXdx, step_count, max_step, isempty(patches) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
+end
+
+# The pair form of _taylor_march!: two solutions on one step sequence (`_pair_step`), each with its own patches,
+# truncation records and failure message ("<failure> for first/second solution"). Returns
+# (x, X1, dX1dx, X2, dX2dx, step_count, max_step, min_step).
+function _taylor_pair_march!(patches1, patches2, truncations1, truncations2, work, coefficients, kind1, kind2, x,
+        value1, deriv1, value2, deriv2, target_x, order, tol; failure::String)
+    direction = target_x >= x ? 1.0 : -1.0
+    local1 = work.local_coeffs
+    local2 = work.local_coeffs2
+    step_count = 0
+    max_step = 0.0
+    min_step = Inf
+    apparent = copy(work.apparent)
+    while direction * (target_x - x) > 100eps(Float64) * max(1.0, abs(x))
+        step_count += 1
+        crossing = _apparent_crossing!(apparent, coefficients, x, target_x, direction, ((value1, deriv1), (value2, deriv2)))
+        if crossing.jumps !== nothing
+            jump1, jump2 = crossing.jumps
+            push!(patches1, Patch(jump1.center, x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
+            push!(patches2, Patch(jump2.center, x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
+            max_step = max(max_step, abs(crossing.x_b - x))
+            min_step = min(min_step, abs(crossing.x_b - x))
+            x = crossing.x_b
+            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
+            continue
+        end
+        a_terms, b_terms = _local_ab!(work, coefficients, x, order)
+        a_coeffs = @view work.avec[1:a_terms]
+        b_coeffs = @view work.bvec[1:b_terms]
+        state_scale1 = _state_scale(value1, deriv1)
+        state_scale2 = _state_scale(value2, deriv2)
+        _ordinary_point_pair!(local1, local2, a_coeffs, b_coeffs, value1 / state_scale1, deriv1 / state_scale1,
+            value2 / state_scale2, deriv2 / state_scale2, order, work.denom_inv)
+        eff1, reason1 = _credible_solution_order(local1, order)
+        eff2, reason2 = _credible_solution_order(local2, order)
+        eff1 >= 1 || error(
+            "ISEM GSN $failure for first solution at x=$(x): reason=$(reason1), " *
+            "state_scale=$(max(abs(value1), abs(deriv1))), c0=$(local1[1]), c1=$(local1[2])",
+        )
+        eff2 >= 1 || error(
+            "ISEM GSN $failure for second solution at x=$(x): reason=$(reason2), " *
+            "state_scale=$(max(abs(value2), abs(deriv2))), c0=$(local2[1]), c1=$(local2[2])",
+        )
+        _record_truncation!(truncations1, :ordinary, kind1, order, eff1, reason1)
+        _record_truncation!(truncations2, :ordinary, kind2, order, eff2, reason2)
+        coeffs1 = @view local1[1:(eff1 + 1)]
+        coeffs2 = @view local2[1:(eff2 + 1)]
+        remaining = abs(target_x - x)
+        radius_cap = min(0.20, min(abs(x), abs(1.0 - x)))
+        r1 = _endpoint_effective_radius!(work.radius_buffer, coeffs1, radius_cap)
+        r2 = _endpoint_effective_radius!(work.radius_buffer2, coeffs2, radius_cap)
+        local_radius = min(radius_cap, r1, r2)
+        min_abs_step = 100eps(Float64) * max(1.0, abs(x))
+        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
+        best = _pair_step(coeffs1, coeffs2, direction, h_abs, min_abs_step, tol, eff1, eff2)
+        next_x = x + best.h
+        push!(patches1, Patch(x, next_x, copy(coeffs1), state_scale1))
+        push!(patches2, Patch(x, next_x, copy(coeffs2), state_scale2))
+        x = next_x
+        value1 = state_scale1 * best.value1
+        deriv1 = state_scale1 * best.deriv1
+        value2 = state_scale2 * best.value2
+        deriv2 = state_scale2 * best.deriv2
+        max_step = max(max_step, abs(best.h))
+        min_step = min(min_step, abs(best.h))
+    end
+    return (x, value1, deriv1, value2, deriv2, step_count, max_step,
+        isempty(patches1) ? 0.0 : isfinite(min_step) ? min_step : 0.0)
+end
+
 function _build_basis_series(
     coefficients::CoefficientSet, kind::Symbol, endpoint_coeffs::Vector{ComplexF64}, exponent1, exponent2,
     match_x::Float64, seed_coord::Float64, order::Integer; controls, scratch=nothing,
@@ -1204,74 +1329,22 @@ function _build_basis_series(
             hybrid.max_step, hybrid.min_step, ComplexF64(endpoint_variable_scale), truncations,
         )
     end
-    direction = match_x >= current_x ? 1.0 : -1.0
     patches = Patch[]
     sizehint!(patches, 192)
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
-    tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
     _record_truncation!(
         truncations, _is_horizon(kind) ? :horizon : :infinity, kind, endpoint_requested_order, endpoint_effective_order,
         endpoint_reason,
     )
-
-    apparent = copy(work.apparent)
-    while direction * (match_x - current_x) > 100eps(Float64)
-        step_count += 1
-        step_budget !== nothing && step_count > step_budget && return nothing
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, match_x, direction,
-            ((current_value, current_derivative),))
-        if crossing.jumps !== nothing
-            jump = crossing.jumps[1]
-            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        state_scale = _state_scale(current_value, current_derivative)
-        local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
-            work.denom_inv,
-        )
-        effective_order, reason = _credible_solution_order(local_coeffs, order)
-        certified_steps && effective_order < 2 && return nothing
-        effective_order >= 1 || error(
-            "ISEM GSN ordinary recurrence failed at x=$(current_x): " *
-            "reason=$(reason), state_scale=$(max(abs(current_value), abs(current_derivative))), " *
-            "c0=$(local_coeffs[1]), c1=$(local_coeffs[2])",
-        )
-        _record_truncation!(truncations, :ordinary, kind, order, effective_order, reason)
-        finite_coeffs = @view local_coeffs[1:(effective_order + 1)]
-        remaining = abs(match_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        local_radius = min(radius_cap, _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
-        min_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap, max(min_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _single_step(
-            finite_coeffs, direction, h_abs, min_step, tol, effective_order)
-        certified_steps && !(best.score <= tol) && return nothing
-        next_x = current_x + best.h
-        push!(patches,
-            Patch(current_x, next_x, copy(finite_coeffs), state_scale))
-        current_x = next_x
-        current_value = state_scale * best.value
-        current_derivative = state_scale * best.derivative
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-    end
-    isempty(patches) && (min_step = 0.0)
+    march = _taylor_march!(patches, truncations, work, coefficients, kind, current_x, current_value, current_derivative,
+        match_x, order, getproperty(controls, :tolerance); failure="ordinary recurrence failed", certified_steps,
+        step_budget)
+    march === nothing && return nothing
+    _, match_X, match_dXdx, step_count, max_step, min_step = march
     return Basis(
         kind, scale, ComplexF64(exponent1), ComplexF64(exponent2), seed_x, seed_coord, scale * raw_seed,
-        scale * raw_dseed, endpoint_coeffs, patches, current_value, current_derivative, step_count, max_step,
-        isfinite(min_step) ? min_step : 0.0, ComplexF64(endpoint_variable_scale), truncations,
+        scale * raw_dseed, endpoint_coeffs, patches, match_X, match_dXdx, step_count, max_step,
+        min_step, ComplexF64(endpoint_variable_scale), truncations,
     )
 end
 
@@ -1693,72 +1766,17 @@ function iterate_from_state(
     end
     order = getproperty(controls, :ordinary_order)
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
-    current_x = Float64(seed_x)
-    target_x = Float64(match_x)
-    current_value = ComplexF64(seed_X)
-    current_derivative = ComplexF64(seed_dXdx)
-    direction = target_x >= current_x ? 1.0 : -1.0
     patches = Patch[]
     sizehint!(patches, 192)
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
-    tol = getproperty(controls, :tolerance)
     truncations = Truncation[]
-
-    apparent = copy(work.apparent)
-    while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
-        step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
-            ((current_value, current_derivative),))
-        if crossing.jumps !== nothing
-            jump = crossing.jumps[1]
-            push!(patches, Patch(jump.center, current_x, jump.coeffs), Patch(jump.center, crossing.x_b, jump.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x, current_value, current_derivative = crossing.x_b, jump.X, jump.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        state_scale = _state_scale(current_value, current_derivative)
-        local_coeffs = _ordinary_point_coeffs!(
-            work.local_coeffs, a_coeffs, b_coeffs, current_value / state_scale, current_derivative / state_scale, order,
-            work.denom_inv,
-        )
-        effective_order, reason = _credible_solution_order(local_coeffs, order)
-        effective_order >= 1 || error(
-            "ISEM GSN state propagation failed at x=$(current_x): " *
-            "reason=$(reason), state_scale=$(max(abs(current_value), abs(current_derivative))), " *
-            "c0=$(local_coeffs[1]), c1=$(local_coeffs[2])",
-        )
-        _record_truncation!(truncations, :ordinary, kind, order, effective_order, reason)
-        finite_coeffs = @view local_coeffs[1:(effective_order + 1)]
-        remaining = abs(target_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        local_radius = min(radius_cap, _endpoint_effective_radius!(work.radius_buffer, finite_coeffs, radius_cap))
-        min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _single_step(finite_coeffs, direction, h_abs,
-            min_abs_step, tol, effective_order)
-        next_x = current_x + best.h
-        push!(patches,
-            Patch(current_x, next_x, copy(finite_coeffs), state_scale))
-        current_x = next_x
-        current_value = state_scale * best.value
-        current_derivative = state_scale * best.derivative
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-    end
-    isempty(patches) && (min_step = 0.0)
+    _, match_X, match_dXdx, step_count, max_step, min_step = _taylor_march!(patches, truncations, work, coefficients,
+        kind, Float64(seed_x), ComplexF64(seed_X), ComplexF64(seed_dXdx), Float64(match_x), order,
+        getproperty(controls, :tolerance); failure="state propagation failed")
     seed_coord = _is_horizon(kind) ? Float64(seed_x) : 1.0 - Float64(seed_x)
     return Basis(
         kind, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X),
-        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, current_value, current_derivative, step_count,
-        max_step, isfinite(min_step) ? min_step : 0.0, 1.0 + 0.0im, truncations, false,
+        ComplexF64(seed_dXdx), ComplexF64[ComplexF64(seed_X)], patches, match_X, match_dXdx, step_count,
+        max_step, min_step, 1.0 + 0.0im, truncations, false,
     )
 end
 
@@ -2003,94 +2021,17 @@ function iterate_pair_from_state(
     end
     order = getproperty(controls, :ordinary_order)
     work = scratch === nothing ? _scratch(coefficients, order, controls) : scratch
-    current_x = Float64(seed_x)
-    target_x = Float64(match_x)
-    value1 = ComplexF64(seed_X1)
-    deriv1 = ComplexF64(seed_dXdx1)
-    value2 = ComplexF64(seed_X2)
-    deriv2 = ComplexF64(seed_dXdx2)
-    direction = target_x >= current_x ? 1.0 : -1.0
     patches1 = Patch[]
     patches2 = Patch[]
     sizehint!(patches1, 192)
     sizehint!(patches2, 192)
-    local1 = work.local_coeffs
-    local2 = work.local_coeffs2
-    radius1 = work.radius_buffer
-    radius2 = work.radius_buffer2
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
-    tol = getproperty(controls, :tolerance)
     truncations1 = Truncation[]
     truncations2 = Truncation[]
-
-    apparent = copy(work.apparent)
-    while direction * (target_x - current_x) > 100eps(Float64) * max(1.0, abs(current_x))
-        step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, target_x, direction,
-            ((value1, deriv1), (value2, deriv2)))
-        if crossing.jumps !== nothing
-            jump1, jump2 = crossing.jumps
-            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
-            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x = crossing.x_b
-            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        state_scale1 = _state_scale(value1, deriv1)
-        state_scale2 = _state_scale(value2, deriv2)
-        _ordinary_point_pair!(local1, local2, a_coeffs, b_coeffs,
-            value1 / state_scale1, deriv1 / state_scale1,
-            value2 / state_scale2, deriv2 / state_scale2, order, work.denom_inv)
-        eff1, reason1 = _credible_solution_order(local1, order)
-        eff2, reason2 = _credible_solution_order(local2, order)
-        eff1 >= 1 || error(
-            "ISEM GSN paired state recurrence failed for first solution at x=$(current_x): " *
-            "reason=$(reason1), state_scale=$(max(abs(value1), abs(deriv1))), " *
-            "c0=$(local1[1]), c1=$(local1[2])",
-        )
-        eff2 >= 1 || error(
-            "ISEM GSN paired state recurrence failed for second solution at x=$(current_x): " *
-            "reason=$(reason2), state_scale=$(max(abs(value2), abs(deriv2))), " *
-            "c0=$(local2[1]), c1=$(local2[2])",
-        )
-        _record_truncation!(truncations1, :ordinary, kind1, order, eff1, reason1)
-        _record_truncation!(truncations2, :ordinary, kind2, order, eff2, reason2)
-        coeffs1 = @view local1[1:(eff1 + 1)]
-        coeffs2 = @view local2[1:(eff2 + 1)]
-        remaining = abs(target_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        r1 = _endpoint_effective_radius!(radius1, coeffs1, radius_cap)
-        r2 = _endpoint_effective_radius!(radius2, coeffs2, radius_cap)
-        local_radius = min(radius_cap, r1, r2)
-        min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _pair_step(coeffs1, coeffs2, direction, h_abs,
-            min_abs_step, tol, eff1, eff2)
-        next_x = current_x + best.h
-        push!(patches1,
-            Patch(current_x, next_x, copy(coeffs1), state_scale1))
-        push!(patches2,
-            Patch(current_x, next_x, copy(coeffs2), state_scale2))
-        current_x = next_x
-        value1 = state_scale1 * best.value1
-        deriv1 = state_scale1 * best.deriv1
-        value2 = state_scale2 * best.value2
-        deriv2 = state_scale2 * best.deriv2
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-    end
-    isempty(patches1) && (min_step = 0.0)
+    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min_step = _taylor_pair_march!(patches1, patches2,
+        truncations1, truncations2, work, coefficients, kind1, kind2, Float64(seed_x), ComplexF64(seed_X1),
+        ComplexF64(seed_dXdx1), ComplexF64(seed_X2), ComplexF64(seed_dXdx2), Float64(match_x), order,
+        getproperty(controls, :tolerance); failure="paired state recurrence failed")
     seed_coord = _is_horizon(kind1) ? Float64(seed_x) : 1.0 - Float64(seed_x)
-    common_min_step = isfinite(min_step) ? min_step : 0.0
     basis1 = Basis(
         kind1, 1.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im, Float64(seed_x), seed_coord, ComplexF64(seed_X1),
         ComplexF64(seed_dXdx1), ComplexF64[ComplexF64(seed_X1)], patches1, value1, deriv1, step_count, max_step,
@@ -2136,96 +2077,20 @@ function _build_pair_from_horizon_seed(
     raw2, draw2 = _horizon_solution_pair(solution2, seed_x)
     scale1 = endpoint_seed_scale(kind1, coefficients.params)
     scale2 = endpoint_seed_scale(kind2, coefficients.params)
-    current_x = seed_x
-    value1 = scale1 * raw1
-    deriv1 = scale1 * draw1
-    value2 = scale2 * raw2
-    deriv2 = scale2 * draw2
-    direction = match_x >= current_x ? 1.0 : -1.0
     patches1 = Patch[]
     patches2 = Patch[]
     sizehint!(patches1, 192)
     sizehint!(patches2, 192)
-    local1 = work.local_coeffs
-    local2 = work.local_coeffs2
-    radius1 = work.radius_buffer
-    radius2 = work.radius_buffer2
-    step_count = 0
-    max_step = 0.0
-    min_step = Inf
-    tol = getproperty(controls, :tolerance)
     truncations1 = Truncation[]
     truncations2 = Truncation[]
     _record_truncation!(truncations1, :horizon, kind1,
         solution1.requested_order, solution1.effective_order, solution1.truncation_reason)
     _record_truncation!(truncations2, :horizon, kind2,
         solution2.requested_order, solution2.effective_order, solution2.truncation_reason)
-
-    apparent = copy(work.apparent)
-    while direction * (match_x - current_x) > 100eps(Float64)
-        step_count += 1
-        crossing = _apparent_crossing!(apparent, coefficients, current_x, match_x, direction,
-            ((value1, deriv1), (value2, deriv2)))
-        if crossing.jumps !== nothing
-            jump1, jump2 = crossing.jumps
-            push!(patches1, Patch(jump1.center, current_x, jump1.coeffs), Patch(jump1.center, crossing.x_b, jump1.coeffs))
-            push!(patches2, Patch(jump2.center, current_x, jump2.coeffs), Patch(jump2.center, crossing.x_b, jump2.coeffs))
-            max_step = max(max_step, abs(crossing.x_b - current_x))
-            min_step = min(min_step, abs(crossing.x_b - current_x))
-            current_x = crossing.x_b
-            value1, deriv1, value2, deriv2 = jump1.X, jump1.dXdx, jump2.X, jump2.dXdx
-            continue
-        end
-        a_terms, b_terms = _local_ab!(
-            work, coefficients, current_x, order)
-        a_coeffs = @view work.avec[1:a_terms]
-        b_coeffs = @view work.bvec[1:b_terms]
-        state_scale1 = _state_scale(value1, deriv1)
-        state_scale2 = _state_scale(value2, deriv2)
-        _ordinary_point_pair!(local1, local2, a_coeffs, b_coeffs,
-            value1 / state_scale1, deriv1 / state_scale1,
-            value2 / state_scale2, deriv2 / state_scale2, order, work.denom_inv)
-        eff1, reason1 = _credible_solution_order(local1, order)
-        eff2, reason2 = _credible_solution_order(local2, order)
-        eff1 >= 1 || error(
-            "ISEM GSN paired horizon recurrence failed for first solution at x=$(current_x): " *
-            "reason=$(reason1), state_scale=$(max(abs(value1), abs(deriv1))), " *
-            "c0=$(local1[1]), c1=$(local1[2])",
-        )
-        eff2 >= 1 || error(
-            "ISEM GSN paired horizon recurrence failed for second solution at x=$(current_x): " *
-            "reason=$(reason2), state_scale=$(max(abs(value2), abs(deriv2))), " *
-            "c0=$(local2[1]), c1=$(local2[2])",
-        )
-        _record_truncation!(truncations1, :ordinary, kind1, order, eff1, reason1)
-        _record_truncation!(truncations2, :ordinary, kind2, order, eff2, reason2)
-        coeffs1 = @view local1[1:(eff1 + 1)]
-        coeffs2 = @view local2[1:(eff2 + 1)]
-        remaining = abs(match_x - current_x)
-        singular_distance = min(abs(current_x), abs(1.0 - current_x))
-        radius_cap = min(0.20, singular_distance)
-        r1 = _endpoint_effective_radius!(radius1, coeffs1, radius_cap)
-        r2 = _endpoint_effective_radius!(radius2, coeffs2, radius_cap)
-        local_radius = min(radius_cap, r1, r2)
-        min_abs_step = 100eps(Float64) * max(1.0, abs(current_x))
-        h_abs = min(remaining, crossing.cap, max(min_abs_step, min(remaining, _ORDINARY_STEP_SAFETY * local_radius)))
-        best = _pair_step(coeffs1, coeffs2, direction, h_abs,
-            min_abs_step, tol, eff1, eff2)
-        next_x = current_x + best.h
-        push!(patches1,
-            Patch(current_x, next_x, copy(coeffs1), state_scale1))
-        push!(patches2,
-            Patch(current_x, next_x, copy(coeffs2), state_scale2))
-        current_x = next_x
-        value1 = state_scale1 * best.value1
-        deriv1 = state_scale1 * best.deriv1
-        value2 = state_scale2 * best.value2
-        deriv2 = state_scale2 * best.deriv2
-        max_step = max(max_step, abs(best.h))
-        min_step = min(min_step, abs(best.h))
-    end
-    isempty(patches1) && (min_step = 0.0)
-    common_min_step = isfinite(min_step) ? min_step : 0.0
+    _, value1, deriv1, value2, deriv2, step_count, max_step, common_min_step = _taylor_pair_march!(patches1, patches2,
+        truncations1, truncations2, work, coefficients, kind1, kind2, seed_x, scale1 * raw1, scale1 * draw1,
+        scale2 * raw2, scale2 * draw2, match_x, order, getproperty(controls, :tolerance);
+        failure="paired horizon recurrence failed")
     basis1 = Basis(
         kind1, scale1, ComplexF64(solution1.exponent), 0.0 + 0.0im, seed_x, seed_x, scale1 * raw1, scale1 * draw1,
         solution1.coefficients, patches1, value1, deriv1, step_count, max_step, common_min_step, 1.0 + 0.0im,
