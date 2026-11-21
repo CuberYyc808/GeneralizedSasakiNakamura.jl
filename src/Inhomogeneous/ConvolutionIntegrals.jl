@@ -3187,7 +3187,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
     rsout = max(200.0, 10pi / abs(omega))
     KG_samp = _inclined_levin_owner_sample(cache, KG, K_sample, true)
     KG_trap = _inclined_levin_owner_sample(cache, KG, K_sample, false)
-    carter_factor = _carter_factor(KG_trap, m, ω)
+    carter_factor = _carter_factor(KG_trap, m, omega)
 
     result = if s == 2
         SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")

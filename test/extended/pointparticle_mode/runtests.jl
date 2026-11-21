@@ -89,7 +89,13 @@ end
                 flux = MS.inclined_mode_flux(r.a, r.p, r.x, r.l, r.m, r.k)
                 @test relerr(flux.infinity.energy_flux, r.pub_Einf) <= 3e-10
                 @test relerr(flux.infinity.angular_momentum_flux, r.pub_Lzinf) <= 3e-10
-                @test relerr(flux.infinity.carter_constant_flux, r.pub_Qinf) <= 3e-10
+                # At a = 0, x = 0.5, (2,2,-1) the Carter factor m <Lz cot^2θ> + k ϒθ is exactly 0 (m Lz = ϒθ = ϒφ):
+                # the published 1.1e-21 and ours are roundoff against an Lz flux of 2.6e-6.
+                if abs(r.pub_Qinf) <= 1e-12 * abs(r.pub_Lzinf)
+                    @test abs(flux.infinity.carter_constant_flux) <= 1e-12 * abs(r.pub_Lzinf)
+                else
+                    @test relerr(flux.infinity.carter_constant_flux, r.pub_Qinf) <= 3e-10
+                end
                 @test relerr(flux.horizon.energy_flux, r.dev_Ehor) <= 1e-9
                 # Mode-flux helper and single-mode API are the same computation (<= 1.6e-13 measured).
                 @test flux.infinity.energy_flux ≈ inf.energy_flux rtol=1e-11
