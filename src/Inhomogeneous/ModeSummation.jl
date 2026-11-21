@@ -157,7 +157,7 @@ const MWALK_REACH_FRACTION = 1.0
 # within 6e-8 of tol 1e-10, same modes); the walk thresholds are unchanged. Spherical and generic modes use it too.
 const MODE_REFINE_FLOOR_FRACTION = 0.01
 
-# Length of the below-threshold run that stops an eccentric n walk: minimum_consecutive + 1, or one period
+# Length of the below-threshold run that stops an eccentric or generic n walk: minimum_consecutive + 1, or one period
 # Ups_phi / Ups_r of the n shells when that is longer (zoom-whirl, see _eccentric_mode_summation_scoped).
 _n_stop_run(minimum_consecutive::Int, radial_over_azimuthal::Real) =
     max(minimum_consecutive + 1, ceil(Int, abs(1 / radial_over_azimuthal)))
@@ -2123,6 +2123,8 @@ end
 function _generic_branch_summation!(s::Int, ctx, prefetch)
     (; e, x, tol, lmax, kmax, nmax, minimum_consecutive, mode_abs_floor, beta, deep, neg_branch_scale,
         radial_over_azimuthal, polar_over_azimuthal, floor_ref, run) = ctx
+    # the n stop spans one period of the n shells near the separatrix (zoom-whirl), as for eccentric orbits
+    n_stop_run = _n_stop_run(minimum_consecutive, radial_over_azimuthal)
     params_for = nothing
     # the walk key, computed ahead or now; a walk beyond the plan starts the next two of its direction
     take = key -> begin
@@ -2788,7 +2790,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
         below_count_n = abs(shell_n) <= n_threshold ? below_count_n + 1 : 0
         shell_last = shell_n
 
-        if below_count_n >= minimum_consecutive + 1
+        if below_count_n >= n_stop_run
             n_reached = n
             break
         end
@@ -2797,7 +2799,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
     state = (; totals = (total_energy, total_angular, total_carter), n_reached, shell_list, angular_list, carter_list, n_list,
         last_shell, total_modes, shell_last, row_reach, below_count_n, n_next)
     # Geometric n tail at high eccentricity, as for eccentric equatorial orbits.
-    tail_factor, tail_ratio = _geometric_n_tail_factor(shell_list, e, n_reached, minimum_consecutive + 1)
+    tail_factor, tail_ratio = _geometric_n_tail_factor(shell_list, e, n_reached, n_stop_run)
     n_tail = tail_factor .* last_shell
     total_energy += n_tail[1]
     total_angular += n_tail[2]
