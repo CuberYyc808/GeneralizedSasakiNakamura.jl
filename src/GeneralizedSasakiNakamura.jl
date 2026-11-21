@@ -616,11 +616,14 @@ and boundary condition specified by `boundary_condition`, which can be either
 - `OUT` for purely-outgoing at the horizon,
 - `DOWN` for purely-ingoing at infinity.
 
-With ISEM at real frequency the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own
-end (`OUT` from the horizon, `DOWN` from infinity) and matched to the pair of the other end. At complex frequency, in
-the small-frequency regime, at the superradiant threshold, and where one of the two amplitudes is too small next to
-the other for the direct matching (high frequency), they are constructed by linearly combining the `IN` and `UP`
-solutions.
+With ISEM the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own end (`OUT` from
+the horizon, `DOWN` from infinity) and matched to the pair of the other end; at complex frequency this runs on the
+two-ray rational route. The direct solution is used where its own amplitude error estimate is below `1e-10`. On the
+negative imaginary axis, with an explicit `sfe` or `lfe` at complex frequency, in the small-frequency regime, at the
+superradiant threshold, and where that estimate is larger (one of the two amplitudes too small next to the other, as
+at high frequency), they are constructed by linearly combining the `IN` and `UP` solutions. Either way, a solution
+evaluated deep in the region where it decays (`DOWN` at large `r*`, `OUT` near the horizon, at strong damping) has a
+relative error that grows with the decay.
 
 The solution method is determined by the keyword `method` (default: `"auto"`).
 The default `"auto"` tries `ISEM` (iterative series expansion matching of the GSN equation) first. Only if ISEM fails and `xm` was not supplied does it fall back (with a debug log message) to the ODE methods, which integrate the GSN equation numerically (for real `omega` the Riccati form is tried first and the linear form second; for complex `omega` the order is reversed); with an explicit `xm`, the ISEM failure is reported instead.
@@ -1350,11 +1353,14 @@ and boundary condition specified by `boundary_condition`, which can be either
 - `OUT` for purely-outgoing at the horizon,
 - `DOWN` for purely-ingoing at infinity.
 
-With ISEM at real frequency the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own
-end (`OUT` from the horizon, `DOWN` from infinity) and matched to the pair of the other end. At complex frequency, in
-the small-frequency regime, at the superradiant threshold, and where one of the two amplitudes is too small next to
-the other for the direct matching (high frequency), they are constructed by linearly combining the `IN` and `UP`
-solutions.
+With ISEM the `OUT` and `DOWN` solutions are solved directly: the solution is marched from its own end (`OUT` from
+the horizon, `DOWN` from infinity) and matched to the pair of the other end; at complex frequency this runs on the
+two-ray rational route. The direct solution is used where its own amplitude error estimate is below `1e-10`. On the
+negative imaginary axis, with an explicit `sfe` or `lfe` at complex frequency, in the small-frequency regime, at the
+superradiant threshold, and where that estimate is larger (one of the two amplitudes too small next to the other, as
+at high frequency), they are constructed by linearly combining the `IN` and `UP` solutions. Either way, a solution
+evaluated deep in the region where it decays (`DOWN` at large `r*`, `OUT` near the horizon, at strong damping) has a
+relative error that grows with the decay.
 
 The full GSN solution is converted to the corresponding Teukolsky solution $(R(r), dR/dr)$ and 
 the incidence, reflection and transmission amplitude are converted from the GSN formalism to the Teukolsky formalism 

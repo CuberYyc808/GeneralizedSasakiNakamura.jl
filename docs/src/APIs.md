@@ -56,7 +56,7 @@ $p = \omega - m\Omega_H$, $\Omega_H = a/(2r_+)$ and $\Delta = r^2 - 2r + a^2$.
 | `OUT` | purely outgoing at the horizon, $\propto e^{+ipr_*}$ |
 | `DOWN` | purely ingoing at infinity, $\propto e^{-i\omega r_*}$ |
 
-`OUT` and `DOWN` are built as linear combinations of `IN` and `UP`.
+`OUT` and `DOWN` are solved directly with ISEM (marched from their own end and matched to the pair of the other end), and constructed from `IN` and `UP` where no direct solve applies or its error estimate exceeds `1e-10`; see `GSN_radial`.
 
 ### `NormalizationConvention`
 

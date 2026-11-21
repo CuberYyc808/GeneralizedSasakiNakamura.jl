@@ -41,7 +41,7 @@ r_* = r + \frac{2r_+}{r_+-r_-}\ln\frac{r-r_+}{2} - \frac{2r_-}{r_+-r_-}\ln\frac{
 ```
 for $|a| < 1$, and $r_* = r + 2\ln(r-1) - 2/(r-1) - \ln 4$ at $|a| = 1$.
 
-With $p = \omega - m\Omega_H$, $\Omega_H = a/(2r_+)$ and $\Delta = r^2 - 2r + a^2$, the boundary conditions are `IN`, purely ingoing at the horizon ($\propto e^{-ipr_*}$); `UP`, purely outgoing at infinity ($\propto e^{+i\omega r_*}$); `OUT`, purely outgoing at the horizon ($\propto e^{+ipr_*}$); and `DOWN`, purely ingoing at infinity ($\propto e^{-i\omega r_*}$). `OUT` and `DOWN` are built as linear combinations of `IN` and `UP`. Teukolsky functions returned by `Teukolsky_radial` (`UNIT_TEUKOLSKY_TRANS`) have unit transmission amplitude:
+With $p = \omega - m\Omega_H$, $\Omega_H = a/(2r_+)$ and $\Delta = r^2 - 2r + a^2$, the boundary conditions are `IN`, purely ingoing at the horizon ($\propto e^{-ipr_*}$); `UP`, purely outgoing at infinity ($\propto e^{+i\omega r_*}$); `OUT`, purely outgoing at the horizon ($\propto e^{+ipr_*}$); and `DOWN`, purely ingoing at infinity ($\propto e^{-i\omega r_*}$). With ISEM, `OUT` and `DOWN` are solved directly (from their own end, matched to the pair of the other end), and constructed from `IN` and `UP` only where no direct solve applies or its error estimate exceeds `1e-10`. Teukolsky functions returned by `Teukolsky_radial` (`UNIT_TEUKOLSKY_TRANS`) have unit transmission amplitude:
 ```math
 R^{\rm in} \to
 \begin{cases}

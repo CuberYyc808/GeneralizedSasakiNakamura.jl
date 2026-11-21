@@ -313,13 +313,13 @@ end
 end
 
 # ---------------------------------------------------------------------------------------------------
-# 8. OUT / DOWN against the IN/UP formulas, and finite solutions. At complex omega OUT and DOWN are the
-#    combination itself (rtol 1e-12); at real omega they are solved directly since 0.10, so the check
-#    compares two independent solutions: measured 1.3e-12 for (-2, 2, 2, 0.7, 0.5), rtol 1e-11.
+# 8. OUT / DOWN against the IN/UP formulas, and finite solutions. At real omega they are solved directly since
+#    0.10, so the check compares two independent solutions: measured 1.3e-12 for (-2, 2, 2, 0.7, 0.5), rtol 1e-11
+#    (complex omega: section 8a'' against 256-bit references).
 # ---------------------------------------------------------------------------------------------------
 @testset "OUT and DOWN boundary conditions" begin
-    for (s, l, m, a, w) in ((-2, 2, 2, 0.7, 0.5), (2, 3, -1, 0.3, 1.1 - 0.1im), (0, 2, 0, 0.9, 0.25))
-        rtol = isreal(w) ? 1e-11 : 1e-12
+    for (s, l, m, a, w) in ((-2, 2, 2, 0.7, 0.5), (0, 2, 0, 0.9, 0.25))
+        rtol = 1e-11
         Xin = GSN_radial(s, l, m, a, w, IN)
         Xup = GSN_radial(s, l, m, a, w, UP)
         Xdown = GSN_radial(s, l, m, a, w, DOWN)
@@ -375,6 +375,45 @@ end
                 @test isapprox(X(rs), Xc(rs); rtol=10rtol)
             end
         end
+    end
+end
+
+# ---------------------------------------------------------------------------------------------------
+# 8a''. OUT and DOWN solved directly at complex frequency (two-ray rational route, 0.10), against the IN + UP
+#       combination of 256-bit IN and UP solutions (arbitrary-precision route), rounded to binary64; X at r* = 0
+#       (DOWN) and r* = -20 (OUT), where neither solution decays far. The direct solution is used only where its own
+#       amplitude error estimate is below 1e-10 (ISEM.Matching.COMPLEX_PATH_LOSS_TARGET), hence rtol 1e-10.
+#       Measured (2026-11-21): amplitudes <= 6.3e-12, X <= 5.4e-12.
+# ---------------------------------------------------------------------------------------------------
+@testset "OUT and DOWN solved directly at complex frequency" begin
+    direct(X) = !(X.numerical_GSN_solution isa NamedTuple && haskey(X.numerical_GSN_solution, :fundamental_solutions))
+    references = (
+        ((-2, 3, -1, 0.5, -0.5 - 0.2im), DOWN, -10.104697274233542 - 31.65913639680126im,
+            -0.5527831440093058 - 22.963925216230894im, 0.0, -11.891780431894635 - 1.1974481040579958im),
+        ((-2, 3, -1, 0.5, -0.5 - 0.2im), OUT, -0.2986780487204966 - 26.141704179800758im,
+            -6.1940576664596785 - 2.841823720177228im, -20.0, 0.009313722725102723 + 0.01577329507689442im),
+        ((0, 2, 2, 0.0, 0.3 - 0.3im), DOWN, -9.758902662915576 - 15.756037349015854im,
+            -11.651572688305354 - 12.725796196321808im, 0.0, 1.414258773972255 - 8.190255807729542im),
+        ((0, 2, 2, 0.0, 0.3 - 0.3im), OUT, -9.758902662915576 - 15.756037349015854im,
+            -8.00961838327562 - 1.7153470166661953im, -20.0, 0.002380137136585338 + 0.0006925769705820043im),
+        ((2, 2, 2, 0.9, 0.1 - 0.02im), DOWN, 149.31146931992956 - 168.60443720138056im,
+            44.55063388567382 - 100.68530014369146im, 0.0, -96.78222100673077 + 41.43292971748596im),
+        ((2, 2, 2, 0.9, 0.1 - 0.02im), OUT, -126.71675007066918 - 543.7656921500678im,
+            -295.56880717447945 + 487.82961850101736im, -20.0, -0.2942105061318409 - 0.603645418418611im),
+        ((2, 3, -1, 0.9, 0.7 + 0.2im), DOWN, -0.05316595351631181 + 0.20664911029749614im,
+            -0.04459982452621409 + 0.0747309647057942im, 0.0, -0.23021351400661383 - 0.19587420198229988im),
+        ((2, 3, -1, 0.9, 0.7 + 0.2im), OUT, 0.1340511553367643 + 0.2625101953655431im,
+            0.10468523355488787 + 0.06537599867194573im, -20.0, 7.935634869360414 - 54.037870812071425im),
+    )
+    for ((s, l, m, a, w), bc, incidence, reflection, rs, value) in references
+        X = GSN_radial(s, l, m, a, w, bc)
+        @test X.boundary_condition == bc && X.transmission_amplitude == 1
+        @test direct(X)
+        @test isapprox(X.incidence_amplitude, incidence; rtol=1e-10)
+        @test isapprox(X.reflection_amplitude, reflection; rtol=1e-10)
+        @test isapprox(X(rs), value; rtol=1e-10)
+        R = Teukolsky_radial(s, l, m, a, w, bc)
+        @test R.boundary_condition == bc && isfinite(R(8.0))
     end
 end
 
