@@ -1976,44 +1976,32 @@ function _arbitrary_precision_orbit(a, p, e, x)
 end
 
 """
-    with_pointparticle_submission(f, a, p, e, x; Nmax=2^14, Kmax=2^12, stop_requested=nothing, lifecycle_observer=nothing)
+    with_pointparticle_submission(f, a, p, e, x; Nmax=2^14, Kmax=2^12, stop_requested=nothing)
 
 Create a submission for the orbit `(a, p, e, x)` and the sampling-grid caps `Nmax`, `Kmax`, call `f(submission)`
 and return its result. Mode and flux calls inside `f` that pass `submission=submission` share one read-only
-trajectory and sampling geometry, while every admitted mode keeps its own private cache.
-`stop_requested` is an optional zero-argument callback; when it returns `true` no further modes are admitted.
-On normal return, error or cancellation, all admitted modes and registered tasks are drained before the internal
-caches are released; returned results remain valid.
+trajectory and sampling geometry, while every mode keeps its own private cache. `f` must wait for every task it
+starts that uses the submission (for example `fetch` them) before it returns; the submission is released when `f`
+returns or throws, and returned results remain valid. `stop_requested` is an optional zero-argument callback;
+when it returns `true` the submission is cancelled (see `cancel_pointparticle_submission!`).
 """
-function with_pointparticle_submission(f::Function,a,p,e,x;Nmax::Int=2^14,Kmax::Int=2^12,
-        stop_requested=nothing,lifecycle_observer=nothing)
+function with_pointparticle_submission(f::Function,a,p,e,x;Nmax::Int=2^14,Kmax::Int=2^12,stop_requested=nothing)
     # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
     a, p, e, x = _pointparticle_float(a, p, e, x)
-    ModeSummation.with_public_submission(f,a,p,e,x;Nmax,Kmax,stop_requested,lifecycle_observer)
+    ModeSummation.with_public_submission(f,a,p,e,x;Nmax,Kmax,stop_requested)
 end
 export with_pointparticle_submission
 
 """
     cancel_pointparticle_submission!(submission; reason="cooperative cancellation")
 
-Stop admitting new modes and tasks to `submission`; modes already running finish normally, and later admission
-attempts throw `PublicSubmissionCancelled` with `reason`. Return `nothing`.
+Cancel `submission`: modes already running finish normally, and every later mode or flux call that passes it throws
+`PublicSubmissionCancelled` with `reason` (a running flux summation stops at its next mode). Return `nothing`.
 """
 function cancel_pointparticle_submission!(scope;reason="cooperative cancellation")
     ModeSummation.request_submission_cancel!(scope;reason)
 end
 export cancel_pointparticle_submission!
-
-"""
-    spawn_pointparticle_submission!(f, submission)
-
-Start `f()` on a new task registered with `submission` and return the `Task`. The task is joined before the
-submission is released; spawning after admission has closed throws `PublicSubmissionCancelled`.
-"""
-function spawn_pointparticle_submission!(f::Function,scope)
-    ModeSummation.spawn_submission_task!(f,scope)
-end
-export spawn_pointparticle_submission!
 
 @doc raw"""
     Teukolsky_pointparticle_flux(a, p, e, x; tol=1e-8, lmax=:auto, nmax=:auto, kmax=:auto)
@@ -2067,14 +2055,13 @@ k shells (index `k`) for inclined ones.
 Nearly polar orbits with `abs(x) < 1e-4` (including `x = 0`) are interpolated linearly between
 `x = -1e-4` and `x = 1e-4`, which costs two summations; `reached.small_x_interpolation` records it
 and `submission` is not used for them.
-The keyword `lifecycle_observer` is a diagnostic hook and is not guaranteed to be stable.
 
 Return a `TeukolskyPointParticleFlux` with the total energy, angular-momentum and
 Carter-constant fluxes at infinity and at the horizon, or `nothing` (with a
 warning) when `(a, p, e, x)` is neither a stable bound orbit nor a marginally
 stable (critical) bound circular orbit, as classified by KerrGeodesics.
 """
-function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, info::Bool = false, stop_requested=nothing, lifecycle_observer=nothing)
+function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8, lmax = :auto, nmax = :auto, kmax = :auto, minimum_consecutive = nothing, N = 64, N0 = N, K = 16, K0 = K, Nmax = (submission === nothing ? 2^14 : submission.Nmax), Kmax = (submission === nothing ? 2^12 : submission.Kmax), sample_tol = 1e-3, record::Bool = false, record_path = nothing, truncation_floor = 1e-16, mode_abs_floor = truncation_floor, threaded_sampling = false, neg_branch_scale = 0.1, generic_beta = ModeSummation.DEFAULT_GENERIC_BETA, generic_deep = ModeSummation.DEFAULT_GENERIC_DEEP, tail_levin = nothing, tail_levin_infinity = nothing, tail_levin_horizon = nothing, levin_nmin = 50, levin_mode_abs_floor = mode_abs_floor, levin_local_n::Int = ConvolutionIntegrals.DEFAULT_ADAPTIVE_LEVIN_LOCAL_N, levin_max_depth::Int = 8, mode_parallelism::Int = 1, progress::Bool = false, info::Bool = false, stop_requested=nothing)
     # The point-particle routes run in Float64; any real input (e.g. an integer or BigFloat 0) is converted.
     a, p, e, x = _pointparticle_float(a, p, e, x)
     if !kerr_geo_orbit_supported(a, p, e, x)
@@ -2087,7 +2074,7 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
             Teukolsky_pointparticle_flux(a, p, e, xs; submission = nothing, tol, lmax, nmax, kmax, minimum_consecutive, N, N0, K, K0,
                 Nmax, Kmax, sample_tol, record = rec && record, record_path, truncation_floor, mode_abs_floor,
                 threaded_sampling, neg_branch_scale, generic_beta, generic_deep, tail_levin, tail_levin_infinity, tail_levin_horizon,
-                levin_nmin, levin_mode_abs_floor, levin_local_n, levin_max_depth, mode_parallelism, progress, info, stop_requested, lifecycle_observer)
+                levin_nmin, levin_mode_abs_floor, levin_local_n, levin_max_depth, mode_parallelism, progress, info, stop_requested)
         end
     end
 
@@ -2100,13 +2087,13 @@ function Teukolsky_pointparticle_flux(a, p, e, x; submission=nothing, tol = 1e-8
     t0 = time()
     result = begin   # `info` is accepted for compatibility and has no effect
         if orbit_type == :circular
-            ModeSummation.circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = something(minimum_consecutive, 5), submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.circular_mode_summation(a, p; x, tol = tol, lmax = lmax, min_consecutive = something(minimum_consecutive, 5), submission=submission, stop_requested=stop_requested)
         elseif orbit_type == :eccentric
-            ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.eccentric_mode_summation(a, p, e; x, N = N, N0 = N0, Nmax = Nmax, tol = tol, lmax = lmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
         elseif orbit_type == :inclined
-            ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.inclined_mode_summation(a, p, x; K = K, K0 = K0, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
         else
-            ModeSummation.generic_mode_summation(a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=generic_beta, deep=generic_deep, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+            ModeSummation.generic_mode_summation(a, p, e, x; N0 = N0, K0 = K0, Nmax = Nmax, Kmax = Kmax, tol = tol, lmax = lmax, kmax = kmax, nmax = nmax, minimum_consecutive = something(minimum_consecutive, 2), sample_tol = sample_tol, record = record, record_path = record_path, mode_abs_floor = mode_abs_floor, threaded_sampling = threaded_sampling, neg_branch_scale = neg_branch_scale, beta=generic_beta, deep=generic_deep, tail_levin = tail_levin === nothing ? :auto : tail_levin, tail_levin_infinity = tail_levin_infinity, tail_levin_horizon = tail_levin_horizon, levin_nmin = levin_nmin, levin_mode_abs_floor = levin_mode_abs_floor, levin_local_n = levin_local_n, levin_max_depth = levin_max_depth, mode_parallelism = mode_parallelism, progress = progress, submission=submission, stop_requested=stop_requested)
         end
     end
     cost = time() - t0
@@ -2163,12 +2150,11 @@ or the flux falls below `truncation_floor`. `max_flux` is the flux scale of this
 (the total-flux summation passes an estimate of the total flux). `threaded_sampling = true` samples the radial function and the harmonic over the grid with multiple threads.
 For adaptive ISEM Levin, `levin_max_depth` controls the maximum bisection depth; `Nmax` and `Kmax` are the grid caps of the ISEM trapezoidal path and of the non-adaptive ISEM Levin path.
 Pass `submission` (see `with_pointparticle_submission`, which also describes `stop_requested`) to reuse the orbit's sampling geometry across calls; `Nmax` and `Kmax` then default to, and must equal, the submission's.
-The keyword `lifecycle_observer` is a diagnostic hook and is not guaranteed to be stable.
 
 Return a `TeukolskyPointParticleMode` holding the mode information, the Teukolsky amplitude, the three fluxes,
 the trajectory, the Y solution, the spin-weighted spheroidal harmonic and the method settings used.
 """
-function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing, lifecycle_observer=nothing)
+function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
     # A non-binary64 floating-point orbit (BigFloat, Double64) takes the arbitrary-precision route
     # (ArbitraryPrecisionModes); the binary64 routes take any other real input converted to Float64.
     if _arbitrary_precision_orbit(a, p, e, x)
@@ -2201,7 +2187,7 @@ function Teukolsky_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a,
     end
 
     scope, owned = ModeSummation.ensure_public_submission(submission, a, p, e, x;
-        Nmax=Nmax, Kmax=Kmax, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+        Nmax=Nmax, Kmax=Kmax, stop_requested=stop_requested)
     return ModeSummation._with_public_scope(scope, owned) do
       output = nothing
       Y_mode = nothing
@@ -2283,8 +2269,8 @@ The other keywords are those of `Teukolsky_pointparticle_mode`.
 Return a `GSNPointParticleMode`, whose amplitude is the Teukolsky amplitude divided by the GSN-to-Teukolsky
 transmission conversion factor (`Btrans` for `s = +2`, `Ctrans` for `s = -2`).
 """
-function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing, lifecycle_observer=nothing)
-    Teukolsky_mode = Teukolsky_pointparticle_mode(s, l, m, n, k, a, p, e, x; method=method, N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, truncation_floor=truncation_floor, mode_abs_floor=mode_abs_floor, threaded_sampling=threaded_sampling, levin_max_depth=levin_max_depth, submission=submission, stop_requested=stop_requested, lifecycle_observer=lifecycle_observer)
+function GSN_pointparticle_mode(s::Int, l::Int, m::Int, n::Int, k::Int, a, p, e, x; method="auto", submission=nothing, N::Int=-1, K::Int=-1, Nmax::Int = (submission === nothing ? 2^12 : submission.Nmax), Kmax::Int = (submission === nothing ? 2^9 : submission.Kmax), tol = 1e-8, sample_tol::Float64 = 1e-3, max_flux = 1.0, truncation_floor::Float64 = 1e-16, mode_abs_floor::Float64 = truncation_floor, threaded_sampling::Bool = false, levin_max_depth::Int = 8, stop_requested=nothing)
+    Teukolsky_mode = Teukolsky_pointparticle_mode(s, l, m, n, k, a, p, e, x; method=method, N=N, K=K, Nmax=Nmax, Kmax=Kmax, tol=tol, sample_tol=sample_tol, max_flux=max_flux, truncation_floor=truncation_floor, mode_abs_floor=mode_abs_floor, threaded_sampling=threaded_sampling, levin_max_depth=levin_max_depth, submission=submission, stop_requested=stop_requested)
     if iszero(Teukolsky_mode.amplitude)
         T_to_SN = one(Teukolsky_mode.amplitude)
     elseif s == 2

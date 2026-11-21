@@ -655,22 +655,19 @@ read-only trajectory and sampling geometry:
 
 ```julia
 modes = with_pointparticle_submission(0.9, 10.0, 0.2, 0.3) do submission
-    tasks = [spawn_pointparticle_submission!(submission) do
-                 Teukolsky_pointparticle_mode(-2, 2, 2, n, 0, 0.9, 10.0, 0.2, 0.3; submission)
-             end for n in 0:2]
-    fetch.(tasks)
+    tasks = [Threads.@spawn Teukolsky_pointparticle_mode(-2, 2, 2, n, 0, 0.9, 10.0, 0.2, 0.3; submission)
+             for n in 0:2]
+    fetch.(tasks)   # join every task before the block returns
 end
 ```
 
 | function | meaning |
 | :--- | :--- |
-| `with_pointparticle_submission(f, a, p, e, x; Nmax = 2^14, Kmax = 2^12, stop_requested = nothing)` | create a submission for one orbit and sampling grid, call `f(submission)`, then wait for every admitted mode and task before releasing it |
-| `spawn_pointparticle_submission!(f, submission)` | start a task registered with the submission; it is joined before the submission is released |
-| `cancel_pointparticle_submission!(submission; reason)` | stop admitting new modes; modes already running finish normally |
+| `with_pointparticle_submission(f, a, p, e, x; Nmax = 2^14, Kmax = 2^12, stop_requested = nothing)` | create a submission for one orbit and sampling grid, call `f(submission)` (which joins the tasks it starts), then release it |
+| `cancel_pointparticle_submission!(submission; reason)` | cancel the submission; modes already running finish normally, later calls throw `PublicSubmissionCancelled` |
 
 ```@docs
 with_pointparticle_submission
-spawn_pointparticle_submission!
 cancel_pointparticle_submission!
 ```
 
@@ -683,8 +680,8 @@ submission therefore use its `Nmax` and `Kmax` (by default `2^14` and `2^12`)
 instead of their own defaults (`2^12` and `2^9`); create the submission with
 `Nmax = 2^12, Kmax = 2^9` to reproduce standalone results. Returned mode and
 flux objects remain valid after the submission is released. After
-cancellation, a call that asks the submission to admit a new mode or task
-throws `GeneralizedSasakiNakamura.ModeSummation.PublicSubmissionCancelled`.
+cancellation, a call that passes the submission throws
+`GeneralizedSasakiNakamura.ModeSummation.PublicSubmissionCancelled`.
 
 For process-based batches, start the workers and load the package on each of
 them:

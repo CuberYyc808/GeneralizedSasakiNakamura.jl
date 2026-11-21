@@ -281,5 +281,6 @@ include("generic_levin_regression.jl")
 include("levin_one_level_regression.jl")
 include("eccentric_interpolation_regression.jl")
 include("robustness_regression.jl")
+include("submission_regression.jl")
 
 end # pointparticle_mode

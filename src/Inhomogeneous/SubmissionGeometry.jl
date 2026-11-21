@@ -60,7 +60,6 @@ mutable struct GenericGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    observer::Union{Nothing, Function}
     closed::Bool
 end
 
@@ -72,7 +71,6 @@ mutable struct InclinedGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    observer::Union{Nothing, Function}
     closed::Bool
 end
 
@@ -84,7 +82,6 @@ mutable struct EccentricGeometryOwner <: AbstractSubmissionGeometryOwner
     pending::Dict{Tuple{Symbol, Any}, Any}
     lock::ReentrantLock
     context::NamedTuple
-    observer::Union{Nothing, Function}
     closed::Bool
 end
 
@@ -109,16 +106,16 @@ function _submission_geometry_context()
         kg_module = KerrGeodesics, kg_version = kg[1], kg_path = kg[2])
 end
 
-GenericGeometryOwner(master::Dict; observer = nothing) = GenericGeometryOwner(master,
+GenericGeometryOwner(master::Dict) = GenericGeometryOwner(master,
     Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple{Int, Int}, Dict}(), Dict{Tuple, Dict}(),
     Dict{Tuple, Vector{Float64}}(), IdDict{Dict, GenericM2Geometry}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), observer, false)
-InclinedGeometryOwner(master::Dict; observer = nothing) = InclinedGeometryOwner(master, Dict{Int, Dict}(),
+    _submission_geometry_context(), false)
+InclinedGeometryOwner(master::Dict) = InclinedGeometryOwner(master, Dict{Int, Dict}(),
     Dict{Int, Dict}(), Dict{Int, Dict}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), observer, false)
-EccentricGeometryOwner(master::Dict; observer = nothing) = EccentricGeometryOwner(master, Dict{Int, Dict}(),
+    _submission_geometry_context(), false)
+EccentricGeometryOwner(master::Dict) = EccentricGeometryOwner(master, Dict{Int, Dict}(),
     Dict{Int, Dict}(), Dict{Tuple{Int, Int, Int}, Any}(), Dict{Tuple{Symbol, Any}, Any}(), ReentrantLock(),
-    _submission_geometry_context(), observer, false)
+    _submission_geometry_context(), false)
 
 function _check_submission_geometry_unlocked(owner::AbstractSubmissionGeometryOwner, master)
     owner.closed && throw(ArgumentError("Submission geometry owner is closed"))
@@ -140,10 +137,6 @@ function _submission_geometry_lookup!(build::Function, owner::AbstractSubmission
     # the modes computed concurrently by a flux summation do not wait for each other), each key built by one
     # requester while the others wait for it (`pending`). Failed builds publish no value, and the waiters
     # then look up (and build) again. No unlocked get!/haskey/read races with another builder.
-    # Optional diagnostic observer is fixed at construction, before tasks start.
-    # It may notify/gate, but must not retain science keys or reenter owner APIs.
-    observer = owner.observer
-    observer === nothing || Base.invokelatest(observer, :lookup_requested, field, key)
     while true
         pending = nothing
         found = false
@@ -169,7 +162,6 @@ function _submission_geometry_lookup!(build::Function, owner::AbstractSubmission
         end
         mine = nothing
         try
-            observer === nothing || Base.invokelatest(observer, :build_started, field, key)
             value = build()
             lock(owner.lock) do
                 memo = getfield(owner, field)
@@ -178,7 +170,6 @@ function _submission_geometry_lookup!(build::Function, owner::AbstractSubmission
             end
             mine.value = value
             notify(mine.done)
-            observer === nothing || Base.invokelatest(observer, :published, field, key)
             return value
         catch error
             if mine === nothing
@@ -206,7 +197,6 @@ function _release_submission_geometry!(owner::AbstractSubmissionGeometryOwner)
             value isa AbstractDict && empty!(value)
         end
         owner.master = nothing
-        owner.observer = nothing
     end
     return nothing
 end
