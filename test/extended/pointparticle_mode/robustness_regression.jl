@@ -3,7 +3,7 @@
     calls = Ref(0)
     covered_when_ordinary = () -> begin
         calls[] += 1
-        get(task_local_storage(), CI._FORCE_ORDINARY_KEY, false) ? Dict("EnergyFlux" => 1.0) :
+        CI._FORCE_ORDINARY_Y[] ? Dict("EnergyFlux" => 1.0) :
             error("ISEM GSN basis does not cover x=0.93")
     end
     @test CI._with_coverage_retry(covered_when_ordinary, 2, 2, 2, 5, 0)["EnergyFlux"] == 1.0
@@ -44,11 +44,15 @@ end
     MSTE = GSN.ISEM.ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError
     Ωφ = 1e-10
     for err in (ErrorException("nonfinite ISEM GSN matching scale"), ErrorException("ISEM GSN log-scaled route lacks a physical MST handoff state"),
-                ErrorException("Non-finite flux for mode (s, l, m, n, k) = (-2, 7, -6, 0, 6)"), MSTE(:physical_in_residual, "MST physical-in residual rejected"))
+                MSTE(:physical_in_residual, "MST physical-in residual rejected"))
         @test CI._near_static_overflow(err, 1e-20, Ωφ)
         @test !CI._near_static_overflow(err, 1e-15, Ωφ)          # not near-static
     end
     @test !CI._near_static_overflow(ErrorException("unrelated"), 1e-20, Ωφ)
+    # a non-finite flux without an error: zeroed by the retry for a near-static mode only
+    nonfinite = () -> Dict("EnergyFlux" => NaN, "AngularMomentumFlux" => NaN, "CarterConstantFlux" => NaN, "omega" => 1e-20)
+    @test CI._with_coverage_retry(nonfinite, -2, 7, -6, 0, 6; omega = 1e-20, Ωφ = Ωφ)["NearStaticOverflow"]
+    @test isnan(CI._with_coverage_retry(nonfinite, -2, 7, -6, 0, 6; omega = 1e-15, Ωφ = Ωφ)["EnergyFlux"])
     @test !CI._near_static_overflow(ArgumentError("ISEM"), 1e-20, Ωφ)
     zeroed = CI._with_coverage_retry(() -> error("ISEM GSN infinity recurrence lost Float64 credibility"), -2, 3, -3, 0, 3; omega = 1e-20, Ωφ = Ωφ)
     @test zeroed["NearStaticOverflow"] && zeroed["EnergyFlux"] == 0.0    # a high-l, low-frequency mode whose matching overflows is negligible: (8.1e-5 * 167)^(2 * 67) ~ 1e-250
