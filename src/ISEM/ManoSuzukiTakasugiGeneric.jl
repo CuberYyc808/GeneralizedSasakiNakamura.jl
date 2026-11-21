@@ -308,41 +308,22 @@ end
 # strongly damped and imaginary-axis frequencies, whose MST sums re-anchor their recurrences often, that
 # was three quarters of the time of a 288-bit evaluation, and its Stirling truncation leaves about 7% of
 # the bits (2^-1873 at 2000 bits). The same Stirling series here takes the coefficients B_2k / (2k (2k - 1))
-# from a cache filled once per process, shifts the argument to |z| >= the precision in bits and sums
-# until the terms are below 2^-(bits + 16): exp of the result agrees with a 300-bit-higher evaluation
-# to the last bit at 128..2000 bits, at 1/7 of the time at 2000 bits.
-const _BERNOULLI_NUMBERS = Rational{BigInt}[1 // 1, -1 // 2]      # B_0, B_1, B_2, ...
-const _STIRLING_COEFFICIENTS = Rational{BigInt}[]
-const _STIRLING_LOCK = ReentrantLock()
+# from the tangent numbers (integer recurrences, no Bernoulli recurrence; exact, so the same rationals),
+# shifts the argument to |z| >= the precision in bits and sums until the terms are below 2^-(bits + 16): exp
+# of the result agrees with a 300-bit-higher evaluation to the last bit at 128..2000 bits.
 
-# B_m from sum_{k=0}^{m} binomial(m + 1, k) B_k = 0 (B_m = 0 for odd m >= 3); caller holds the lock.
-function _bernoulli_number(m::Int)
-    B = _BERNOULLI_NUMBERS
-    while length(B) <= m
-        n = length(B)
-        if isodd(n)
-            push!(B, 0 // 1)
-            continue
-        end
-        total = zero(Rational{BigInt})
-        binomial_ = one(BigInt)                 # binomial(n + 1, k)
-        for k in 0:n-1
-            iszero(B[k+1]) || (total += binomial_ * B[k+1])
-            binomial_ = binomial_ * (n + 1 - k) ÷ (k + 1)
-        end
-        push!(B, -total // (n + 1))
-    end
-    return B[m+1]
-end
-
+# B_2k / (2k (2k - 1)) = (-1)^(k-1) T_k / ((2k - 1) 4^k (4^k - 1)), k = 1..n, from the tangent numbers T_k
+# (Brent and Harvey's in-place recurrence).
 function _stirling_coefficients(n::Int)
-    lock(_STIRLING_LOCK) do
-        while length(_STIRLING_COEFFICIENTS) < n
-            k = length(_STIRLING_COEFFICIENTS) + 1
-            push!(_STIRLING_COEFFICIENTS, _bernoulli_number(2k) // (2k * (2k - 1)))
-        end
-        return _STIRLING_COEFFICIENTS[1:n]
+    T = zeros(BigInt, n)
+    n >= 1 && (T[1] = 1)
+    for k in 2:n
+        T[k] = (k - 1) * T[k-1]
     end
+    for k in 2:n, j in k:n
+        T[j] = (j - k) * T[j-1] + (j - k + 2) * T[j]
+    end
+    return [(isodd(k) ? T[k] : -T[k]) // ((2k - 1) * big(4)^k * (big(4)^k - 1)) for k in 1:n]
 end
 
 function _loggamma_big(z::Complex{BigFloat})
