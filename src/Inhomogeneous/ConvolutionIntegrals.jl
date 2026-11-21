@@ -851,9 +851,9 @@ function _generic_adaptive_segment_amplitude!(cache::GenericM2FluxCache, KG::Dic
     swsh_eval = () -> threaded_sampling ? GridSampling.swsh_sample_threaded(SH, KG_samp) : GridSampling.swsh_sample(SH, KG_samp)
     SHsamp = sh_cache === nothing ? swsh_eval() : get!(swsh_eval, sh_cache, (key.level_theta, key.jb, nt))
     Jpp, Jpm, Jmp, Jmm, _, _, _, _, _, _, prefactor = if s == -2
-        integrand_generic_sample_cheby_m2(KG_samp, Ysamp, SHsamp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
+        integrand_generic_sample_cheby(KG_samp, Ysamp, SHsamp, n, k, -2; geometry = _generic_geometry_for_sample(cache, KG_samp))
     else
-        integrand_generic_sample_cheby_p2(KG_samp, Ysamp, SHsamp, n, k; geometry = _generic_geometry_for_sample(cache, KG_samp))
+        integrand_generic_sample_cheby(KG_samp, Ysamp, SHsamp, n, k, 2; geometry = _generic_geometry_for_sample(cache, KG_samp))
     end
 
     basis_plus = _generic_adaptive_phase_basis!(cache, KG_samp, key, s, a, 1)
@@ -888,8 +888,8 @@ function _generic_two_wave_segment_amplitude!(cache::GenericM2FluxCache, KG_samp
     swsh_eval = () -> threaded_sampling ? GridSampling.swsh_sample_threaded(SH, KG_samp) : GridSampling.swsh_sample(SH, KG_samp)
     SHsamp = sh_cache === nothing ? swsh_eval() : get!(swsh_eval, sh_cache, (key.level_theta, key.jb, nt))
     geometry = _generic_geometry_for_sample(cache, KG_samp)
-    Jo = integrand_generic_sample_cheby_m2(KG_samp, parts.out, SHsamp, n, k; geometry = geometry)
-    Ji = integrand_generic_sample_cheby_m2(KG_samp, parts.in, SHsamp, n, k; geometry = geometry)
+    Jo = integrand_generic_sample_cheby(KG_samp, parts.out, SHsamp, n, k, -2; geometry = geometry)
+    Ji = integrand_generic_sample_cheby(KG_samp, parts.in, SHsamp, n, k, -2; geometry = geometry)
     prefactor = Jo[11]
     basis_plus = _generic_adaptive_phase_basis!(cache, KG_samp, key, s, a, 1)
     basis_minus = _generic_adaptive_phase_basis!(cache, KG_samp, key, s, a, -1)

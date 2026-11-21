@@ -7,7 +7,7 @@
 # Mino phases q_r, q_theta in [0, pi] by the trapezoidal rule, whose error falls exponentially for the periodic,
 # analytic integrand. Each phase grid is doubled until the amplitude changes by less than `tol` (default 1e3 eps(T));
 # an equatorial orbit has a single polar node (theta = pi/2) and a circular one a single radial node. The source
-# terms are those of GridSampling.integrand_generic_sample_m2 / _p2 (s = -2 at infinity, s = +2 at the horizon),
+# terms are those of GridSampling.integrand_generic_sample_cheby (s = -2 at infinity, s = +2 at the horizon),
 # written for a generic number type; the binary64 routes are not touched.
 module ArbitraryPrecisionModes
 
@@ -111,8 +111,8 @@ function _y_samples(Ysol, rv)
     return Y, Yp, X
 end
 
-# Trapezoidal amplitude on the (q_r, q_θ) grid: the source terms of integrand_generic_sample_m2 (s = -2) and
-# integrand_generic_sample_p2 (s = +2) at each node, weighted and summed.
+# Trapezoidal amplitude on the (q_r, q_θ) grid: the source terms of integrand_generic_sample_cheby (s = -2 and s = +2) at
+# each node, weighted and summed.
 function _amplitude(o::APModeOrbit{T}, s, m, n, k, ω, λ, Ysol, SH, incidence, Nr, Kθ) where {T}
     a, E, Lz = o.a, o.E, o.Lz
     ϒt = o.frequencies[1]

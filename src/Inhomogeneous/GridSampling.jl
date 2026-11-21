@@ -11,9 +11,9 @@ export kerr_geo_inclined_sample_dense, subsample_inclined_sample, refine_incline
 export kerr_geo_eccentric_sample_dense, subsample_eccentric_sample, refine_eccentric_y_sample
 export swsh_sample
 export y_sample_m2_isem, y_sample_p2_isem
-export integrand_generic_sample_m2, integrand_generic_sample_p2, integrand_inclined_sample
+export integrand_inclined_sample
 export kerr_geo_inclined_sample_cheby
-export integrand_generic_sample_cheby_m2, integrand_generic_sample_cheby_p2, integrand_eccentric_sample_cheby_p2, integrand_inclined_sample_cheby
+export integrand_generic_sample_cheby, integrand_eccentric_sample_cheby_p2, integrand_inclined_sample_cheby
 export kerr_geo_eccentric_segment_sample_cheby, eccentric_segment_geometry_cache, eccentric_segment_phase_basis_cache, eccentric_segment_sample_bundle_cheby, integrand_eccentric_factored_segment_cheby_m2
 
 # The orbit evaluated by its phases (KerrGeodesics.kerr_geo_orbit_phases: q_r = 0 at periapsis, q_theta = 0 at the
@@ -1260,392 +1260,6 @@ end
     return qr_step * qθ_step * total
 end
 
-function integrand_generic_sample_m2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Vectors)
-    # --------------------------
-    # Radial (N) and Polar (K) sampling vectors
-    r_vec = KG_samp["r"]          # Length N (radial samples)
-    rs_vec = KG_samp["rs"]        # Precomputed tortoise coordinates (length N)
-    θ_vec = KG_samp["θ"]          # Length K (polar samples)
-    N = KG_samp["N_sample"]       # Grid size N (radial)
-    K = KG_samp["K_sample"]       # Grid size K (polar)
-    Γ = KG_samp["Γ"]
-    qt0, qr0, qθ0, qφ0 = KG_samp["initialPhases"]
-    Δtr_func, Δtθ_func, Δφr_func, Δφθ_func = KG_samp["CrossFunction"]
-
-    # Radial velocity (length N)
-    urp = KG_samp["ur_fwd"]       # Forward radial velocity
-    urm = KG_samp["ur_rev"]       # Reverse radial velocity
-
-    # Polar velocity (length K)
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Cross functions (length N for Δtr/Δφr, length K for Δtθ/Δφθ)
-    Δtr = KG_samp["Δtr"]          # Radial cross function (N)
-    Δtθ = KG_samp["Δtθ"]          # Polar cross function (K)
-    Δφr = KG_samp["Δφr"]          # Radial cross function (N)
-    Δφθ = KG_samp["Δφθ"]          # Polar cross function (K)
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (length K, polar-dependent)
-    S0 = SH_samp["S0"]            # Base value (K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (K)
-
-    # Radial functions (length N, radial-dependent)
-    Y = Y_samp["Y"]               # Radial function (N)
-    Yp = Y_samp["Yp"]             # 1st r-derivative (N)
-    X = Y_samp["X"]               # Auxiliary radial function (N)
-    Binc = Y_samp["Binc"]
-
-    # Constant parameters
-    params = Y_samp["params"]
-    s = params.s                  # Spin parameter (scalar)
-    l = params.l                  # Angular quantum number (scalar)
-    m = params.m                  # Magnetic quantum number (scalar)
-    a = params.a                  # Black hole spin (scalar)
-    ω = params.omega              # Frequency (scalar)
-    λ = params.lambda             # Eigenvalue (scalar)
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. Generate 2D Grid Matrices (Vectorization Core)
-    # --------------------------
-    # Create N×K grids for r, rs, θ (broadcast 1D vectors to 2D)
-    r_grid = reshape(r_vec, :, 1)  # N×1: broadcast across columns
-    θ_grid = reshape(θ_vec, 1, :)   # 1×K: broadcast across rows
-
-    # Precompute θ-dependent grid matrices (K→N×K broadcast)
-    sinθ_grid = sin.(θ_grid)
-    cosθ_grid = cos.(θ_grid)
-    cotθ_grid = cot.(θ_grid)
-    inv_sinθ_grid = 1.0 ./ sinθ_grid
-    inv_sin2θ_grid = 1.0 ./ (sinθ_grid .^ 2)  # Precompute 1/sin²θ
-
-    # Precompute r-dependent grid matrices (N→N×K broadcast)
-    r2_grid = r_grid .^ 2
-    Δ_grid = r2_grid .- 2.0 .* r_grid .+ a^2  # Kerr Δ(r) grid
-
-    # --------------------------
-    # 3. Compute Complex Parameters (Vectorized)
-    # --------------------------
-    # ρ and ρbar (N×K, complex-valued)
-    ρ_grid = -1.0 ./ (r_grid .- im .* a .* cosθ_grid)
-    ρbar_grid = -1.0 ./ (r_grid .+ im .* a .* cosθ_grid)
-    inv_ρ_grid = 1.0 ./ ρ_grid  # Precompute 1/ρ
-
-    # --------------------------
-    # 4. L-series Operators (Vectorized)
-    # --------------------------
-    L1_grid = (-m) .* inv_sinθ_grid .+ a .* ω .* sinθ_grid .+ cotθ_grid
-    L2_grid = (-m) .* inv_sinθ_grid .+ a .* ω .* sinθ_grid .+ 2.0 .* cotθ_grid
-    L2p_grid = m .* cosθ_grid .* inv_sin2θ_grid .+ a .* ω .* cosθ_grid .- 2.0 .* inv_sin2θ_grid
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (Vectorized)
-    # --------------------------
-    S0_grid = reshape(S0, 1, :)   # 1×K: broadcast across rows
-    S1_grid = reshape(S1, 1, :)   # 1×K: broadcast across rows
-    S2_grid = reshape(S2, 1, :)   # 1×K: broadcast across rows
-
-    L2S_grid = S1_grid .+ L2_grid .* S0_grid
-    L1Sp_grid = S2_grid .+ L1_grid .* S1_grid
-    L1L2S_grid = L1Sp_grid .+ L2p_grid .* S0_grid .+ L2_grid .* S1_grid .+ L1_grid .* L2_grid .* S0_grid
-
-    # L1pL2pS (vectorized complex computation)
-    term1 = inv_ρ_grid .* L1L2S_grid
-    term2 = 3im .* a .* sinθ_grid .* L1_grid .* S0_grid
-    term3 = 3im .* a .* cosθ_grid .* S0_grid
-    term4 = 2im .* a .* sinθ_grid .* S1_grid
-    term5 = -1im .* a .* sinθ_grid .* L2_grid .* S0_grid
-    L1pL2pS_grid = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (Vectorized, using precomputed rs_vec)
-    # --------------------------
-    # Radial phase (phase[i,j]): use precomputed rs_vec instead of rstar_from_r
-    log_term_vec = log.((r_vec .- rp) ./ (r_vec .- rm))  # 1D (N)
-    phase_vec = exp.(im .* ω .* rs_vec .- im .* a .* m .* log_term_vec ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D
-    phase_grid = reshape(phase_vec, :, 1)  # N×1: broadcast across columns
-
-    # rphase/θphase (1D, then broadcast to N×K for J terms)
-    qr = range(0.0, π, length=N)
-    qθ = range(0.0, π, length=K)
-    rphase_vec = ω .* Δtr .- m .* Δφr .+ n .* qr  # 1D (N)
-    θphase_vec = ω .* Δtθ .- m .* Δφθ .+ k .* qθ  # 1D (K)
-    rphase_grid = reshape(rphase_vec, :, 1)       # N×1
-    θphase_grid = reshape(θphase_vec, 1, :)       # 1×K
-
-    # --------------------------
-    # 7. W-series Quantities (Vectorized)
-    # --------------------------
-    Y_grid = reshape(Y, :, 1)
-    Yp_grid = reshape(Yp, :, 1)
-    X_grid = reshape(X, :, 1)
-
-    # Wnn: use precomputed phase_grid
-    Wnn_grid = ρbar_grid .* L1pL2pS_grid .* r2_grid .* Y_grid .* phase_grid ./ 2.0
-
-    # Wnmbar
-    term_A = L2S_grid .+ im .* a .* sinθ_grid .* (ρ_grid .- ρbar_grid) .* S0_grid
-    term_B = 2.0 .* Y_grid .+ r_grid .* Yp_grid
-    term_C = L2S_grid .* (ρ_grid .+ ρbar_grid) .* r_grid .* Y_grid
-    Wnmbar_grid = (-r_grid .* ρbar_grid .* (term_A .* term_B .+ term_C) ./ ρ_grid) .* phase_grid
-
-    # Wmbarmbar
-    term_D = X_grid ./ (2.0 .* sqrt.(r2_grid .+ a^2))
-    term_E = (Y_grid .+ 2.0 .* r_grid .* Yp_grid) .* phase_grid
-    term_F = ρ_grid .* r_grid .* (2.0 .* Y_grid .+ r_grid .* Yp_grid) .* phase_grid
-    Wmbarmbar_grid = S0_grid .* ρbar_grid .* (term_D .+ term_E .+ term_F) ./ ρ_grid
-
-    # --------------------------
-    # 8. N/Mbar Terms (Vectorized)
-    # --------------------------
-    urp_grid = reshape(urp, :, 1)
-    urm_grid = reshape(urm, :, 1)
-    uθp_grid = reshape(uθp, 1, :)
-    uθm_grid = reshape(uθm, 1, :)
-
-    # Np/Nm (using precomputed Δ_grid)
-    numerator_N = E .* (r2_grid .+ a^2) .- a .* Lz
-    Np_grid = (numerator_N .+ urp_grid) ./ Δ_grid
-    Nm_grid = (numerator_N .+ urm_grid) ./ Δ_grid
-
-    # Mbarp/Mbarm
-    term_M = im .* sinθ_grid .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ_grid)
-    Mbarp_grid = term_M .+ uθp_grid
-    Mbarm_grid = term_M .+ uθm_grid
-
-    # --------------------------
-    # 9. J-series Terms (Vectorized)
-    # --------------------------
-    Np_sq = Np_grid .^ 2
-    Nm_sq = Nm_grid .^ 2
-    Mbarp_sq = Mbarp_grid .^ 2
-    Mbarm_sq = Mbarm_grid .^ 2
-
-    exp_pp = exp.(im .* (rphase_grid .+ θphase_grid))
-    exp_pm = exp.(im .* (rphase_grid .- θphase_grid))
-    exp_mp = exp.(im .* (-rphase_grid .+ θphase_grid))
-    exp_mm = exp.(im .* (-rphase_grid .- θphase_grid))
-
-    Jpp_grid = (Wnn_grid .* Np_sq .+ Wnmbar_grid .* Np_grid .* Mbarp_grid .+ Wmbarmbar_grid .* Mbarp_sq) .* exp_pp
-    Jpm_grid = (Wnn_grid .* Np_sq .+ Wnmbar_grid .* Np_grid .* Mbarm_grid .+ Wmbarmbar_grid .* Mbarm_sq) .* exp_pm
-    Jmp_grid = (Wnn_grid .* Nm_sq .+ Wnmbar_grid .* Nm_grid .* Mbarp_grid .+ Wmbarmbar_grid .* Mbarp_sq) .* exp_mp
-    Jmm_grid = (Wnn_grid .* Nm_sq .+ Wnmbar_grid .* Nm_grid .* Mbarm_grid .+ Wmbarmbar_grid .* Mbarm_sq) .* exp_mm
-
-    # --------------------------
-    # 10. Sum J Terms (Final Result)
-    # --------------------------
-    Jlmnk = (Jpp_grid .+ Jpm_grid .+ Jmp_grid .+ Jmm_grid) ./ (4 .* π .^2)
-
-    Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
-
-    return 4im .* π .* ω .* Jlmnk .* exp(im * Xi) ./ (Γ .* Binc)
-end
-
-function integrand_generic_sample_p2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64)
-    # --------------------------
-    # 1. Extract Parameters (1D Vectors)
-    # --------------------------
-    # Radial (N) and Polar (K) sampling vectors
-    r_vec = KG_samp["r"]          # Length N (radial samples)
-    rs_vec = KG_samp["rs"]        # Precomputed tortoise coordinates (length N)
-    θ_vec = KG_samp["θ"]          # Length K (polar samples)
-    N = KG_samp["N_sample"]       # Grid size N (radial)
-    K = KG_samp["K_sample"]       # Grid size K (polar)
-    Γ = KG_samp["Γ"]
-    qt0, qr0, qθ0, qφ0 = KG_samp["initialPhases"]
-    Δtr_func, Δtθ_func, Δφr_func, Δφθ_func = KG_samp["CrossFunction"]
-
-    # Radial velocity (length N)
-    urp = KG_samp["ur_fwd"]       # Forward radial velocity
-    urm = KG_samp["ur_rev"]       # Reverse radial velocity
-
-    # Polar velocity (length K)
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Cross functions (length N for Δtr/Δφr, length K for Δtθ/Δφθ)
-    Δtr = KG_samp["Δtr"]          # Radial cross function (N)
-    Δtθ = KG_samp["Δtθ"]          # Polar cross function (K)
-    Δφr = KG_samp["Δφr"]          # Radial cross function (N)
-    Δφθ = KG_samp["Δφθ"]          # Polar cross function (K)
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (length K, polar-dependent)
-    S0 = SH_samp["S0"]            # Base value (K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (K)
-
-    # Radial functions (length N, radial-dependent)
-    Y = Y_samp["Y"]               # Radial function (N)
-    Yp = Y_samp["Yp"]             # 1st r-derivative (N)
-    X = Y_samp["X"]               # Auxiliary radial function (N)
-    Cinc = Y_samp["Cinc"]
-
-    # Constant parameters
-    params = Y_samp["params"]
-    s = params.s                  # Spin parameter (scalar)
-    l = params.l                  # Angular quantum number (scalar)
-    m = params.m                  # Magnetic quantum number (scalar)
-    a = params.a                  # Black hole spin (scalar)
-    ω = params.omega              # Frequency (scalar)
-    λ = params.lambda             # Eigenvalue (scalar)
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. Generate 2D Grid Matrices (Vectorization Core)
-    # --------------------------
-    # Create N×K grids for r, rs, θ (broadcast 1D vectors to 2D)
-    r_grid = reshape(r_vec, :, 1)  # N×1: broadcast across columns
-    θ_grid = reshape(θ_vec, 1, :)  # 1×K: broadcast across rows
-
-    # Precompute θ-dependent grid matrices (K→N×K broadcast)
-    sinθ_grid = sin.(θ_grid)
-    cosθ_grid = cos.(θ_grid)
-    cotθ_grid = cot.(θ_grid)
-    inv_sinθ_grid = 1.0 ./ sinθ_grid
-    inv_sin2θ_grid = 1.0 ./ (sinθ_grid .^ 2)  # Precompute 1/sin²θ
-
-    # Precompute r-dependent grid matrices (N→N×K broadcast)
-    r2_grid = r_grid .^ 2
-    Δ_grid = r2_grid .- 2.0 .* r_grid .+ a^2  # Kerr Δ(r) grid
-
-    # --------------------------
-    # 3. Compute Complex Parameters (Vectorized)
-    # --------------------------
-    # ρ and ρbar (N×K, complex-valued)
-    ρ_grid = -1.0 ./ (r_grid .- im .* a .* cosθ_grid)
-    ρbar_grid = -1.0 ./ (r_grid .+ im .* a .* cosθ_grid)
-    inv_ρ_grid = 1.0 ./ ρ_grid  # Precompute 1/ρ
-
-    # --------------------------
-    # 4. L-series Operators (Vectorized)
-    # --------------------------
-    L1_grid = m .* inv_sinθ_grid .- a .* ω .* sinθ_grid .+ cotθ_grid
-    L2_grid = m .* inv_sinθ_grid .- a .* ω .* sinθ_grid .+ 2.0 .* cotθ_grid
-    L2p_grid = - m .* cosθ_grid .* inv_sin2θ_grid .- a .* ω .* cosθ_grid .- 2.0 .* inv_sin2θ_grid
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (Vectorized)
-    # --------------------------
-    S0_grid = reshape(S0, 1, :)   # 1×K: broadcast across rows
-    S1_grid = reshape(S1, 1, :)   # 1×K: broadcast across rows
-    S2_grid = reshape(S2, 1, :)   # 1×K: broadcast across rows
-
-    L2S_grid = S1_grid .+ L2_grid .* S0_grid
-    L1Sp_grid = S2_grid .+ L1_grid .* S1_grid
-    L1L2S_grid = L1Sp_grid .+ L2p_grid .* S0_grid .+ L2_grid .* S1_grid .+ L1_grid .* L2_grid .* S0_grid
-
-    # L1pL2pS (vectorized complex computation)
-    term1 = inv_ρ_grid .* L1L2S_grid
-    term2 = 3im .* a .* sinθ_grid .* L1_grid .* S0_grid
-    term3 = 3im .* a .* cosθ_grid .* S0_grid
-    term4 = 2im .* a .* sinθ_grid .* S1_grid
-    term5 = -1im .* a .* sinθ_grid .* L2_grid .* S0_grid
-    L1pL2pS_grid = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (Vectorized, using precomputed rs_vec)
-    # --------------------------
-    # Radial phase (phase[i,j]): use precomputed rs_vec instead of rstar_from_r
-    log_term_vec = log.((r_vec .- rp) ./ (r_vec .- rm))  # 1D (N)
-    phase_vec = exp.(.- im .* ω .* rs_vec .+ im .* a .* m .* log_term_vec ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D
-    phase_grid = reshape(phase_vec, :, 1)  # N×1: broadcast across columns
-
-    # rphase/θphase (1D, then broadcast to N×K for J terms)
-    qr = range(0.0, π, length=N)
-    qθ = range(0.0, π, length=K)
-    rphase_vec = ω .* Δtr .- m .* Δφr .+ n .* qr  # 1D (N)
-    θphase_vec = ω .* Δtθ .- m .* Δφθ .+ k .* qθ  # 1D (K)
-    rphase_grid = reshape(rphase_vec, :, 1)       # N×1
-    θphase_grid = reshape(θphase_vec, 1, :)       # 1×K
-
-    # --------------------------
-    # 7. W-series Quantities (Vectorized)
-    # --------------------------
-    Y_grid = reshape(Y, :, 1)
-    Yp_grid = reshape(Yp, :, 1)
-    X_grid = reshape(X, :, 1)
-
-    # Wll: use precomputed phase_grid
-    Wll_grid = ρbar_grid .* L1pL2pS_grid .* r2_grid .* Y_grid .* phase_grid .* 2.0
-
-    # Wlm
-    term_A = L2S_grid .+ im .* a .* sinθ_grid .* (ρ_grid .- ρbar_grid) .* S0_grid
-    term_B = 2.0 .* Y_grid .+ r_grid .* Yp_grid
-    term_C = L2S_grid .* (ρ_grid .+ ρbar_grid) .* r_grid .* Y_grid
-    Wlm_grid = 4.0 .* (r_grid .* ρbar_grid .* (term_A .* term_B .+ term_C) ./ ρ_grid) .* phase_grid
-
-    # Wmm
-    term_D = X_grid ./ (2.0 .* sqrt.(r2_grid .+ a^2))
-    term_E = (Y_grid .+ 2.0 .* r_grid .* Yp_grid) .* phase_grid
-    term_F = ρ_grid .* r_grid .* (2.0 .* Y_grid .+ r_grid .* Yp_grid) .* phase_grid
-    Wmm_grid = 4.0 .* S0_grid .* ρbar_grid .* (term_D .+ term_E .+ term_F) ./ ρ_grid
-
-    # --------------------------
-    # 8. L/M Terms (Vectorized)
-    # --------------------------
-    urp_grid = reshape(urp, :, 1)
-    urm_grid = reshape(urm, :, 1)
-    uθp_grid = reshape(uθp, 1, :)
-    uθm_grid = reshape(uθm, 1, :)
-
-    # Lp/Lm (using precomputed Δ_grid)
-    numerator_L = E .* (r2_grid .+ a^2) .- a .* Lz
-    Lp_grid = (numerator_L .- urp_grid) ./ Δ_grid
-    Lm_grid = (numerator_L .- urm_grid) ./ Δ_grid
-
-    # Mp/Mm
-    term_M = .- im .* sinθ_grid .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ_grid)
-    Mp_grid = term_M .+ uθp_grid
-    Mm_grid = term_M .+ uθm_grid
-
-    # --------------------------
-    # 9. J-series Terms (Vectorized)
-    # --------------------------
-    Lp_sq = Lp_grid .^ 2
-    Lm_sq = Lm_grid .^ 2
-    Mp_sq = Mp_grid .^ 2
-    Mm_sq = Mm_grid .^ 2
-
-    exp_pp = exp.(im .* (rphase_grid .+ θphase_grid))
-    exp_pm = exp.(im .* (rphase_grid .- θphase_grid))
-    exp_mp = exp.(im .* (-rphase_grid .+ θphase_grid))
-    exp_mm = exp.(im .* (-rphase_grid .- θphase_grid))
-
-    Jpp_grid = (Wll_grid .* Lp_sq .+ Wlm_grid .* Lp_grid .* Mp_grid .+ Wmm_grid .* Mp_sq) .* exp_pp
-    Jpm_grid = (Wll_grid .* Lp_sq .+ Wlm_grid .* Lp_grid .* Mm_grid .+ Wmm_grid .* Mm_sq) .* exp_pm
-    Jmp_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mp_grid .+ Wmm_grid .* Mp_sq) .* exp_mp
-    Jmm_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mm_grid .+ Wmm_grid .* Mm_sq) .* exp_mm
-
-    # --------------------------
-    # 10. Sum J Terms (Final Result)
-    # --------------------------
-    Jlmnk = (Jpp_grid .+ Jpm_grid .+ Jmp_grid .+ Jmm_grid) ./ (4 .* π .^2)
-
-    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
-
-    Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
-
-    return .- im .* π .* factor .* Jlmnk .* exp(im * Xi) .* η ./ (Γ .* κ .* Cinc)
-end
-
 function _validate_generic_cheby_geometry(geometry, KG_samp, a)
     geometry === nothing && return nothing
     # A precomputed geometry (built in ConvolutionIntegrals) belongs to one sample; check that it
@@ -1661,7 +1275,7 @@ end
 
 # `geometry`: optional precomputed `GenericM2Geometry` for this sample (built by ConvolutionIntegrals); when given,
 # its cached angular, ρ and N± arrays are used instead of being recomputed.
-function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64; geometry = nothing)
+function integrand_generic_sample_cheby(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64, s::Int; geometry = nothing)
     # --------------------------
     # 1. Extract Parameters (1D Vectors)
     # --------------------------
@@ -1706,7 +1320,6 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
     Y = Y_samp["Y"]               # Radial function (N)
     Yp = Y_samp["Yp"]             # 1st r-derivative (N)
     X = Y_samp["X"]               # Auxiliary radial function (N)
-    Binc = Y_samp["Binc"]
 
     # Constant parameters
     params = Y_samp["params"]
@@ -1752,9 +1365,12 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
     # --------------------------
     # 4. L-series Operators (Vectorized)
     # --------------------------
-    L1_grid = (-m) .* inv_sinθ_grid .+ a .* ω .* sinθ_grid .+ cotθ_grid
-    L2_grid = (-m) .* inv_sinθ_grid .+ a .* ω .* sinθ_grid .+ 2.0 .* cotθ_grid
-    L2p_grid = m .* cosθ_grid .* inv_sin2θ_grid .+ a .* ω .* cosθ_grid .- 2.0 .* inv_sin2θ_grid
+    # s = -2: sigma = -1, weights (1/2, -1, 1); s = +2: sigma = +1, weights (2, 4, 4) (see _inclined_source_terms)
+    σ = s == -2 ? -1.0 : 1.0
+    w1, w2, w3 = s == -2 ? (0.5, -1.0, 1.0) : (2.0, 4.0, 4.0)
+    L1_grid = (σ * m) .* inv_sinθ_grid .- σ .* (a .* ω .* sinθ_grid) .+ cotθ_grid
+    L2_grid = (σ * m) .* inv_sinθ_grid .- σ .* (a .* ω .* sinθ_grid) .+ 2.0 .* cotθ_grid
+    L2p_grid = (-σ * m) .* cosθ_grid .* inv_sin2θ_grid .+ (-σ) .* (a .* ω .* cosθ_grid) .- 2.0 .* inv_sin2θ_grid
 
     # --------------------------
     # 5. Spherical Harmonic Combinations (Vectorized)
@@ -1780,7 +1396,7 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
     # --------------------------
     # Radial phase (phase[i,j]): use precomputed rs_vec instead of rstar_from_r
     log_term_vec = log.((r_vec .- rp) ./ (r_vec .- rm))  # 1D (N)
-    phase_vec = exp.(im .* ω .* rs_vec .- im .* a .* m .* log_term_vec ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D
+    phase_vec = exp.((-σ) .* (im .* ω .* rs_vec .- im .* a .* m .* log_term_vec ./ (2.0 .* sqrt(1.0 .- a^2))))  # 1D
     phase_grid = reshape(phase_vec, :, 1)  # N×1: broadcast across columns
 
     # rphase/θphase (1D, then broadcast to N×K for J terms)
@@ -1801,19 +1417,19 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
     X_grid = reshape(X, :, 1)
 
     # Wnn: use precomputed phase_grid
-    Wnn_grid = ρbar_grid .* L1pL2pS_grid .* r2_grid .* Y_grid .* phase_grid ./ 2.0
+    Wnn_grid = ρbar_grid .* L1pL2pS_grid .* r2_grid .* Y_grid .* phase_grid .* w1
 
     # Wnmbar
     term_A = L2S_grid .+ im .* a .* sinθ_grid .* (ρ_grid .- ρbar_grid) .* S0_grid
     term_B = 2.0 .* Y_grid .+ r_grid .* Yp_grid
     term_C = L2S_grid .* (ρ_grid .+ ρbar_grid) .* r_grid .* Y_grid
-    Wnmbar_grid = (-r_grid .* ρbar_grid .* (term_A .* term_B .+ term_C) ./ ρ_grid) .* phase_grid
+    Wnmbar_grid = w2 .* (r_grid .* ρbar_grid .* (term_A .* term_B .+ term_C) ./ ρ_grid) .* phase_grid
 
     # Wmbarmbar
     term_D = X_grid ./ (2.0 .* sqrt.(r2_grid .+ a^2))
     term_E = (Y_grid .+ 2.0 .* r_grid .* Yp_grid) .* phase_grid
     term_F = ρ_grid .* r_grid .* (2.0 .* Y_grid .+ r_grid .* Yp_grid) .* phase_grid
-    Wmbarmbar_grid = S0_grid .* ρbar_grid .* (term_D .+ term_E .+ term_F) ./ ρ_grid
+    Wmbarmbar_grid = w3 .* (S0_grid .* ρbar_grid .* (term_D .+ term_E .+ term_F) ./ ρ_grid)
 
     # --------------------------
     # 8. N/Mbar Terms (Vectorized)
@@ -1825,11 +1441,11 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
 
     # Np/Nm (using precomputed Δ_grid)
     numerator_N = E .* (r2_grid .+ a^2) .- a .* Lz
-    Np_grid = geometry === nothing ? (numerator_N .+ urp_grid) ./ Δ_grid : reshape(geometry.Np, :, 1)
-    Nm_grid = geometry === nothing ? (numerator_N .+ urm_grid) ./ Δ_grid : reshape(geometry.Nm, :, 1)
+    Np_grid = geometry === nothing ? (numerator_N .+ (-σ) .* urp_grid) ./ Δ_grid : reshape(s == -2 ? geometry.Np : geometry.Lp, :, 1)
+    Nm_grid = geometry === nothing ? (numerator_N .+ (-σ) .* urm_grid) ./ Δ_grid : reshape(s == -2 ? geometry.Nm : geometry.Lm, :, 1)
 
     # Mbarp/Mbarm
-    term_M = im .* sinθ_grid .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ_grid)
+    term_M = (s == -2 ? im : -im) .* sinθ_grid .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ_grid)
     Mbarp_grid = term_M .+ uθp_grid
     Mbarm_grid = term_M .+ uθm_grid
 
@@ -1847,205 +1463,15 @@ function integrand_generic_sample_cheby_m2(KG_samp, Y_samp, SH_samp, n::Int64, k
     Jmm_grid = (Wnn_grid .* Nm_sq .+ Wnmbar_grid .* Nm_grid .* Mbarm_grid .+ Wmbarmbar_grid .* Mbarm_sq) ./ (4 .* π .^2)
 
     Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
-    prefactor = 4im .* π .* ω .* exp(im * Xi) ./ (Γ .* Binc)
+    prefactor = s == -2 ? 4im .* π .* ω .* exp(im * Xi) ./ (Γ .* Y_samp["Binc"]) :
+        ((κ, η, factor) = _plus2_source_factors(a, m, ω, λ, rp);
+        .- im .* π .* factor .* η .* exp(im * Xi) ./ (Γ .* κ .* Y_samp["Cinc"]))
 
     return Jpp_grid, Jpm_grid, Jmp_grid, Jmm_grid, drphase, dθphase, rphaseL, rphaseR, θphaseL, θphaseR, prefactor
 end
 
 # `geometry`: optional precomputed `GenericM2Geometry` for this sample (built by ConvolutionIntegrals); when given,
 # its cached angular, ρ and L± arrays are used instead of being recomputed.
-function integrand_generic_sample_cheby_p2(KG_samp, Y_samp, SH_samp, n::Int64, k::Int64; geometry = nothing)
-    # --------------------------
-    # 1. Extract Parameters (1D Vectors)
-    # --------------------------
-    # Radial (N) and Polar (K) sampling vectors
-    r_vec = KG_samp["r"]          # Length N (radial samples)
-    rs_vec = KG_samp["rs"]        # Precomputed tortoise coordinates (length N)
-    θ_vec = KG_samp["θ"]          # Length K (polar samples)
-    N = KG_samp["N_sample"]       # Grid size N (radial)
-    K = KG_samp["K_sample"]       # Grid size K (polar)
-    Γ = KG_samp["Γ"]
-    qt0, qr0, qθ0, qφ0 = KG_samp["initialPhases"]
-    Δtr_func, Δtθ_func, Δφr_func, Δφθ_func = KG_samp["CrossFunction"]
-    dtr = KG_samp["dtr"]
-    dφr = KG_samp["dφr"]
-    dtθ = KG_samp["dtθ"]
-    dφθ = KG_samp["dφθ"]
-
-    # Radial velocity (length N)
-    urp = KG_samp["ur_fwd"]       # Forward radial velocity
-    urm = KG_samp["ur_rev"]       # Reverse radial velocity
-
-    # Polar velocity (length K)
-    uθp = KG_samp["uθ_fwd"]       # Forward polar velocity
-    uθm = KG_samp["uθ_rev"]       # Reverse polar velocity
-
-    # Cross functions (length N for Δtr/Δφr, length K for Δtθ/Δφθ)
-    Δtr = KG_samp["Δtr"]          # Radial cross function (N)
-    Δtθ = KG_samp["Δtθ"]          # Polar cross function (K)
-    Δφr = KG_samp["Δφr"]          # Radial cross function (N)
-    Δφθ = KG_samp["Δφθ"]          # Polar cross function (K)
-
-    # Orbital constants
-    E = KG_samp["E"]              # Energy (scalar)
-    Lz = KG_samp["Lz"]            # z-angular momentum (scalar)
-
-    # Spherical harmonics (length K, polar-dependent)
-    S0 = SH_samp["S0"]            # Base value (K)
-    S1 = SH_samp["S1"]            # 1st θ-derivative (K)
-    S2 = SH_samp["S2"]            # 2nd θ-derivative (K)
-
-    # Radial functions (length N, radial-dependent)
-    Y = Y_samp["Y"]               # Radial function (N)
-    Yp = Y_samp["Yp"]             # 1st r-derivative (N)
-    X = Y_samp["X"]               # Auxiliary radial function (N)
-    Cinc = Y_samp["Cinc"]
-
-    # Constant parameters
-    params = Y_samp["params"]
-    s = params.s                  # Spin parameter (scalar)
-    l = params.l                  # Angular quantum number (scalar)
-    m = params.m                  # Magnetic quantum number (scalar)
-    a = params.a                  # Black hole spin (scalar)
-    ω = params.omega              # Frequency (scalar)
-    λ = params.lambda             # Eigenvalue (scalar)
-
-    _validate_generic_cheby_geometry(geometry, KG_samp, a)
-
-    # Black hole horizons (scalar)
-    rp = 1.0 + sqrt(1.0 - a^2)    # Outer horizon
-    rm = 1.0 - sqrt(1.0 - a^2)    # Inner horizon
-
-    # --------------------------
-    # 2. Generate 2D Grid Matrices (Vectorization Core)
-    # --------------------------
-    # Create N×K grids for r, rs, θ (broadcast 1D vectors to 2D)
-    r_grid = reshape(r_vec, :, 1)  # N×1: broadcast across columns
-    θ_grid = reshape(θ_vec, 1, :)  # 1×K: broadcast across rows
-
-    # Precompute θ-dependent grid matrices (K→N×K broadcast)
-    sinθ_grid = geometry === nothing ? sin.(θ_grid) : reshape(geometry.st, 1, :)
-    cosθ_grid = geometry === nothing ? cos.(θ_grid) : reshape(geometry.ct, 1, :)
-    cotθ_grid = cot.(θ_grid)
-    inv_sinθ_grid = geometry === nothing ? 1.0 ./ sinθ_grid : reshape(geometry.invst, 1, :)
-    inv_sin2θ_grid = 1.0 ./ (sinθ_grid .^ 2)  # Precompute 1/sin²θ
-
-    # Precompute r-dependent grid matrices (N→N×K broadcast)
-    r2_grid = r_grid .^ 2
-    Δ_grid = r2_grid .- 2.0 .* r_grid .+ a^2  # Kerr Δ(r) grid
-
-    # --------------------------
-    # 3. Compute Complex Parameters (Vectorized)
-    # --------------------------
-    # ρ and ρbar (N×K, complex-valued)
-    ρ_grid = geometry === nothing ? -1.0 ./ (r_grid .- im .* a .* cosθ_grid) : geometry.rho
-    ρbar_grid = geometry === nothing ? -1.0 ./ (r_grid .+ im .* a .* cosθ_grid) : geometry.rhobar
-    inv_ρ_grid = geometry === nothing ? 1.0 ./ ρ_grid : geometry.invrho  # Precompute 1/ρ
-
-    # --------------------------
-    # 4. L-series Operators (Vectorized)
-    # --------------------------
-    L1_grid = m .* inv_sinθ_grid .- a .* ω .* sinθ_grid .+ cotθ_grid
-    L2_grid = m .* inv_sinθ_grid .- a .* ω .* sinθ_grid .+ 2.0 .* cotθ_grid
-    L2p_grid = - m .* cosθ_grid .* inv_sin2θ_grid .- a .* ω .* cosθ_grid .- 2.0 .* inv_sin2θ_grid
-
-    # --------------------------
-    # 5. Spherical Harmonic Combinations (Vectorized)
-    # --------------------------
-    S0_grid = reshape(S0, 1, :)   # 1×K: broadcast across rows
-    S1_grid = reshape(S1, 1, :)   # 1×K: broadcast across rows
-    S2_grid = reshape(S2, 1, :)   # 1×K: broadcast across rows
-
-    L2S_grid = S1_grid .+ L2_grid .* S0_grid
-    L1Sp_grid = S2_grid .+ L1_grid .* S1_grid
-    L1L2S_grid = L1Sp_grid .+ L2p_grid .* S0_grid .+ L2_grid .* S1_grid .+ L1_grid .* L2_grid .* S0_grid
-
-    # L1pL2pS (vectorized complex computation)
-    term1 = inv_ρ_grid .* L1L2S_grid
-    term2 = 3im .* a .* sinθ_grid .* L1_grid .* S0_grid
-    term3 = 3im .* a .* cosθ_grid .* S0_grid
-    term4 = 2im .* a .* sinθ_grid .* S1_grid
-    term5 = -1im .* a .* sinθ_grid .* L2_grid .* S0_grid
-    L1pL2pS_grid = term1 .+ term2 .+ term3 .+ term4 .+ term5
-
-    # --------------------------
-    # 6. Phase Terms (Vectorized, using precomputed rs_vec)
-    # --------------------------
-    # Radial phase (phase[i,j]): use precomputed rs_vec instead of rstar_from_r
-    log_term_vec = log.((r_vec .- rp) ./ (r_vec .- rm))  # 1D (N)
-    phase_vec = exp.(.- im .* ω .* rs_vec .+ im .* a .* m .* log_term_vec ./ (2.0 .* sqrt(1.0 .- a^2)))  # 1D
-    phase_grid = reshape(phase_vec, :, 1)  # N×1: broadcast across columns
-
-    # rphase/θphase (1D, then broadcast to N×K for J terms)
-    qr = range(0.0, π, length=N)
-    qθ = range(0.0, π, length=K)
-    drphase = ω .* (dtr) .- m .* (dφr) .+ n 
-    rphaseL = ω * (Δtr[1]) - m * (Δφr[1])
-    rphaseR = ω * (Δtr[end]) - m * (Δφr[end]) + n * 1.0pi
-    dθphase = ω .* dtθ .- m .* dφθ .+ k
-    θphaseL = ω * Δtθ[1] - m * Δφθ[1]
-    θphaseR = ω * Δtθ[end] - m * Δφθ[end] + k * 1.0pi
-
-    # --------------------------
-    # 7. W-series Quantities (Vectorized)
-    # --------------------------
-    Y_grid = reshape(Y, :, 1)
-    Yp_grid = reshape(Yp, :, 1)
-    X_grid = reshape(X, :, 1)
-
-    # Wll: use precomputed phase_grid
-    Wll_grid = ρbar_grid .* L1pL2pS_grid .* r2_grid .* Y_grid .* phase_grid .* 2.0
-
-    # Wlm
-    term_A = L2S_grid .+ im .* a .* sinθ_grid .* (ρ_grid .- ρbar_grid) .* S0_grid
-    term_B = 2.0 .* Y_grid .+ r_grid .* Yp_grid
-    term_C = L2S_grid .* (ρ_grid .+ ρbar_grid) .* r_grid .* Y_grid
-    Wlm_grid = 4.0 .* (r_grid .* ρbar_grid .* (term_A .* term_B .+ term_C) ./ ρ_grid) .* phase_grid
-
-    # Wmm
-    term_D = X_grid ./ (2.0 .* sqrt.(r2_grid .+ a^2))
-    term_E = (Y_grid .+ 2.0 .* r_grid .* Yp_grid) .* phase_grid
-    term_F = ρ_grid .* r_grid .* (2.0 .* Y_grid .+ r_grid .* Yp_grid) .* phase_grid
-    Wmm_grid = 4.0 .* S0_grid .* ρbar_grid .* (term_D .+ term_E .+ term_F) ./ ρ_grid
-
-    # --------------------------
-    # 8. L/M Terms (Vectorized)
-    # --------------------------
-    urp_grid = reshape(urp, :, 1)
-    urm_grid = reshape(urm, :, 1)
-    uθp_grid = reshape(uθp, 1, :)
-    uθm_grid = reshape(uθm, 1, :)
-
-    # Lp/Lm (using precomputed Δ_grid)
-    numerator_L = E .* (r2_grid .+ a^2) .- a .* Lz
-    Lp_grid = geometry === nothing ? (numerator_L .- urp_grid) ./ Δ_grid : reshape(geometry.Lp, :, 1)
-    Lm_grid = geometry === nothing ? (numerator_L .- urm_grid) ./ Δ_grid : reshape(geometry.Lm, :, 1)
-
-    # Mp/Mm
-    term_M = .- im .* sinθ_grid .* (a .* E .- (iszero(Lz) ? 0.0 : Lz) .* inv_sin2θ_grid)
-    Mp_grid = term_M .+ uθp_grid
-    Mm_grid = term_M .+ uθm_grid
-
-    # --------------------------
-    # 9. J-series Terms (Vectorized)
-    # --------------------------
-    Lp_sq = Lp_grid .^ 2
-    Lm_sq = Lm_grid .^ 2
-    Mp_sq = Mp_grid .^ 2
-    Mm_sq = Mm_grid .^ 2
-
-    Jpp_grid = (Wll_grid .* Lp_sq .+ Wlm_grid .* Lp_grid .* Mp_grid .+ Wmm_grid .* Mp_sq) ./ (4 .* π .^2)
-    Jpm_grid = (Wll_grid .* Lp_sq .+ Wlm_grid .* Lp_grid .* Mm_grid .+ Wmm_grid .* Mm_sq) ./ (4 .* π .^2)
-    Jmp_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mp_grid .+ Wmm_grid .* Mp_sq) ./ (4 .* π .^2)
-    Jmm_grid = (Wll_grid .* Lm_sq .+ Wlm_grid .* Lm_grid .* Mm_grid .+ Wmm_grid .* Mm_sq) ./ (4 .* π .^2)
-
-    κ, η, factor = _plus2_source_factors(a, m, ω, λ, rp)
-    Xi = m * (Δφr_func(qr0) + Δφθ_func(qθ0) - qφ0) - ω * (Δtr_func(qr0) + Δtθ_func(qθ0) - qt0) - k * qθ0 - n * qr0
-    prefactor = .- im .* π .* factor .* η .* exp(im * Xi) ./ (Γ .* κ .* Cinc)
-
-    return Jpp_grid, Jpm_grid, Jmp_grid, Jmm_grid, drphase, dθphase, rphaseL, rphaseR, θphaseL, θphaseR, prefactor
-end
-
 # Trapezoidal qr convolution integral for s = -2 on a uniform eccentric equatorial sample.
 @inline function _eccentric_integral_sample_m2_fast(KG_samp, Y_samp,
         SH, n::Int64)
