@@ -850,6 +850,8 @@ function solve_static_Rin(s::Int, l::Int, m::Int, a)
 
     Use instead GeneralizedSasakiNakamura.Teukolsky_radial() and set omega = 0 and boundary_condition = IN
     =#
+    # gamma = 0 at |a| = 1 makes kappa infinite: the exact-extremal static solutions are not implemented
+    abs(a) < 1 || throw(DomainError(a, "static (omega = 0) solutions require |a| < 1."))
     gamma = sqrt(1 - a^2)
     kappa = I*a*m/gamma
 
@@ -887,6 +889,8 @@ function solve_static_Rup(s::Int, l::Int, m::Int, a)
 
     Use instead GeneralizedSasakiNakamura.Teukolsky_radial() and set omega = 0 and boundary_condition = UP
     =#
+    # gamma = 0 at |a| = 1 makes kappa infinite: the exact-extremal static solutions are not implemented
+    abs(a) < 1 || throw(DomainError(a, "static (omega = 0) solutions require |a| < 1."))
     gamma = sqrt(1 - a^2)
     kappa = I*a*m/gamma
 

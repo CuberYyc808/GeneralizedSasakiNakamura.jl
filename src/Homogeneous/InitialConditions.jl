@@ -16,13 +16,16 @@ _DEFAULTDATATYPE = AsymptoticExpansionCoefficients._DEFAULTDATATYPE
 # _truncated_sum adds terms while they keep shrinking and stops at the first growing
 # term (from the third term on, to tolerate a small or vanishing low-order
 # coefficient), when the term is below round-off relative to the sum, or at `order`,
-# which therefore acts as a cap rather than a fixed count.
+# which therefore acts as a cap rather than a fixed count. An exactly vanishing term is
+# skipped, neither a stop nor the reference of the next comparison (s = -2, l = 2, a = 0:
+# the order-3 coefficient of both infinity series is zero, the order-4 one is not).
 function _truncated_sum(term, order)
     ans = term(0)
     prev = Inf
     for i in 1:order
         t = term(i)
         at = abs(t)
+        iszero(at) && continue
         if i >= 3 && at > prev
             break
         end
