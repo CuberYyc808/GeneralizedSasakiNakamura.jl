@@ -78,73 +78,40 @@ function Xsoln_from_Phisoln(Phisoln)
     return rs -> XXprime_from_PhiPhiprime(Phisoln(rs)[1], Phisoln(rs)[2])
 end
 
-function solve_Phiup(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditions_order=-1, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
-    # Sanity check
+# The legacy ODE solution of `boundary` (:in from rsin outward, :up from rsout inward) in the linear form (X, dX/drs)
+# or the Riccati form (Phi, dPhi/drs) with X = exp(i Phi).
+function _solve_legacy(s::Int, m::Int, a, omega, lambda, rsin, rsout, boundary::Symbol, riccati::Bool;
+        initialconditions_order=-1, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE,
+        abstol=_DEFAULTTOLERANCE)
     if rsin > rsout
-        throw(DomainError(rsout, "rsout ($rsout) must be larger than rsin ($rsin)"))
+        boundary == :up ? throw(DomainError(rsout, "rsout ($rsout) must be larger than rsin ($rsin)")) :
+            throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
     end
     maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
-    # Initial conditions at rs = rsout, the outer boundary
-    Xup_rsout, Xupprime_rsout = Xup_initialconditions(s, m, a, omega, lambda, rsout; order=initialconditions_order, dtype=dtype)
-    # Convert initial conditions for Xup for Phi
-    Phi, Phiprime = PhiPhiprime_from_XXprime(Xup_rsout, Xupprime_rsout)
-    u0 = SA[dtype(Phi); dtype(Phiprime)]
-    rsspan = (rsout, rsin) # Integrate from rsout to rsin *inward*
+    # Initial conditions at the boundary: rs = rsout for UP, rs = rsin (close to the horizon) for IN
+    X0, Xprime0 = boundary == :up ?
+        Xup_initialconditions(s, m, a, omega, lambda, rsout; order=initialconditions_order, dtype=dtype) :
+        Xin_initialconditions(s, m, a, omega, lambda, rsin; order=initialconditions_order, dtype=dtype)
+    if riccati
+        Phi, Phiprime = PhiPhiprime_from_XXprime(X0, Xprime0)
+        u0 = SA[dtype(Phi); dtype(Phiprime)]
+    else
+        u0 = SA[dtype(X0); dtype(Xprime0)]
+    end
+    rsspan = boundary == :up ? (rsout, rsin) : (rsin, rsout)
     p = (s=s, m=m, a=a, omega=omega, lambda=lambda)
-    odeprob = ODEProblem(GSN_Riccati_eqn, u0, rsspan, p)
-    odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol, maxiters=maxiters)
-    return odesoln
+    odeprob = ODEProblem(riccati ? GSN_Riccati_eqn : GSN_linear_eqn, u0, rsspan, p)
+    return solve(odeprob, odealgo; reltol=reltol, abstol=abstol, maxiters=maxiters)
 end
 
-function solve_Phiin(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditions_order=-1, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
-    # Sanity check
-    if rsin > rsout
-        throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
-    end
-    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
-    # Initial conditions at rs = rsin, the inner boundary; this should be very close to EH
-    Xin_rsin, Xinprime_rsin = Xin_initialconditions(s, m, a, omega, lambda, rsin; order=initialconditions_order, dtype=dtype)
-    # Convert initial conditions for Xin for PhiRe PhiIm
-    Phi, Phiprime = PhiPhiprime_from_XXprime(Xin_rsin, Xinprime_rsin)
-    u0 = SA[dtype(Phi); dtype(Phiprime)]
-    rsspan = (rsin, rsout) # Integrate from rsin to rsout *outward*
-    p = (s=s, m=m, a=a, omega=omega, lambda=lambda)
-    odeprob = ODEProblem(GSN_Riccati_eqn, u0, rsspan, p)
-    odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol, maxiters=maxiters)
-    return odesoln
-end
-
-function solve_Xup(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditions_order=-1, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
-    # Sanity check
-    if rsin > rsout
-        throw(DomainError(rsout, "rsout ($rsout) must be larger than rsin ($rsin)"))
-    end
-    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
-    # Initial conditions at rs = rsout, the outer boundary
-    Xup_rsout, Xupprime_rsout = Xup_initialconditions(s, m, a, omega, lambda, rsout; order=initialconditions_order, dtype=dtype)
-    u0 = SA[dtype(Xup_rsout); dtype(Xupprime_rsout)]
-    rsspan = (rsout, rsin) # Integrate from rsout to rsin *inward*
-    p = (s=s, m=m, a=a, omega=omega, lambda=lambda)
-    odeprob = ODEProblem(GSN_linear_eqn, u0, rsspan, p)
-    odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol, maxiters=maxiters)
-    return odesoln
-end
-
-function solve_Xin(s::Int, m::Int, a, omega, lambda, rsin, rsout; initialconditions_order=-1, dtype=_DEFAULTDATATYPE, odealgo=_DEFAULTSOLVER, reltol=_DEFAULTTOLERANCE, abstol=_DEFAULTTOLERANCE)
-    # Sanity check
-    if rsin > rsout
-        throw(DomainError(rsin, "rsin ($rsin) must be smaller than rsout ($rsout)"))
-    end
-    maxiters = _ode_maxiters(rsin, rsout, reltol, abstol)
-    # Initial conditions at rs = rsin, the inner boundary; this should be very close to EH
-    Xin_rsin, Xinprime_rsin = Xin_initialconditions(s, m, a, omega, lambda, rsin; order=initialconditions_order, dtype=dtype)
-    u0 = SA[dtype(Xin_rsin); dtype(Xinprime_rsin)]
-    rsspan = (rsin, rsout) # Integrate from rsin to rsout *outward*
-    p = (s=s, m=m, a=a, omega=omega, lambda=lambda)
-    odeprob = ODEProblem(GSN_linear_eqn, u0, rsspan, p)
-    odesoln = solve(odeprob, odealgo; reltol=reltol, abstol=abstol, maxiters=maxiters)
-    return odesoln
-end
+solve_Phiup(s::Int, m::Int, a, omega, lambda, rsin, rsout; kwargs...) =
+    _solve_legacy(s, m, a, omega, lambda, rsin, rsout, :up, true; kwargs...)
+solve_Phiin(s::Int, m::Int, a, omega, lambda, rsin, rsout; kwargs...) =
+    _solve_legacy(s, m, a, omega, lambda, rsin, rsout, :in, true; kwargs...)
+solve_Xup(s::Int, m::Int, a, omega, lambda, rsin, rsout; kwargs...) =
+    _solve_legacy(s, m, a, omega, lambda, rsin, rsout, :up, false; kwargs...)
+solve_Xin(s::Int, m::Int, a, omega, lambda, rsin, rsout; kwargs...) =
+    _solve_legacy(s, m, a, omega, lambda, rsin, rsout, :in, false; kwargs...)
 
 # Unit-amplitude asymptotic solutions (X, dX/drs) at a tortoise coordinate rs: at the horizon the ingoing (wave = :in,
 # exp(-i p rs)) or outgoing (:out, exp(+i p rs)) Frobenius series with p = omega - m Omega_H, at infinity the ingoing
