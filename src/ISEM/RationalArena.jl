@@ -24,11 +24,16 @@ _RationalArena() = _RationalArena(Vector{_C}[], Int[], 0, ntuple(_ -> _C[], 6))
 
 _ra_reset!(arena::_RationalArena) = (arena.used = 0; arena)
 
-function _ra_take!(arena::_RationalArena)
+# The next polynomial slot, with room for `len` coefficients (slots grow to the largest degree they hold; entries
+# above a polynomial's degree are never read).
+function _ra_take!(arena::_RationalArena, len::Int)
     arena.used += 1
     if arena.used > length(arena.polys)
-        push!(arena.polys, zeros(_C, _RA_CAPACITY))
+        push!(arena.polys, Vector{_C}(undef, max(len, 8)))
         push!(arena.degree, 0)
+    else
+        p = arena.polys[arena.used]
+        length(p) < len && resize!(p, max(len, 2 * length(p)))
     end
     return arena.used
 end
@@ -42,7 +47,7 @@ struct _RatSum
 end
 
 function _ra_poly!(arena, coeffs...)
-    k = _ra_take!(arena)
+    k = _ra_take!(arena, length(coeffs))
     p = arena.polys[k]
     for (i, c) in enumerate(coeffs)
         p[i] = c
@@ -54,7 +59,7 @@ end
 function _ra_mul!(arena, i, j)
     di, dj = arena.degree[i], arena.degree[j]
     di + dj < _RA_CAPACITY || throw(_RationalOverflow())
-    k = _ra_take!(arena)
+    k = _ra_take!(arena, di + dj + 1)
     p, a, b = arena.polys[k], arena.polys[i], arena.polys[j]
     @inbounds begin
         fill!(view(p, 1:(di + dj + 1)), zero(_C))
@@ -68,7 +73,7 @@ end
 
 function _ra_add!(arena, i, j, sign)
     di, dj = arena.degree[i], arena.degree[j]
-    k = _ra_take!(arena)
+    k = _ra_take!(arena, max(di, dj) + 1)
     p, a, b = arena.polys[k], arena.polys[i], arena.polys[j]
     d = max(di, dj)
     @inbounds for x in 0:d
@@ -79,8 +84,8 @@ function _ra_add!(arena, i, j, sign)
 end
 
 function _ra_scale!(arena, i, c)
-    k = _ra_take!(arena)
     d = arena.degree[i]
+    k = _ra_take!(arena, d + 1)
     p, a = arena.polys[k], arena.polys[i]
     @inbounds for x in 0:d
         p[x + 1] = c * a[x + 1]
@@ -291,7 +296,7 @@ end
 
 function _ra_derivative!(arena, i)
     d = arena.degree[i]
-    k = _ra_take!(arena)
+    k = _ra_take!(arena, max(d, 1))
     p, a = arena.polys[k], arena.polys[i]
     if d == 0
         p[1] = zero(_C)
