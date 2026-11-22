@@ -15,6 +15,31 @@ export convolution_integral_circular_equatorial_isem
 export convolution_integral_eccentric_adaptive_levin_isem
 export convolution_integral_generic_adaptive_levin_isem
 
+#=
+SWSH raises its documented error instead of returning a harmonic that binary64 cannot resolve (a mode nearly
+degenerate with a neighbour, e.g. (s, l, m) = (-2, 3, -2) for c above ~14.85) and resolves the same mode at 256 bits.
+The flux routines then use that harmonic, read in binary64. Inference does not see it (dynamic calls, an inference
+barrier), so it adds no specializations to the binary64 routes; its code is compiled only when such a mode occurs.
+=#
+struct _Binary64Harmonic
+    harmonic::Any
+    params::NamedTuple{(:s, :l, :m, :c), Tuple{Int, Int, Int, Float64}}
+    lambda::Float64
+end
+SpinWeightedSpheroidalHarmonics.value_and_theta_derivative(h::_Binary64Harmonic, θ, φ = 0) =
+    map(ComplexF64, value_and_theta_derivative(h.harmonic, θ, φ))::NTuple{2, ComplexF64}
+(h::_Binary64Harmonic)(θ, φ; kwargs...) = ComplexF64(h.harmonic(θ, φ; kwargs...))
+
+function _binary64_harmonic(s, l, m, c; kwargs...)
+    try
+        return spin_weighted_spheroidal_harmonic(s, l, m, c; kwargs...)
+    catch err
+        err isa ErrorException && occursin("cannot be resolved in Float64", err.msg) || rethrow()
+        h = Base.invokelatest(spin_weighted_spheroidal_harmonic, s, l, m, c; kwargs..., precision = 256)
+        return Base.inferencebarrier(_Binary64Harmonic(h, (; s, l, m, c), h.lambda))
+    end
+end
+
 function horizon_factor(ω, a, m)
     rp = 1 + sqrt(1 - a^2)
     κ = ω - a * m / (2 * rp)
@@ -278,7 +303,7 @@ function _inclined_trapezoidal_context(KG_sample::Dict, s::Int, l::Int, m::Int, 
     a = KG_sample["a"]
     ω = (m * ϒφ + k * ϒθ) / Γ
     KG_samp = cache isa InclinedFluxCache ? _cached_inclined_sample!(cache, KG_sample, K_interval) : subsample_inclined_sample(KG_sample, K_interval)
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    SH = _binary64_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
     Y, Yp, X, _ = Ysol.Y_solution(KG_sample["p"])
     Ydic = Dict(
@@ -1300,7 +1325,7 @@ function generic_mode_flux_from_master_cached!(cache::GenericM2FluxCache, KG_mas
         res["K_sample"] = K0
         return res
     end
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    SH = _binary64_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master), arena)
 
     # Resolve the polar harmonic band independently of the radial grid.
@@ -1473,7 +1498,7 @@ function generic_mode_flux_from_master_cached_adaptive_levin!(cache::GenericM2Fl
     nr = local_r_intervals + 1
     effective_local_theta_intervals = _generic_adaptive_effective_theta_intervals(local_theta_intervals, k, l)
     nt = effective_local_theta_intervals + 1
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    SH = _binary64_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _generic_isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_master), arena)
     root_key = GenericAdaptiveLevin2DKey(0, 0, 0, 0)
     sh_cache = Dict{NTuple{3, Int}, Any}()
@@ -2027,7 +2052,7 @@ function convolution_integral_circular_equatorial_isem(a, p, s, l, m; x=1.0, tra
     rm = 1.0 - sqrt(1.0 - a^2)
 
     c = a * ω
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, c)
+    SH = _binary64_harmonic(s, l, m, c)
     Y_soln = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda)
     Y, Yp, X, _ = Y_soln.Y_solution(r)
     A = Y_soln.mode.lambda
@@ -2821,7 +2846,7 @@ function convolution_integral_eccentric_adaptive_levin_isem(KG_sample::Dict, s, 
 
     KG = haskey(KG_sample, "Energy") ? KG_sample : _kg_from_presampled_master(KG_sample)
     levin_cache = cache isa EccentricFluxCache ? cache : EccentricFluxCache()
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    SH = _binary64_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
     two_wave = _y_two_wave(Ysol, s, l, m, a, ω; r_low = _orbit_periapsis(KG_sample))
     two_wave === nothing || (two_wave = _two_wave_m2(two_wave, KG, Ysol, SH, a, ω, m, n))
@@ -2951,7 +2976,7 @@ function convolution_integral_eccentric_trapezoidal_isem(KG_sample::Dict, s, l, 
         res["N_sample"] = N_sample
         return res
     end
-    SH = spin_weighted_spheroidal_harmonic(s, l, m, a * ω; method = "jacobi")
+    SH = _binary64_harmonic(s, l, m, a * ω; method = "jacobi")
     Ysol = _isem_y_solution(s, l, m, a, ω; lambda = SH.lambda, check_radii = () -> _orbit_check_radii(KG_sample), arena)
 
     N = N_sample
@@ -3159,7 +3184,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
     carter_factor = _carter_factor(KG_trap, m, omega)
 
     result = if s == 2
-        SH_p2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        SH_p2 = _binary64_harmonic(s, l, m, a * omega; method = "jacobi")
         Yup_soln = _isem_y_solution(s, l, m, a, omega;
             lambda = SH_p2.lambda)
         Y, Yp, X, _ = Yup_soln.Y_solution(p)
@@ -3186,7 +3211,7 @@ function convolution_integral_inclined_levin_isem(a, p, x, s, l, m, k, K_sample;
             "SWSH" => SH_p2
         )
     elseif s == -2
-        SH_m2 = spin_weighted_spheroidal_harmonic(s, l, m, a * omega; method = "jacobi")
+        SH_m2 = _binary64_harmonic(s, l, m, a * omega; method = "jacobi")
         Yin_soln = _isem_y_solution(s, l, m, a, omega;
             lambda = SH_m2.lambda)
         Y, Yp, X, _ = Yin_soln.Y_solution(p)
