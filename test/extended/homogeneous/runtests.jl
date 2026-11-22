@@ -630,7 +630,9 @@ is_superradiant(a, m, omega) = omega <= m * a / (2 * kerr_rplus(a))
             q = R.reflection_amplitude / R.incidence_amplitude
             if D.Matching._complex_path_ratio_small(abs(q_ref), g.m, g.a, w)
                 res = CPA.complex_path_amplitudes(g.s, g.m, g.a, w, real(R.mode.lambda), Symbol(ref.branch))
-                @test abs(res.ratio - q_ref) <= 1e-9 * abs(q_ref)
+                # 1.7e-9 at grid179 (2, 4, 4, 0.99, 3) IN with the path passing r_- at PASS_HEIGHT (2e-13 at the seed height,
+                # which loses high-l and counter-rotating modes entirely); the route's own class below is 1e-8.
+                @test abs(res.ratio - q_ref) <= 1e-8 * abs(q_ref)
                 @test complex_path_ratio_ok(q, q_ref)
             else
                 # Not switched: the matching's own class (section 3: 1e-9 in dominant units).

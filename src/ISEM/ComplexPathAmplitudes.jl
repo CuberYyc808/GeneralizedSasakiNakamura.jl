@@ -14,7 +14,8 @@ module ComplexPathAmplitudes
 #
 # IN (unit transmission R -> Delta^{-s} e^{-i k r*} at the horizon): B_inc from a march along the real axis,
 # B_ref from a march that leaves the horizon series at r_+ + kappa e^{-i theta} (theta near pi), drops to
-# Im r = -depth and runs out to X - i depth, where both are projected on the infinity series.
+# Im r = -depth and runs out to X - i depth, where both are projected on the infinity series (X = 4, the depth raised
+# until the series converge there).
 # UP (unit transmission R -> r^{-2s-1} e^{i omega r*} at infinity): C_up (horizon e^{i k r*}) along the real axis,
 # C_ref (horizon Delta^{-s} e^{-i k r*}) along the mirror path above the axis, run inward from X + i depth to
 # r_+ + kappa e^{i theta} (the path below the axis leaves C_ref wrong by 1e11 - 1e42 on the 896-bit grid).
@@ -29,12 +30,13 @@ export complex_path_amplitudes
 const TAYLOR_ORDER = 40
 const SEED_THETA = 3.0
 const PATH_DEPTH = 10.0
+const PATH_DEEPENING = 1.25
+const PATH_DEEPENINGS = 16
 const SERIES_TOL = 1e-15
 const SEED_CONDITION = 1e2
 const STEP_WAVELENGTHS = 0.5
 const PATH_LEFT = 1.5
-const NEAR_EXTREMAL_KAPPA = 0.1
-const PASS_KAPPAS = 5.0
+const PASS_HEIGHT = 2.0
 const PROJECTION_RADII = (4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 250.0, 400.0, 600.0)
 
 const C = ComplexF64
@@ -226,20 +228,27 @@ function _asymptotic_sum(c, u)
     return h, hu, max(t1, t2) / abs(h)
 end
 
-function _infinity_solutions(s, a, w, r, cin, cout)
+_infinity_solutions(s, a, w, r, cin, cout) =
+    (phase = _rstar(a, r); _infinity_solutions(s, a, w, r, cin, cout, cis(-w * phase), cis(w * phase)))
+
+# The same without the magnitudes e^{sigma} of R_in and e^{-sigma} of R_out, sigma = omega Im r* (returned last): off the
+# real axis they over- and underflow (omega |Im r*| > 709).
+_scaled_infinity_solutions(s, a, w, r, cin, cout) = (phase = _rstar(a, r);
+    (_infinity_solutions(s, a, w, r, cin, cout, cis(-w * real(phase)), cis(w * real(phase)))..., w * imag(phase)))
+
+function _infinity_solutions(s, a, w, r, cin, cout, wave_in, wave_out)
     delta = r^2 - 2r + a^2
-    phase = _rstar(a, r)
     h, hu, e_in = _asymptotic_sum(cin, 1 / r)
     g = h / r
     gp = -hu / r^3 - h / r^2
-    Rin = cis(-w * phase) * g
-    dRin = cis(-w * phase) * (gp - im * w * (r^2 + a^2) / delta * g)
+    Rin = wave_in * g
+    dRin = wave_in * (gp - im * w * (r^2 + a^2) / delta * g)
     h, hu, e_out = _asymptotic_sum(cout, 1 / (w * r))
     p = -2s - 1
     g = r^p * h
     gp = p * r^(p - 1) * h - r^(p - 2) * hu / w
-    Rout = cis(w * phase) * g
-    dRout = cis(w * phase) * (gp + im * w * (r^2 + a^2) / delta * g)
+    Rout = wave_out * g
+    dRout = wave_out * (gp + im * w * (r^2 + a^2) / delta * g)
     return Rin, dRin, Rout, dRout, max(e_in, e_out)
 end
 
@@ -323,13 +332,29 @@ function _march(s, m, a, w, lambda, R, dR, path; step_wavelengths = STEP_WAVELEN
     return R, dR, worst, logscale
 end
 
-# Projection of (R, R') on the two infinity solutions at the first radius in PROJECTION_RADII (shifted by
-# -i depth) where both series reach SERIES_TOL.
-function _projection_point(s, a, w, depth, cin, cout)
+# Projection of (R, R') on the two infinity solutions: on the real axis at the first radius in PROJECTION_RADII where
+# both series reach SERIES_TOL.
+function _projection_point(s, a, w, cin, cout)
     for X in PROJECTION_RADII
-        r = C(X, -depth)
+        r = C(X)
         sols = _infinity_solutions(s, a, w, r, cin, cout)
         sols[5] <= SERIES_TOL && return r, sols
+    end
+    return nothing, nothing
+end
+
+# Off the axis the path is deepened until the series reach SERIES_TOL at Re r = PROJECTION_RADII[1]. At high l they
+# need a larger |r| (l = 40 - 51 at a = 0.99: |r| > 30), and a run to the right at fixed depth loses the reflection:
+# there Im r* returns from -depth - 2 pi towards -depth, the reflected wave e^{i omega r*} falls and the incident one
+# rises by e^{omega Delta Im r*} each, and the projection cancels by their ratio. B_ref of (s, l, m, a, omega) =
+# (-2, 40, 40, 0.99, 17.962), projected at Re r = 30 on the depth 10, came out 1.6e9 times too large (1e12 - 1e26 at
+# l = 42, 51); with the series reached by depth (30 - 40) it is good to 2e-12 against 256 bits.
+function _projection_point(s, a, w, depth, cin, cout)
+    for _ in 1:PATH_DEEPENINGS
+        r = C(PROJECTION_RADII[1], -depth)
+        sols = _scaled_infinity_solutions(s, a, w, r, cin, cout)
+        sols[5] <= SERIES_TOL && return r, sols
+        depth *= PATH_DEEPENING
     end
     return nothing, nothing
 end
@@ -364,11 +389,13 @@ function complex_path_amplitudes(s::Int, m::Int, a::Real, omega::Real, lambda::R
     delta = seed_distance !== nothing ? Float64(seed_distance) : extremal ? min(0.3, abs(2w - m) / 40) : kappa
     cin = _infinity_in_coefficients(s, m, a, w, lambda, order)
     cout = _infinity_out_coefficients(s, m, a, w, lambda, order)
-    r_real, real_sols = reflection_only ? (C(PROJECTION_RADII[1]), nothing) : _projection_point(s, a, w, 0.0, cin, cout)
+    r_real, real_sols = reflection_only ? (C(PROJECTION_RADII[1]), nothing) : _projection_point(s, a, w, cin, cout)
     # IN runs below the axis; UP, read off at the horizon, runs along the mirror path above it.
     side = branch === :IN ? 1.0 : -1.0
     r_cplx, cplx_sols = _projection_point(s, a, w, side * Float64(depth), cin, cout)
-    (r_real === nothing || r_cplx === nothing) && error("infinity series did not reach $(SERIES_TOL) by r = $(last(PROJECTION_RADII)).")
+    (r_real === nothing || r_cplx === nothing) && error("infinity series did not reach $(SERIES_TOL).")
+    depth = abs(imag(r_cplx))
+    sigma = cplx_sols[6]         # |R_in| and |R_out| at r_cplx are e^{sigma} and e^{-sigma} times the scaled ones
     # Near extremality (u = r_+ k / kappa large) the Frobenius terms grow far beyond the sum before they decay; the
     # seed moves in until the summed term sizes stay within SEED_CONDITION of the value (the error reported as
     # condition * eps), at both seeds and for both horizon solutions.
@@ -389,12 +416,12 @@ function complex_path_amplitudes(s::Int, m::Int, a::Real, omega::Real, lambda::R
     # The path passes under r_- before it descends: straight down from the seed, Im r* rises to about -5 near
     # r ~ 1 - 2 (r_- enters r* with the opposite sign), and the roundoff there sets the floor of B_ref; left of r_-
     # both logarithms add up to -2 pi. At (s, l, m, a, omega) = (-2, 2, 2, 0.5, 10), B_ref / B_inc = 4e-63: 2e7 -> 1e-7.
-    # Near extremality (kappa < NEAR_EXTREMAL_KAPPA) the path passes r_- at PASS_KAPPAS kappa: closer, the two r_-
-    # solutions differ by e^{pi u_-} along the half turn and the march loses the recessive one (a = 0.9999, omega = 10:
-    # 1e83 at the seed height, 3e-8 at 5 kappa). Away from extremality the seed height is best (a = 0, omega = 10:
-    # 1e-8, against 5e3 at height 0.5).
-    lift = pass_height !== nothing ? Float64(pass_height) :
-        kappa < NEAR_EXTREMAL_KAPPA ? max(abs(imag(r_seed)), PASS_KAPPAS * kappa, extremal ? delta : 0.0) : abs(imag(r_seed))
+    # It passes r_- at the height PASS_HEIGHT: closer, the two r_- solutions differ by e^{pi |u_-|} along the half turn
+    # (u_- = r_- (omega - m Omega_-) / kappa) and the march loses the recessive one. Near extremality u_- ~ 1 / kappa
+    # (a = 0.9999, omega = 10: 1e83 at the seed height), and at high l also away from it: (s, l, m, a, omega) =
+    # (-2, 60, -60, 0.99, 9.68), u_- = 270, and (-2, 160, 160, 0, 32.1) differed from the matched reflection by 1e8 and
+    # 1e13 error estimates at the seed height, 1e7 and 1e9 at 0.5, and agreed within 0.2 estimates from 1.5 to 5 on.
+    lift = pass_height !== nothing ? Float64(pass_height) : max(abs(imag(r_seed)), PASS_HEIGHT, extremal ? delta : 0.0)
     path_cplx = path === :down ? (r_seed, r_seed - im * side * depth, r_cplx) :
         (r_seed, C(real(r_seed), -side * max(lift, abs(imag(r_seed)))), C(rm - PATH_LEFT, -side * lift),
             C(rm - PATH_LEFT, -side * depth), r_cplx)
@@ -404,14 +431,14 @@ function complex_path_amplitudes(s::Int, m::Int, a::Real, omega::Real, lambda::R
             R, dR, _, L_cplx = _seed(s, m, a, w, lambda, r_seed, :in)
             R, dR, t_cplx, M = _march(s, m, a, w, lambda, R, dR, path_cplx; step_wavelengths)
             _, reflection_scaled = _wronskian_split(R, dR, cplx_sols[1:4]...)
-            reflection = reflection_scaled * exp(L_cplx + M)
+            reflection = reflection_scaled * exp(L_cplx + M + sigma)
         else
             _, _, R, dR, _ = cplx_sols
             R, dR, t_cplx, M_cplx = _march(s, m, a, w, lambda, R, dR, reverse(path_cplx); step_wavelengths)
             A, dA, _, _ = _seed(s, m, a, w, lambda, r_seed, :out)
             B, dB, _, LB = _seed(s, m, a, w, lambda, r_seed, :in)
             _, reflection_scaled = _wronskian_split(R, dR, A, dA, B, dB)
-            reflection = reflection_scaled * exp(M_cplx - LB)
+            reflection = reflection_scaled * exp(M_cplx - LB - sigma)
         end
         return (ratio = NaN + NaN * im, incidence = NaN + NaN * im, reflection = reflection,
             diagnostics = (taylor_tail = t_cplx, series = cplx_sols[5], projection_real = NaN,
@@ -426,7 +453,7 @@ function complex_path_amplitudes(s::Int, m::Int, a::Real, omega::Real, lambda::R
         R, dR, t_cplx, M = _march(s, m, a, w, lambda, R, dR, path_cplx; step_wavelengths)
         L_cplx += M
         _, reflection_scaled = _wronskian_split(R, dR, cplx_sols[1:4]...)
-        ratio = reflection_scaled / incidence_scaled * exp(L_cplx - L_real)
+        ratio = reflection_scaled / incidence_scaled * exp(L_cplx - L_real + sigma)
         incidence = incidence_scaled * exp(L_real)
     else
         # UP: start from the outgoing series at infinity and march inward; split on the horizon solutions
@@ -441,7 +468,7 @@ function complex_path_amplitudes(s::Int, m::Int, a::Real, omega::Real, lambda::R
         A, dA, _, _ = _seed(s, m, a, w, lambda, r_seed, :out)
         B, dB, _, LB = _seed(s, m, a, w, lambda, r_seed, :in)
         _, reflection_scaled = _wronskian_split(R, dR, A, dA, B, dB)
-        ratio = reflection_scaled / incidence_scaled * exp(LA - LB + M_cplx - M_real)
+        ratio = reflection_scaled / incidence_scaled * exp(LA - LB + M_cplx - M_real - sigma)
         incidence = incidence_scaled * exp(M_real - LA)
     end
     reflection = ratio * incidence

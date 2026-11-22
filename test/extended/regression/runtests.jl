@@ -239,4 +239,26 @@ end
     end
 end
 
+# The complex-path reflection failed at high l: projected far out at a fixed depth (Re r = 30 - 45 at l = 40 - 51, a =
+# 0.99) it made B_ref of (s, l, m, omega) = (-2, 40, 40, 17.962) 1.5e9 and C_ref of (2, 40, 40, 18.225) 1.6e10 times too
+# large, the amplitude of the mode (l, m, n) = (40, 40, 256) of the orbit (a, p, e, x) = (0.99, p_sep + 0.1, 0.7, 1)
+# 1.7e5 instead of ~1e-14 and the infinity flux of that orbit 1.8e8; passing close under r_- it made B_ref of the
+# counter-rotating (-2, 60, -60, 9.68) 7e3 times too large. References: the package's route at 256 bits (384 bits give
+# the same 17 digits for the first).
+@testset "complex-path reflection at high l" begin
+    omega = 17.961995871035267
+    R = Teukolsky_radial(-2, 40, 40, 0.99, omega, IN)
+    @test relerr(R.reflection_amplitude / R.incidence_amplitude, complex(5.4888735558084189e-08, -1.1248002083569917e-06) /
+        complex(-0.00086298361818941069, 0.0014805680416167817)) <= 1e-10
+    @test Y_radial(-2, 40, 40, 0.99, omega, IN).Y_solution.mismatch <= 1e-9
+    R = Teukolsky_radial(2, 40, 40, 0.99, 18.225, UP)
+    @test abs(R.reflection_amplitude / R.incidence_amplitude) ≈ 1.026211e-13 rtol=1e-6
+    R = Teukolsky_radial(-2, 60, -60, 0.99, 9.68, IN)
+    @test relerr(R.reflection_amplitude / R.transmission_amplitude, complex(-1.614183e-08, 7.533876e-08)) <= 1e-6
+    p = GSN.KerrGeodesics.kerr_geo_separatrix(0.99, 0.7, 1.0) + 0.1
+    mode = Teukolsky_pointparticle_mode(-2, 40, 40, 256, 0, 0.99, p, 0.7, 1.0; method="isem_levin", tol=1e-6)
+    @test mode.mode.omega ≈ omega rtol=1e-12
+    @test abs(mode.amplitude) <= 1e-10
+end
+
 end # regression
