@@ -4581,8 +4581,16 @@ function _mano_suzuki_takasugi_logscaled_state(
     P, Px, estimated_relerr, series_log_scale = normalized == :in ?
         _mano_suzuki_takasugi_in_p_pair(plan.data, r, sequence, budget) :
         _mano_suzuki_takasugi_out_p_pair(plan.data, r, sequence, budget)
-    X, dXdx = _p_to_gsn_dx(
-        coefficients, P, Px, x, plan.converter(r); radius)
+    transform = plan.converter(r)
+    X, dXdx = _p_to_gsn_dx(coefficients, P, Px, x, transform; radius)
+    p_scale = max(abs(P), abs(Px))
+    if !(_finite_complex(X) && _finite_complex(dXdx)) && isfinite(p_scale) && p_scale > 0
+        # Near-static high-l modes: |P| ~ |omega r|^-(l+1) reaches 1e304 ((s, l, m) = (2, 57, -56), omega = 1.3e-5),
+        # beyond what the converter coefficients (~1e5) leave room for. Convert the unit-size pair; its size goes to
+        # the log scale.
+        X, dXdx = _p_to_gsn_dx(coefficients, P / p_scale, Px / p_scale, x, transform; radius)
+        series_log_scale += log(p_scale)
+    end
     state = logscaled_state(conj(factor.phase) * X, conj(factor.phase) * dXdx, series_log_scale - factor.logabs)
     error_estimate = min(Inf,
         estimated_relerr + factor.estimated_relerr)

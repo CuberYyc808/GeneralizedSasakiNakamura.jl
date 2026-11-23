@@ -93,8 +93,8 @@ _lgamma_int(n::Int) = sum(log, 1:(n - 1); init = 0.0)   # log Gamma(n) = log (n-
 # the MST handoff, the recurrence or the MST residual check) on a near-static mode counts (a non-finite flux without an
 # error: _zero_nonfinite_near_static); every other error still propagates.
 const NEAR_STATIC_RATIO = 1e-6
-function _near_static_overflow(err, ω, Ωφ)
-    abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) || return false
+_near_static_overflow(err, ω, Ωφ) = abs(ω) <= NEAR_STATIC_RATIO * abs(Ωφ) && _isem_solver_error(err)
+function _isem_solver_error(err)
     (err isa ErrorException || err isa ISEM.ManoSuzukiTakasugiInfinity.ManoSuzukiTakasugiCertificateError) || return false
     msg = err isa ErrorException ? err.msg : err.message
     return startswith(msg, "nonfinite ISEM") || startswith(msg, "ISEM ") || startswith(msg, "MST ")
@@ -148,7 +148,10 @@ function _with_coverage_retry(f, s, l, m, n, k; omega = nothing, Ωφ = nothing,
             res["NearStaticOverflow"] = true
             return res
         end
-        if !_is_basis_coverage_error(err)
+        # An ISEM solver error (low-frequency s = 2 modes at high l, amplitudes ~ |omega|^-(l+1), overflow binary64 in
+        # the recurrence: (l, m, n, k) = (65, -61, 203, -4) of (a, p, e, x) = (0.83, 4.21, 0.9, 0.93), omega = 1.2e-3)
+        # takes the same retry, then the negligible or failed-mode record, instead of ending the sum.
+        if !(_is_basis_coverage_error(err) || _isem_solver_error(err))
             @error "Mode (s, l, m, n, k) = ($s, $l, $m, $n, $k), omega = $(omega) failed" exception = sprint(showerror, err)
             rethrow()
         end
@@ -417,11 +420,18 @@ function _isem_wronskian_check(s, l, m, a, omega, radii; route = nothing)
     Rin = own !== nothing && s == -2 ? own : solve(IN)
     Rup = own !== nothing && s == 2 ? own : solve(UP)
     ws = ComplexF64[]
+    # Near-static high-l solutions (amplitudes ~ |omega|^-(l+1)): a radius where a solution is beyond binary64 is
+    # left out like one where its evaluation fails, and each solution is divided by its size at the first radius used
+    # (the spread does not depend on it), since products of pairs of size 1e290 overflowed ((s, l, m) = (2, 45, -44),
+    # omega = -2.6e-6).
+    cin = cup = 0.0
     for r in radii
         w = try
             pin = Rin.Teukolsky_solution.pair_value(r)
             pup = Rup.Teukolsky_solution.pair_value(r)
-            (r^2 - 2r + a^2)^(s + 1) * (pin[1] * pup[2] - pin[2] * pup[1])
+            all(isfinite, pin) && all(isfinite, pup) || continue
+            iszero(cin) && (cin = maximum(abs, pin); cup = maximum(abs, pup))
+            (r^2 - 2r + a^2)^(s + 1) * ((pin[1] / cin) * (pup[2] / cup) - (pin[2] / cin) * (pup[1] / cup))
         catch err
             absorbable(err) || rethrow()
             continue
