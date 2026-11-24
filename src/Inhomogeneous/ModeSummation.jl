@@ -2347,7 +2347,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
             growing_m = abs(shell_m) > abs(previous_shell_m)
             previous_shell_m = shell_m
-            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, initial_mode_threshold, tol, m, Max_m, mode_abs_floor, false) ? below_count_m + 1 : 0
+            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _positive_m_tail_below(shell_m, shell_k, initial_mode_threshold, tol, m, Max_m, mode_abs_floor) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
@@ -2386,7 +2386,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
             growing_m = abs(shell_m) > abs(previous_shell_m)
             previous_shell_m = shell_m
-            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, initial_mode_threshold, neg_branch_scale, m, Max_m, false) ? below_count_m + 1 : 0
+            below_count_m = !growing_m && !_before_m_peak(m, k, x) && _negative_m_tail_below(shell_m, initial_mode_threshold, neg_branch_scale, m, Max_m) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
