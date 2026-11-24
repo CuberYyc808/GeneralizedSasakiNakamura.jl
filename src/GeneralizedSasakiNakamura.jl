@@ -2026,10 +2026,9 @@ its modes again, since no per-mode results are kept between modes. An integer ke
 `0.75 (lmax + log(1/tol)) w_p / Omega_r`, clamped to 100..20000, with `w_p` the azimuthal rate at periapsis
 `p/(1+e)` and `Omega_r` the radial frequency, and is raised the same way when the n sum reaches it. The caps used
 are reported in `reached.caps`.
-For eccentric and generic tails, `tail_levin=nothing` switches to adaptive Levin
-for `n >= levin_nmin` once the uniform trapezoidal grid would be much more
-expensive than the adaptive one, `true` forces adaptive Levin from `levin_nmin`,
-and `false` keeps adaptive trapezoidal sampling. `levin_local_n` controls the local adaptive-Levin
+For eccentric and generic orbits, `tail_levin=nothing` computes every mode with adaptive trapezoidal sampling,
+except a mode with `n >= levin_nmin` whose radial phase needs a trapezoidal grid larger than `Nmax`, which switches
+to adaptive Levin; `true` forces adaptive Levin from `levin_nmin`, and `false` keeps adaptive trapezoidal sampling. `levin_local_n` controls the local adaptive-Levin
 interval count when that path is selected.
 `minimum_consecutive` is the number of consecutive shells below the tolerance
 required to stop a summation; the default `nothing` uses 5 for circular

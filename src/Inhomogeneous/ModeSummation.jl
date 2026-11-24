@@ -49,15 +49,11 @@ end
     return ConvolutionIntegrals._eccentric_fourier_min_sample(base, Nmax, n)
 end
 
-# Cost heuristic behind tail_levin = :auto: a mode with |n| >= nmin switches to adaptive Levin only when the
-# uniform trapezoid grid it would need has at least 4096 radial points and is at least 8x (eccentric) or, in N*K,
-# 16x (generic) the adaptive-Levin work. Both take that grid per mode from the radial phase rate (uniform_n from
-# _mode_radial_trapezoid_n).
-@inline function _ecc_levin_auto(uniform_n::Int, n::Int, local_n::Int, max_depth::Int, nmin::Int)
-    abs(n) >= nmin || return false
-    adaptive_n = local_n * 2^min(max_depth, 5)
-    return uniform_n >= max(4096, 8adaptive_n)
-end
+# tail_levin = :auto: a mode switches to adaptive Levin only when the radial trapezoid grid its phase needs
+# (_mode_radial_trapezoid_n) exceeds Nmax, where the trapezoid route cannot resolve it. Below that the trapezoid is the
+# faster route: at (a, p, e, x) = (0.99, 2.162, 0.748, 0.981) its modes on 4096..8192 radial points took 20..120 ms
+# and adaptive Levin 80..1100 ms for the same flux, and the sum ran about 2x faster without Levin.
+@inline _levin_auto(uniform_n::Int, Nmax::Int) = uniform_n > Nmax
 
 # Radial trapezoid intervals a mode needs: its radial phase rate (ConvolutionIntegrals._radial_phase_min_sample),
 # not 4|n|. At high eccentricity the rate is far above 4|n| (about 14 n at e = 0.95 and 30 n at e = 0.99, a = 0.9)
@@ -66,16 +62,6 @@ function _mode_radial_trapezoid_n(KG::Dict, m::Int, n::Int, k::Int, N0::Int, Nma
     F = KG["Frequencies"]
     ω = (m * F["ϒϕ"] + n * F["ϒr"] + k * get(F, "ϒθ", 0.0)) / F["ϒt"]
     return ConvolutionIntegrals._radial_phase_min_sample(KG, ω, m, n, _uniform_radial_n(N0, Nmax, n), typemax(Int))
-end
-
-# Whether the generic adaptive Levin path pays off for a mode, with the radial grid from the phase rate.
-@inline function _gen_levin_auto_mode(uniform_n::Int, n::Int, K0::Int, Kmax::Int,
-        local_n::Int, max_depth::Int, nmin::Int)
-    abs(n) >= nmin || return false
-    uniform_k = min(max(4K0, 64), Kmax)
-    adaptive_n = local_n * 2^min(max_depth, 5)
-    adaptive_k = local_n + 1
-    return uniform_n >= 4096 && uniform_n * uniform_k >= 16adaptive_n * adaptive_k
 end
 
 @inline _mode_cutoff_threshold(base::Float64, mode_abs_floor::Float64) = max(base, mode_abs_floor)
@@ -99,17 +85,16 @@ end
     return Float64(mode_abs_floor)
 end
 
-@inline function _positive_m_tail_below(shell_m::Float64, shell_k::Float64, threshold::Float64, tol::Real, m::Int, max_m::Int, mode_abs_floor::Float64, tail_cutoff::Bool)
+@inline function _positive_m_tail_below(shell_m::Float64, shell_k::Float64, threshold::Float64, tol::Real, m::Int, max_m::Int, mode_abs_floor::Float64)
     abs(shell_m) <= threshold || return false
     m > max_m + 5 || return false
-    tail_cutoff && return true
     threshold <= 10.0 * max(mode_abs_floor, eps(Float64)) && return true
     return abs(shell_m) < abs(shell_k) * tol
 end
 
-@inline function _negative_m_tail_below(shell_m::Float64, threshold::Float64, neg_branch_scale::Real, m::Int, max_m::Int, tail_cutoff::Bool)
+@inline function _negative_m_tail_below(shell_m::Float64, threshold::Float64, neg_branch_scale::Real, m::Int, max_m::Int)
     abs(shell_m) <= neg_branch_scale * threshold || return false
-    return tail_cutoff || abs(m) >= max_m
+    return abs(m) >= max_m
 end
 
 # At a = 0 an inclined orbit is a rotated equatorial one: mode (l, m, k) carries E_eq(l, j) |d^l_{m,j}|^2 with
@@ -1256,7 +1241,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
     tail_levin_infinity_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_infinity_start_n
     tail_levin_horizon_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_horizon_start_n
     # tail_levin = true: every mode from the first |n| >= nmin on. :auto: each mode whose trapezoid grid,
-    # estimated from its radial phase rate, passes the cost rule of _ecc_levin_auto.
+    # estimated from its radial phase rate, exceeds Nmax (_levin_auto).
     use_eccentric_tail_levin = (s, m, n) -> begin
         branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
         _tail_enabled(branch_policy) || return false
@@ -1264,9 +1249,7 @@ function _eccentric_mode_summation_scoped(scope, a, p, e, o::FluxOptions; x = 1.
         start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
         branch_policy === true && active[] && return true
         _use_levin_tail(n; nmin = levin_nmin) || return false
-        if branch_policy === true || _ecc_levin_auto(
-                _mode_radial_trapezoid_n(KG_sample, m, n, 0, N, Nmax), n,
-                adaptive_local_n, levin_max_depth, levin_nmin)
+        if branch_policy === true || _levin_auto(_mode_radial_trapezoid_n(KG_sample, m, n, 0, N, Nmax), Nmax)
             active[] = true
             start_n[] === nothing && (start_n[] = n)
             return true
@@ -2446,12 +2429,12 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
         # k shells when the branch total is small (horizon totals of 1e-8..1e-7).
         k_shell_threshold = tol * k_shell_scale
         negative_k_shell_threshold = neg_branch_scale * tol * abs(total_energy)
-        tail_cutoff = ctx.use_shell_levin(s, n)
+        use_levin_shell = ctx.use_shell_levin(s, n)
         # the modes of this shell from its parameters (as gen_parameters for the serial walk); the walks of the shell
         # are planned from the reach of the previous shell, rows (k) and m walks
         mode_floor = MODE_REFINE_FLOOR_FRACTION * floor
         shell_q = (max_flux = max_flux, floor = mode_floor, levin_floor = _tail_levin_mode_floor(mode_floor, ctx.levin_floor(s)),
-            threshold = threshold, search_threshold = search_threshold, deep = deep, use_levin_shell = tail_cutoff,
+            threshold = threshold, search_threshold = search_threshold, deep = deep, use_levin_shell = use_levin_shell,
             levin_auto = ctx.levin_auto, levin_flux_scale = max(abs(sum(shell_list)), abs(max_flux)))
         params_for = key -> shell_q
         prev_row_reach = row_reach
@@ -2531,7 +2514,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
             growing_m = abs(shell_m) > abs(previous_shell_m)
             previous_shell_m = shell_m
-            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
@@ -2571,7 +2554,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
             # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
             growing_m = abs(shell_m) > abs(previous_shell_m)
             previous_shell_m = shell_m
-            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+            below_count_m = !growing_m && !_before_omega_zero(m, m_omega_zero) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m) ? below_count_m + 1 : 0
             if below_count_m >= minimum_consecutive
                 break
             end
@@ -2657,7 +2640,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                 growing_m = abs(shell_m) > abs(previous_shell_m)
                 previous_shell_m = shell_m
-                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
@@ -2696,7 +2679,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                 growing_m = abs(shell_m) > abs(previous_shell_m)
                 previous_shell_m = shell_m
-                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
@@ -2788,7 +2771,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                 growing_m = abs(shell_m) > abs(previous_shell_m)
                 previous_shell_m = shell_m
-                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor, tail_cutoff) ? below_count_m + 1 : 0
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _positive_m_tail_below(shell_m, shell_k, threshold, tol, m, Max_m, mode_abs_floor) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
@@ -2827,7 +2810,7 @@ function _generic_branch_summation!(s::Int, ctx, prefetch)
                 # an m shell that is still growing does not count toward the stop (retrograde orbits rise toward m < 0)
                 growing_m = abs(shell_m) > abs(previous_shell_m)
                 previous_shell_m = shell_m
-                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m, tail_cutoff) ? below_count_m + 1 : 0
+                below_count_m = !growing_m && !_before_m_peak(m, k, x) && !_before_omega_zero(m, -(n * radial_over_azimuthal + k * polar_over_azimuthal)) && _negative_m_tail_below(shell_m, threshold, neg_branch_scale, m, Max_m) ? below_count_m + 1 : 0
                 if below_count_m >= minimum_consecutive
                     break
                 end
@@ -2973,23 +2956,14 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
         tail_levin_horizon_active = rs === nothing ? Ref(false) : rs.tail_levin_horizon_active
         tail_levin_infinity_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_infinity_start_n
         tail_levin_horizon_start_n = rs === nothing ? Ref{Union{Nothing, Int}}(nothing) : rs.tail_levin_horizon_start_n
-        # n-shell trigger of the generic tail (forced Levin for the shell and the m-walk tail shortcut). It is decided
-        # per shell from the radial trapezoid grid the shell's (m = 2, k = 0) mode needs, and is not latched: a shell
-        # whose phase is slow again goes back to the trapezoid. start_n records the first shell that triggered.
+        # tail_levin = true forces adaptive Levin for every n shell from levin_nmin on; start_n records the first one.
+        # :auto decides per mode (gen_levin_auto).
         use_generic_tail_levin = (s, n) -> begin
-            branch_policy = s == -2 ? tail_policy_inf : tail_policy_hor
-            _tail_enabled(branch_policy) || return false
-            active = s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active
+            (s == -2 ? tail_policy_inf : tail_policy_hor) === true && _use_levin_tail(n; nmin = levin_nmin) || return false
             start_n = s == -2 ? tail_levin_infinity_start_n : tail_levin_horizon_start_n
-            triggered = _use_levin_tail(n; nmin = levin_nmin) &&
-                (branch_policy === true || _gen_levin_auto_mode(
-                    _mode_radial_trapezoid_n(KG_master, 2, n, 0, N0, Nmax), n, K0, Kmax,
-                    levin_local_n, levin_max_depth, levin_nmin))
-            if triggered
-                active[] = true
-                start_n[] === nothing && (start_n[] = n)
-            end
-            return triggered
+            (s == -2 ? tail_levin_infinity_active : tail_levin_horizon_active)[] = true
+            start_n[] === nothing && (start_n[] = n)
+            return true
         end
         # one tracker per boundary: the two branches may run on different tasks
         # A replay with the same lmax (kmax raised) takes the walks of the earlier pass from its ledgers without solving
@@ -3029,10 +3003,9 @@ function _generic_mode_summation_scoped(scope, a, p, e, x, o::FluxOptions; lmax 
             _note_cap_mode!(cap_trackers[s == -2 ? 1 : 2], l, m, n, k, mode["EnergyFlux"])
             mode
         end
-        # the Levin choice of the auto rule for (s, m, n, k), without use_generic_tail_levin's bookkeeping
-        gen_levin_auto = (s, m, n, k) -> ((s == -2 ? tail_policy_inf : tail_policy_hor) === :auto &&
-            _gen_levin_auto_mode(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), n, K0, Kmax,
-                levin_local_n, levin_max_depth, levin_nmin))
+        # the Levin choice of the auto rule for (s, m, n, k)
+        gen_levin_auto = (s, m, n, k) -> ((s == -2 ? tail_policy_inf : tail_policy_hor) === :auto && abs(n) >= levin_nmin &&
+            _levin_auto(_mode_radial_trapezoid_n(KG_master, m, n, k, N0, Nmax), Nmax))
         gen_parameters = (s, l, m, n, k, max_flux, use_levin) -> begin
             auto_levin = use_generic_tail_levin(s, n)
             use_levin = use_levin || auto_levin || gen_levin_auto(s, m, n, k)
